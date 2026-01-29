@@ -522,37 +522,42 @@ end
     # 2) PLPolyhedra: PLEncodingMap has (sig_y, sig_z) but no pi.P
     # -------------------------------------------------------------------------
     let
-        n = 1
+        PLP = PM.PLPolyhedra
+        if !PLP.HAVE_POLY
+            @test true
+        else
+            n = 1
 
-        # PLPolyhedra uses H-polytopes { x : A*x <= b }.
-        # Upset: x >= 0  <=>  (-x <= 0)
-        Uhp = PLP.make_hpoly([-1.0], 0.0)
+            # PLPolyhedra uses H-polytopes { x : A*x <= b }.
+            # Upset: x >= 0  <=>  (-x <= 0)
+            Uhp = PLP.make_hpoly([-1.0], 0.0)
 
-        # Downset: x <= 2 <=>  (x <= 2)
-        Dhp = PLP.make_hpoly([1.0], 2.0)
+            # Downset: x <= 2 <=>  (x <= 2)
+            Dhp = PLP.make_hpoly([1.0], 2.0)
 
-        U = PLP.PLUpset(PLP.PolyUnion(n, [Uhp]))
-        D = PLP.PLDownset(PLP.PolyUnion(n, [Dhp]))
+            U = PLP.PLUpset(PLP.PolyUnion(n, [Uhp]))
+            D = PLP.PLDownset(PLP.PolyUnion(n, [Dhp]))
 
-        # PLFringe requires an explicit Phi of size (#Downs) x (#Ups).
-        F1 = PLP.PLFringe([U], PLP.PLDownset[], zeros(QQ, 0, 1))
-        F2 = PLP.PLFringe(PLP.PLUpset[], [D], zeros(QQ, 1, 0))
+            # PLFringe requires an explicit Phi of size (#Downs) x (#Ups).
+            F1 = PLP.PLFringe([U], PLP.PLDownset[], zeros(QQ, 0, 1))
+            F2 = PLP.PLFringe(PLP.PLUpset[], [D], zeros(QQ, 1, 0))
 
-        enc = PM.EncodingOptions(backend=:pl, max_regions=10_000)
-        Ppl, Hpl, pipl = PLP.encode_from_PL_fringes(F1, F2, enc)
+            enc = PM.EncodingOptions(backend=:pl, max_regions=10_000)
+            Ppl, Hpl, pipl = PLP.encode_from_PL_fringes(F1, F2, enc)
 
-        Qpl = PM.Invariants.region_poset(pipl)
-        @test Qpl.n == Ppl.n
-        @test Qpl.leq == Ppl.leq
+            Qpl = PM.Invariants.region_poset(pipl)
+            @test Qpl.n == Ppl.n
+            @test Qpl.leq == Ppl.leq
 
-        Qpl2 = PM.Invariants.region_poset(pipl)
-        @test Qpl2 === Qpl
+            Qpl2 = PM.Invariants.region_poset(pipl)
+            @test Qpl2 === Qpl
 
-        arr = PM.projected_arrangement(pipl; dirs=[[1.0]])
-        @test arr.Q.leq == Ppl.leq
+            arr = PM.projected_arrangement(pipl; dirs=[[1.0]])
+            @test arr.Q.leq == Ppl.leq
 
-        arr2 = PM.projected_arrangement(pipl; dirs=[[1.0]], Q=Ppl)
-        @test arr2.Q.leq == Ppl.leq
+            arr2 = PM.projected_arrangement(pipl; dirs=[[1.0]], Q=Ppl)
+            @test arr2.Q.leq == Ppl.leq
+        end
     end
 
 
@@ -563,8 +568,8 @@ end
         let
             PB = PM.PLBackend
             n = 1
-            U = PB.BoxUpset([0.0], [Inf])
-            D = PB.BoxDownset([-Inf], [2.0])
+            U = PB.BoxUpset([0.0])
+            D = PB.BoxDownset([2.0])
 
             Ups = [U]
             Downs = [D]

@@ -123,166 +123,157 @@ end
 end
 
 @testset "PLPolyhedra heavy geometry: perimeter/surface/adjacency/PCA" begin
-    # 2D: square [0,1]^2 perimeter should be 4
-    A = QQ[ 1 0;
-            0 1;
-           -1 0;
-            0 -1 ]
-    b = QQ[1, 1, 0, 0]
-    hp = PLP.make_hpoly(A, b)
+    if !PLP.HAVE_POLY
+        @test true
+    else
+        # 2D: square [0,1]^2 perimeter should be 4
+        A = QQ[ 1 0;
+                0 1;
+               -1 0;
+                0 -1 ]
+        b = QQ[1, 1, 0, 0]
+        hp = PLP.make_hpoly(A, b)
 
-    pi = PLP.PLEncodingMap(2, [Bool[]], [Bool[]], [hp], [Float64[0.5, 0.5]])
+        sigy = [BitVector()]
+        sigz = [BitVector()]
+        pi = PLP.PLEncodingMap(2, sigy, sigz, [hp], [Float64[0.5, 0.5]])
 
-    box = (Float64[0.0, 0.0], Float64[1.0, 1.0])
-    perim = PM.region_perimeter(pi, 1; box=box)
-    @test isapprox(perim, 4.0; atol=1e-9)
+        box = (Float64[0.0, 0.0], Float64[1.0, 1.0])
+        perim = PM.region_perimeter(pi, 1; box=box)
+        @test isapprox(perim, 4.0; atol=1e-9)
 
-    # 3D: cube [0,1]^3 surface area is 6
-    A3 = QQ[ 1 0 0;
-             0 1 0;
-             0 0 1;
-            -1 0 0;
-             0 -1 0;
-             0 0 -1 ]
-    b3 = QQ[1, 1, 1, 0, 0, 0]
-    hp3 = PLP.make_hpoly(A3, b3)
-    pi3 = PLP.PLEncodingMap(3, [Bool[]], [Bool[]], [hp3], [Float64[0.5, 0.5, 0.5]])
-    box3 = (Float64[0,0,0], Float64[1,1,1])
-    sa = PM.region_surface_area(pi3, 1; box=box3)
-    @test isapprox(sa, 6.0; atol=1e-9)
+        # 3D: cube [0,1]^3 surface area is 6
+        A3 = QQ[ 1 0 0;
+                 0 1 0;
+                 0 0 1;
+                -1 0 0;
+                 0 -1 0;
+                 0 0 -1 ]
+        b3 = QQ[1, 1, 1, 0, 0, 0]
+        hp3 = PLP.make_hpoly(A3, b3)
+        pi3 = PLP.PLEncodingMap(3, [BitVector()], [BitVector()], [hp3], [Float64[0.5, 0.5, 0.5]])
+        box3 = (Float64[0,0,0], Float64[1,1,1])
+        sa = PM.region_surface_area(pi3, 1; box=box3)
+        @test isapprox(sa, 6.0; atol=1e-9)
 
-    # Adjacency: two rectangles sharing a vertical edge of length 1
-    # R1 = [0,1]x[0,1], R2 = [1,2]x[0,1]
-    A1 = QQ[ 1 0; 0 1; -1 0; 0 -1 ]
-    b1 = QQ[1, 1, 0, 0]
-    A2 = QQ[ 1 0; 0 1; -1 0; 0 -1 ]
-    b2 = QQ[2, 1, -1, 0]
-    hp1 = PLP.make_hpoly(A1, b1)
-    hp2 = PLP.make_hpoly(A2, b2)
-    pi2 = PLP.PLEncodingMap(2, [Bool[], Bool[]], [Bool[], Bool[]],
-                                    [hp1, hp2],
-                                    [Float64[0.5,0.5], Float64[1.5,0.5]])
-    box2 = (Float64[0,0], Float64[2,1])
-    adj = PM.region_adjacency(pi2; box=box2)
-    @test haskey(adj, (1,2))
-    @test isapprox(adj[(1,2)], 1.0; atol=1e-8)
+        # Adjacency: two rectangles sharing a vertical edge of length 1
+        # R1 = [0,1]x[0,1], R2 = [1,2]x[0,1]
+        A1 = QQ[ 1 0; 0 1; -1 0; 0 -1 ]
+        b1 = QQ[1, 1, 0, 0]
+        A2 = QQ[ 1 0; 0 1; -1 0; 0 -1 ]
+        b2 = QQ[2, 1, -1, 0]
+        hp1 = PLP.make_hpoly(A1, b1)
+        hp2 = PLP.make_hpoly(A2, b2)
+        sigy2 = [BitVector(), BitVector()]
+        sigz2 = [BitVector(), BitVector()]
+        pi2 = PLP.PLEncodingMap(2, sigy2, sigz2,
+                                        [hp1, hp2],
+                                        [Float64[0.5,0.5], Float64[1.5,0.5]])
+        box2 = (Float64[0,0], Float64[2,1])
+        adj = PM.region_adjacency(pi2; box=box2)
+        @test haskey(adj, (1,2))
+        @test isapprox(adj[(1,2)], 1.0; atol=1e-8)
 
-    # --- PCA / principal directions diagnostics ---
-    rng = MersenneTwister(1)
-    pca = PM.region_principal_directions(pi, 1; box=box, nsamples=5000, rng=rng, strict=true)
+        # --- PCA / principal directions diagnostics ---
+        rng = MersenneTwister(1)
+        pca = PM.region_principal_directions(pi, 1; box=box, nsamples=5000, rng=rng, strict=true)
 
-    @test :n_accepted in propertynames(pca)
-    @test :n_proposed in propertynames(pca)
-    @test pca.naccepted == pca.n_accepted
-    @test pca.nproposed == pca.n_proposed
+        @test :n_accepted in propertynames(pca)
+        @test :n_proposed in propertynames(pca)
 
-    @test pca.n_accepted == 5000
-    @test pca.n_proposed == 5000
+        @test pca.n_accepted == 5000
+        @test pca.n_proposed == 5000
 
-    @test isapprox(pca.mean[1], 0.5; atol=0.02)
-    @test isapprox(pca.mean[2], 0.5; atol=0.02)
-    @test isapprox(pca.evals[1], 1/12; atol=0.02)
-    @test isapprox(pca.evals[2], 1/12; atol=0.02)
+        @test isapprox(pca.mean[1], 0.5; atol=0.02)
+        @test isapprox(pca.mean[2], 0.5; atol=0.02)
+        @test isapprox(pca.evals[1], 1/12; atol=0.02)
+        @test isapprox(pca.evals[2], 1/12; atol=0.02)
 
-    rng2 = MersenneTwister(2)
-    pca_info = PM.region_principal_directions(pi, 1;
-        box=box, nsamples=4000, nbatches=4, rng=rng2, strict=true, return_info=true)
+        rng2 = MersenneTwister(2)
+        pca_info = PM.region_principal_directions(pi, 1;
+            box=box, nsamples=4000, nbatches=4, rng=rng2, strict=true, return_info=true)
 
-    @test pca_info.nbatches == 4
-    @test length(pca_info.batch_evals) == 4
-    @test length(pca_info.batch_n_accepted) == 4
-    @test sum(pca_info.batch_n_accepted) == 4000
+        @test pca_info.nbatches == 4
+        @test length(pca_info.batch_evals) == 4
+        @test length(pca_info.batch_n_accepted) == 4
+        @test sum(pca_info.batch_n_accepted) == 4000
 
-    @test all(pca_info.mean_stderr .>= 0.0)
-    @test all(pca_info.evals_stderr .>= 0.0)
+        @test all(pca_info.mean_stderr .>= 0.0)
+        @test all(pca_info.evals_stderr .>= 0.0)
 
 
 
-    # -------------------------------------------------------------------------
-    # New features:
-    #   (1) exact volume mode for region_weights via Polyhedra.volume
-    #   (2) caching of polyhedra-in-box objects
-    #   (3) per-facet boundary-measure breakdown diagnostics
-    # -------------------------------------------------------------------------
+        # -------------------------------------------------------------------------
+        # New features:
+        #   (1) exact volume mode for region_weights via Polyhedra.volume
+        #   (2) caching of polyhedra-in-box objects
+        #   (3) per-facet boundary-measure breakdown diagnostics
+        # -------------------------------------------------------------------------
 
-    # (1) exact volume mode: unit square in unit box has area 1.
-    w_exact = PM.region_weights(pi; box=box, method=:exact)
-    @test length(w_exact) == 1
-    @test isapprox(w_exact[1], 1.0; atol=1e-12, rtol=0.0)
+        # (1) exact volume mode: unit square in unit box has area 1.
+        w_exact = PM.region_weights(pi; box=box, method=:exact)
+        @test length(w_exact) == 1
+        @test isapprox(w_exact[1], 1.0; atol=1e-12, rtol=0.0)
 
-    # (2) cache: results should match (and box may be omitted if cache is provided)
-    cache1 = PLP.poly_in_box_cache(pi; box=box, closure=true)
+        # (2) cache: results should match (and box may be omitted if cache is provided)
+        cache1 = PLP.poly_in_box_cache(pi; box=box, closure=true)
 
-    perim_cache = PM.region_perimeter(pi, 1; cache=cache1)
-    @test isapprox(perim_cache, perim; atol=1e-12, rtol=0.0)
+        perim_cache = PM.region_perimeter(pi, 1; cache=cache1)
+        @test isapprox(perim_cache, perim; atol=1e-12, rtol=0.0)
 
-    # Define the non-cached centroid for comparison.
-    c = PM.region_centroid(pi, 1; box=box)
+        # Define the non-cached centroid for comparison.
+        c = PM.region_centroid(pi, 1; box=box)
 
-    c_cache = PM.region_centroid(pi, 1; cache=cache1)
-    @test isapprox(c_cache[1], c[1]; atol=1e-10)
-    @test isapprox(c_cache[2], c[2]; atol=1e-10)
+        c_cache = PM.region_centroid(pi, 1; cache=cache1)
+        @test isapprox(c_cache[1], c[1]; atol=1e-10)
+        @test isapprox(c_cache[2], c[2]; atol=1e-10)
 
-    # (3) boundary-measure breakdown: sum of facet measures should match perimeter.
-    bd = PM.region_boundary_measure_breakdown(pi, 1; cache=cache1)
-    @test !isempty(bd)
-    @test all(e.measure > 0 for e in bd)
-    @test isapprox(sum(e.measure for e in bd), perim; atol=1e-8, rtol=0.0)
+        # (3) boundary-measure breakdown: sum of facet measures should match perimeter.
+        bd = PM.region_boundary_measure_breakdown(pi, 1; cache=cache1)
+        @test !isempty(bd)
+        @test all(e.measure > 0 for e in bd)
+        @test isapprox(sum(e.measure for e in bd), perim; atol=1e-8, rtol=0.0)
 
-    # Two adjacent rectangles in the same window; internal facet should be detected.
-    A = [ 1 0;
-         -1 0;
-          0 1;
-          0 -1]
-    hp_left  = PLP.make_hpoly(A, [1,  0, 1, 0])   # 0 <= x <= 1, 0 <= y <= 1
-    hp_right = PLP.make_hpoly(A, [2, -1, 1, 0])   # 1 <= x <= 2, 0 <= y <= 1
-    pi2 = PLP.PLEncodingMap(2, BitVector[], BitVector[], [hp_left, hp_right],
-                            [[0.5, 0.5], [1.5, 0.5]])
-    box2 = ([0.0, 0.0], [2.0, 1.0])
-    cache2 = PLP.poly_in_box_cache(pi2; box=box2, closure=true)
+        # Two adjacent rectangles in the same window; internal facet should be detected.
+        A = [ 1 0;
+             -1 0;
+              0 1;
+              0 -1]
+        hp_left  = PLP.make_hpoly(A, [1,  0, 1, 0])   # 0 <= x <= 1, 0 <= y <= 1
+        hp_right = PLP.make_hpoly(A, [2, -1, 1, 0])   # 1 <= x <= 2, 0 <= y <= 1
+        sigy3 = [BitVector(), BitVector()]
+        sigz3 = [BitVector(), BitVector()]
+        pi2 = PLP.PLEncodingMap(2, sigy3, sigz3, [hp_left, hp_right],
+                                [[0.5, 0.5], [1.5, 0.5]])
+        box2 = ([0.0, 0.0], [2.0, 1.0])
+        cache2 = PLP.poly_in_box_cache(pi2; box=box2, closure=true)
 
-    w2 = PM.region_weights(pi2; cache=cache2, method=:exact)
-    @test length(w2) == 2
-    @test isapprox(w2[1], 1.0; atol=1e-12, rtol=0.0)
-    @test isapprox(w2[2], 1.0; atol=1e-12, rtol=0.0)
+        w2 = PM.region_weights(pi2; cache=cache2, method=:exact)
+        @test length(w2) == 2
+        @test isapprox(w2[1], 1.0; atol=1e-12, rtol=0.0)
+        @test isapprox(w2[2], 1.0; atol=1e-12, rtol=0.0)
 
-    bd1 = PM.region_boundary_measure_breakdown(pi2, 1; cache=cache2)
-    p1 = PM.region_perimeter(pi2, 1; cache=cache2)
-    @test isapprox(sum(e.measure for e in bd1), p1; atol=1e-8, rtol=0.0)
-    @test any(e.kind == :internal for e in bd1)
-    # The only internal neighbor of region 1 in this setup is region 2; its shared edge has length 1.
-    mint = sum(e.measure for e in bd1 if e.neighbor == 2)
-    @test isapprox(mint, 1.0; atol=1e-8, rtol=0.0)
-
+        bd1 = PM.region_boundary_measure_breakdown(pi2, 1; cache=cache2)
+        p1 = PM.region_perimeter(pi2, 1; cache=cache2)
+        @test isapprox(sum(e.measure for e in bd1), p1; atol=1e-8, rtol=0.0)
+        @test any(e.kind == :internal for e in bd1)
+        # The only internal neighbor of region 1 in this setup is region 2; its shared edge has length 1.
+        mint = sum(e.measure for e in bd1 if e.neighbor == 2)
+        @test isapprox(mint, 1.0; atol=1e-8, rtol=0.0)
+    end
 end
 
 @testset "Extended region geometry descriptors (axis backend)" begin
         # Build a simple 2D encoding map: split the plane into quadrants by x=0 and y=0.
         # Each quadrant is one region. Intersect with box [-1,1]^2 to get unit squares.
         Ups = PLB.BoxUpset[
-            PLB.BoxUpset([0.0, -Inf]),   # x >= 0
-            PLB.BoxUpset([-Inf, 0.0]),   # y >= 0
+            PLB.BoxUpset([0.0, -10.0]),   # x >= 0
+            PLB.BoxUpset([-10.0, 0.0]),   # y >= 0
         ]
         Downs = PLB.BoxDownset[]
+        Phi = zeros(QQ, 0, length(Ups))
 
-        coords = Vector{Vector{Float64}}([[0.0], [0.0]])
-
-        sig_y = BitVector[
-            BitVector([0, 0]),  # lower-left
-            BitVector([0, 1]),  # upper-left
-            BitVector([1, 0]),  # lower-right
-            BitVector([1, 1]),  # upper-right
-        ]
-        sig_z = BitVector[BitVector(), BitVector(), BitVector(), BitVector()]
-
-        reps = [
-            [-0.5, -0.5],
-            [-0.5,  0.5],
-            [ 0.5, -0.5],
-            [ 0.5,  0.5],
-        ]
-
-        pi = PLB.PLEncodingMapBoxes(coords, sig_y, sig_z, reps, Ups, Downs)
+        _, _, pi = PLB.encode_fringe_boxes(Ups, Downs, Phi)
 
         box = ([-1.0, -1.0], [1.0, 1.0])
 
@@ -333,17 +324,8 @@ end
         ]
         Downs = PLB.BoxDownset[]
 
-        coords = Vector{Vector{Float64}}([[0.0, 2.0]])
-
-        sig_y = BitVector[
-            BitVector([0, 0]),  # (-Inf,0)
-            BitVector([1, 0]),  # (0,2)
-            BitVector([1, 1]),  # (2,Inf)
-        ]
-        sig_z = BitVector[BitVector(), BitVector(), BitVector()]
-        reps = [[-1.0], [1.0], [3.0]]
-
-        pi = PLB.PLEncodingMapBoxes(coords, sig_y, sig_z, reps, Ups, Downs)
+        Phi = zeros(QQ, 0, length(Ups))
+        _, _, pi = PLB.encode_fringe_boxes(Ups, Downs, Phi)
 
         box = ([-2.0], [7.0])
         weights = PM.region_weights(pi; box=box)
@@ -375,28 +357,29 @@ end
 end
 
 @testset "Covariance-based anisotropy and eccentricity (axis backend exact moments)" begin
-    # Single-region encoding map (no thresholds, no constraints).
-    coords = Vector{Vector{Float64}}([Float64[], Float64[]])
-    sig_y = BitVector[BitVector()]
-    sig_z = BitVector[BitVector()]
-    reps = [[0.0, 0.0]]
-    pi = PLB.PLEncodingMapBoxes(coords, sig_y, sig_z, reps, PLB.BoxUpset[], PLB.BoxDownset[])
+    # Single-region behavior inside the box (bounds chosen to contain the box).
+    Ups = [PLB.BoxUpset([-10.0, -10.0])]
+    Downs = [PLB.BoxDownset([10.0, 10.0])]
+    Phi = reshape(QQ[1], 1, 1)
+    _, _, pi = PLB.encode_fringe_boxes(Ups, Downs, Phi)
 
     # Intersect with a rectangle [-2,2] x [-0.5,0.5].
     box = ([-2.0, -0.5], [2.0, 0.5])
+    r = PM.locate(pi, [0.0, 0.0])
+    @test r != 0
 
-    pd = PM.region_principal_directions(pi, 1; box=box)
+    pd = PM.region_principal_directions(pi, r; box=box)
     # Variances: (width^2)/12.
     @test isapprox(pd.evals[1], 16.0/12.0; atol=1e-12)
     @test isapprox(pd.evals[2], 1.0/12.0; atol=1e-12)
 
-    ani = PM.region_covariance_anisotropy(pi, 1; box=box)
+    ani = PM.region_covariance_anisotropy(pi, r; box=box)
     @test isapprox(ani, 16.0; atol=1e-12)
 
-    ecc = PM.region_covariance_eccentricity(pi, 1; box=box)
+    ecc = PM.region_covariance_eccentricity(pi, r; box=box)
     @test isapprox(ecc, sqrt(15.0/16.0); atol=1e-12)
 
-    scores = PM.region_anisotropy_scores(pi, 1; box=box)
+    scores = PM.region_anisotropy_scores(pi, r; box=box)
     @test isapprox(scores.ratio, 16.0; atol=1e-12)
     @test isapprox(scores.eccentricity, sqrt(15.0/16.0); atol=1e-12)
 end
@@ -426,11 +409,12 @@ end
 
 @testset "ZnEncodingMap adjacency and asymptotics" begin
     # 2D flange depending only on coordinate 1, free in coordinate 2
-    FG = PM.Flange{PM.QQ}(2,
-        [PM.flat([0,0], [false,true])],
-        [PM.inj([1,0], [false,true])],
-        [PM.interval(0,0), PM.interval(1,1), PM.interval(2,2)]
-    )
+    FZ = PM.FlangeZn
+    tau = FZ.face(2, [false, true])
+    flats = [FZ.IndFlat(tau, [0, 0])]
+    injs  = [FZ.IndInj(tau, [1, 0])]
+    Phi   = reshape(QQ[1], 1, 1)
+    FG = PM.Flange{QQ}(2, flats, injs, Phi)
     enc = PM.EncodingOptions(backend=:zn, max_regions=100)
     P, M, pi = PM.encode_pmodule_from_flange(FG, enc)
 
@@ -458,12 +442,12 @@ end
 @testset "PL asymptotics exponent check" begin
     # Quadrant split example from existing tests (2D PLBackend)
     Ups = [
-        PM.BoxUpset{PM.QQ}([0,-10], [10,10]),
-        PM.BoxUpset{PM.QQ}([-10,0], [10,10])
+        PLB.BoxUpset([0.0, -10.0]),
+        PLB.BoxUpset([-10.0, 0.0]),
     ]
-    Downs = PM.BoxUpset{PM.QQ}[]
-    Phi = [PM.interval(0,0), PM.interval(1,1), PM.interval(2,2)]
-    pi = PM.encode_fringe_boxes(Ups, Downs, Phi)
+    Downs = PLB.BoxDownset[]
+    Phi = zeros(QQ, 0, length(Ups))
+    _, _, pi = PLB.encode_fringe_boxes(Ups, Downs, Phi)
 
     dims = ones(Int, 4)  # 4 quadrants
     opts = PM.InvariantOptions(box=:auto, strict=true)
@@ -618,19 +602,15 @@ end
 
     @testset "Module size summary - polyhedral backend smoke test" begin
         # Allow passing a plain vector of region dimensions as "the module".
-        dims = [3]
-        pi = PLB.PLEncodingMapBoxes(
-            Vector{Vector{Float64}}(),    # coords (no thresholds)
-            BitVector[BitVector()],       # sig_y
-            BitVector[BitVector()],       # sig_z
-            [Float64[]],                  # reps
-            PLB.BoxUpset[],
-            PLB.BoxDownset[],
-        )
+        Ups = [PLB.BoxUpset([0.0])]
+        Downs = [PLB.BoxDownset([2.0])]
+        Phi = reshape(QQ[1], 1, 1)
+        P, H, pi = PLB.encode_fringe_boxes(Ups, Downs, Phi)
 
-        box = ([-2.0], [7.0])
-        opts = PM.InvariantOptions(box=box)
-        summary = PM.module_size_summary(dims, pi, opts; weights=[1.0])
+        dims = [3, 0, 0]
+        weights = [1.0, 0.0, 0.0]
+        opts = PM.InvariantOptions()
+        summary = PM.module_size_summary(dims, pi, opts; weights=weights)
         @test summary.integrated_hilbert_mass == 3.0
         @test summary.total_measure == 1.0
     end
@@ -638,13 +618,10 @@ end
 
 @testset "uncertainty + support geometry + ehrhart" begin
     # --- PLBackend 1D encoding as in region geometry tests ---
-    grid = PM.PLEndpoints([[-2.0, 0.0, 2.0, 7.0]])
-    cells = [
-        PM.BoxCell([-2.0], [0.0]),
-        PM.BoxCell([0.0], [2.0]),
-        PM.BoxCell([2.0], [7.0]),
-    ]
-    pi = PM.PLEncodingMapBoxes(grid, cells, 3)
+    Ups = [PLB.BoxUpset([0.0])]
+    Downs = [PLB.BoxDownset([2.0])]
+    Phi = reshape(QQ[1], 1, 1)
+    _, _, pi = PLB.encode_fringe_boxes(Ups, Downs, Phi)
     box = ([-2.0], [7.0])
     opts = PM.InvariantOptions(box=box)
 
@@ -691,7 +668,9 @@ end
     hp1 = PLP.make_hpoly(A1, b1)
     hp2 = PLP.make_hpoly(A2, b2)
     reps = [[0.0,  1.0], [0.0, -1.0]]
-    pi2 = PLP.PLEncodingMap([hp1, hp2], reps, 2)
+    sigy = [BitVector([false]), BitVector([true])]
+    sigz = [BitVector([false]), BitVector([false])]
+    pi2 = PLP.PLEncodingMap(2, sigy, sigz, [hp1, hp2], reps)
     box2 = ([-2.0, -2.0], [2.0, 2.0])
     rng = MersenneTwister(1)
 

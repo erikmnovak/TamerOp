@@ -93,7 +93,7 @@ const DO_LONG = lowercase(get(ENV, "POSETMODULES_LONG_TESTS", "true")) in ("1", 
         M = random_fringe_module(P; mbound=3, rbound=3, density=0.5)
         N = random_fringe_module(P; mbound=3, rbound=3, density=0.5)
 
-        extMN = IR.ext_dimensions_via_indicator_resolutions(M, N; maxlen=3)
+        extMN = DF.ext_dimensions_via_indicator_resolutions(M, N; maxlen=3)
         @test get(extMN, 0, 0) == FF.hom_dimension(M, N)
     end
 end
@@ -137,7 +137,7 @@ end
         N = IR.pmodule_from_fringe(Hn)
 
         # Ext dims: indicator-resolution method vs DerivedFunctors.Ext
-        ext_dims = IR.ext_dimensions_via_indicator_resolutions(Hm, Hn; maxlen=3)
+        ext_dims = DF.ext_dimensions_via_indicator_resolutions(Hm, Hn; maxlen=3)
         E = PM.Ext(M, N, PM.DerivedFunctorOptions(maxdeg=2))
         for t in 0:2
             @test PM.dim(E,t) == get(ext_dims, t, 0)

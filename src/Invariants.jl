@@ -10855,17 +10855,6 @@ function slice_barcodes(M::PModule{QQ}, slices::AbstractVector;
     return (barcodes=bcs, weights=weights)
 end
 
-    for i in 1:n
-        slice = _parse_slice_spec(slices[i]; weight_fn = weight_fn)
-        ch = slice.chain
-        vals = values === nothing ? slice.values : values
-        bcs[i] = slice_barcode(M, ch; values = vals, check_chain = false)
-        W[i] = slice.weight
-    end
-
-    return (barcodes = bcs, weights = W)
-end
-
 
 slice_barcodes(M::PModule{QQ}, chain::AbstractVector{Int}; kwargs...) =
     slice_barcodes(M, [chain]; kwargs...)

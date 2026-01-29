@@ -983,16 +983,16 @@ end
 
     P, H, pi = PLB.encode_fringe_boxes(Ups, Downs)
     M = IR.pmodule_from_fringe(H)
+    opts = PM.InvariantOptions()
 
     # Out-of-the-box: no directions, no offsets.
-    dmatch = Inv.matching_distance_approx(M, M, pi)
+    dmatch = Inv.matching_distance_approx(M, M, pi, opts)
     @test isapprox(dmatch, 0.0; atol=1e-12)
 
-    dsw = Inv.sliced_wasserstein_distance(M, M, pi)
+    dsw = Inv.sliced_wasserstein_distance(M, M, pi, opts)
     @test isapprox(dsw, 0.0; atol=1e-12)
 
     # Bounding box extraction: derived from pi.reps (finite points).
-    opts = PM.InvariantOptions()
     lo, hi = Inv.encoding_box(pi, opts; margin=0.0)
     reps = pi.reps
     d = length(reps[1])
@@ -1022,17 +1022,19 @@ end
         Phi = reshape(QQ[1], 1, 1)
         Fpl = PLP.PLFringe(Upl, Downl, Phi)
 
-        P2, Hs2, pi2 = PLP.encode_from_PL_fringes(Fpl)
+        enc_pl = PM.EncodingOptions(backend=:pl)
+        P2, Hs2, pi2 = PLP.encode_from_PL_fringes(Fpl, enc_pl)
         H2 = Hs2[1]
         M2 = IR.pmodule_from_fringe(H2)
+        opts2 = PM.InvariantOptions()
 
-        dmatch2 = Inv.matching_distance_approx(M2, M2, pi2)
+        dmatch2 = Inv.matching_distance_approx(M2, M2, pi2, opts2)
         @test isapprox(dmatch2, 0.0; atol=1e-12)
 
-        dsw2 = Inv.sliced_wasserstein_distance(M2, M2, pi2)
+        dsw2 = Inv.sliced_wasserstein_distance(M2, M2, pi2, opts2)
         @test isapprox(dsw2, 0.0; atol=1e-12)
 
-        lo2, hi2 = Inv.encoding_box(pi2; margin=0.0)
+        lo2, hi2 = Inv.encoding_box(pi2, opts2; margin=0.0)
         wit = pi2.witnesses
         d2 = length(wit[1])
         lo2_expected = [minimum(float(w[i]) for w in wit) for i in 1:d2]
@@ -1041,20 +1043,20 @@ end
         @test hi2 == hi2_expected
     end
 
-    @test matching_distance_approx(M, M, pi) == 0.0
-    @test sliced_wasserstein_distance(M, M, pi) == 0.0
+    @test Inv.matching_distance_approx(M, M, pi, opts) == 0.0
+    @test Inv.sliced_wasserstein_distance(M, M, pi, opts) == 0.0
 
     # New: Lp-generalization family members should also work out-of-the-box.
-    @test sliced_bottleneck_distance(M, M, pi) == 0.0
-    @test matching_wasserstein_distance_approx(M, M, pi) == 0.0
+    @test Inv.sliced_bottleneck_distance(M, M, pi, opts) == 0.0
+    @test Inv.matching_wasserstein_distance_approx(M, M, pi, opts) == 0.0
 
     if PLP.HAVE_POLY
-        @test matching_distance_approx(M2, M2, pi2) == 0.0
-        @test sliced_wasserstein_distance(M2, M2, pi2) == 0.0
+        @test Inv.matching_distance_approx(M2, M2, pi2, opts2) == 0.0
+        @test Inv.sliced_wasserstein_distance(M2, M2, pi2, opts2) == 0.0
 
         # New: same for the PLPolyhedra encoding map path.
-        @test sliced_bottleneck_distance(M2, M2, pi2) == 0.0
-        @test matching_wasserstein_distance_approx(M2, M2, pi2) == 0.0
+        @test Inv.sliced_bottleneck_distance(M2, M2, pi2, opts2) == 0.0
+        @test Inv.matching_wasserstein_distance_approx(M2, M2, pi2, opts2) == 0.0
     end
 
     @testset "Exact 2D matching distance: deterministic and correct on a toy example" begin
@@ -1065,12 +1067,17 @@ end
         # For modules M23 vs M3 on the chain 1<=2<=3, the exact Lesnick matching distance
         # over this box is 1.0 (achieved for sufficiently steep directions where weight=dir1
         # and bottleneck scales as 1/dir1).
-        struct ToyBoxes2D
+        struct ToyBoxes2D <: PM.CoreModules.PLikeEncodingMap
             coords::Vector{Vector{Float64}}
+            reps::Vector{Vector{Float64}}
         end
 
+        PM.dimension(::ToyBoxes2D) = 2
+        PM.representatives(pi::ToyBoxes2D) = pi.reps
+        PM.axes_from_encoding(pi::ToyBoxes2D) = (pi.coords[1], pi.coords[2])
+
         # locate for ToyBoxes2D: depends only on x[1], returns 1/2/3 inside [0,3], else 0.
-        function PM.locate(pi::ToyBoxes2D, x::Vector{Float64})
+        function PM.locate(pi::ToyBoxes2D, x::AbstractVector{<:Real}; strict::Bool=true, closure::Bool=true)
             x1 = x[1]
             x2 = x[2]
             if (x1 < 0.0) || (x1 > 3.0) || (x2 < 0.0) || (x2 > 3.0)
@@ -1084,17 +1091,19 @@ end
             end
         end
 
-        pi = ToyBoxes2D([ [0.0, 1.0, 2.0, 3.0], [0.0, 3.0] ])
+        reps = [[0.5, 1.5], [1.5, 1.5], [2.5, 1.5]]
+        pi = ToyBoxes2D([ [0.0, 1.0, 2.0, 3.0], [0.0, 3.0] ], reps)
         box = ([0.0, 0.0], [3.0, 3.0])
+        opts_exact = PM.InvariantOptions(box=box)
 
         P = chain_poset(3)
-        M23 = PM.interval_module(P, [2,3])
-        M3  = PM.interval_module(P, [3])
+        M23 = IR.pmodule_from_fringe(one_by_one_fringe(P, FF.principal_upset(P, 2), FF.principal_downset(P, 3)))
+        M3  = IR.pmodule_from_fringe(one_by_one_fringe(P, FF.principal_upset(P, 3), FF.principal_downset(P, 3)))
 
         # Slice-chain exactness sanity check at one noncritical line:
         # dir = (1,1) normalized L1 -> (0.5,0.5).
         # offset chosen so y-x = 0.5 (i.e. dot([-0.5,0.5], x) = 0.25).
-        chain, vals = PM.slice_chain_exact_2d(pi, [1.0, 1.0], 0.25; box=box, normalize_dirs=:L1)
+        chain, vals = PM.slice_chain_exact_2d(pi, [1.0, 1.0], 0.25, opts_exact; normalize_dirs=:L1)
         @test chain == [1,2,3]
         @test isapprox(vals[1], 0.5; atol=1e-12)
         @test isapprox(vals[2], 2.5; atol=1e-12)
@@ -1102,14 +1111,14 @@ end
         @test isapprox(vals[4], 5.5; atol=1e-12)
 
         # Exact distance should be 1.0 on this toy configuration.
-        d1 = PM.matching_distance_exact_2d(M23, M3, pi; box=box, weight=:lesnick_l1, normalize_dirs=:L1)
-        d2 = PM.matching_distance_exact_2d(M23, M3, pi; box=box, weight=:lesnick_l1, normalize_dirs=:L1)
+        d1 = PM.matching_distance_exact_2d(M23, M3, pi, opts_exact; weight=:lesnick_l1, normalize_dirs=:L1)
+        d2 = PM.matching_distance_exact_2d(M23, M3, pi, opts_exact; weight=:lesnick_l1, normalize_dirs=:L1)
         @test d1 == d2  # determinism
         @test isapprox(d1, 1.0; atol=1e-10)
 
         # Agreement with the slice-based evaluator using the exact slice list.
-        slices = PM.matching_distance_exact_slices_2d(pi; box=box, weight=:lesnick_l1, normalize_dirs=:L1)
-        d3 = PM.matching_distance_approx(M23, M3, slices)
+        fam = PM.matching_distance_exact_slices_2d(pi, opts_exact; normalize_dirs=:L1)
+        d3 = PM.matching_distance_approx(M23, M3, fam.slices)
         @test isapprox(d3, d1; atol=1e-12)
 
         # Toy polyhedral encoding: same three vertical stripes, expressed as HPolys.
@@ -1134,19 +1143,19 @@ end
         hp2 = hpoly_box(1.0, 2.0, 0.0, 3.0)
         hp3 = hpoly_box(2.0, 3.0, 0.0, 3.0)
 
-        sigy = [BitVector([0]), BitVector([0]), BitVector([0])]
-        sigz = [BitVector([0]), BitVector([0]), BitVector([0])]
+        sigy = [BitVector([false]), BitVector([false]), BitVector([false])]
+        sigz = [BitVector([false]), BitVector([false]), BitVector([false])]
         witnesses = [[0.5, 1.5], [1.5, 1.5], [2.5, 1.5]]
 
         pi_poly = PM.PLPolyhedra.PLEncodingMap(2, sigy, sigz, [hp1, hp2, hp3], witnesses)
 
-        d_poly = PM.matching_distance_exact_2d(M23, M3, pi_poly; box=box, weight=:lesnick_l1, normalize_dirs=:L1)
+        d_poly = PM.matching_distance_exact_2d(M23, M3, pi_poly, opts_exact; weight=:lesnick_l1, normalize_dirs=:L1)
         @test isapprox(d_poly, 1.0; atol=1e-10)
 
         @testset "Fibered barcode cache 2D: augmented arrangement" begin
             # Full precompute cache (cells + barcodes)
-            cache_full = Inv.fibered_barcode_cache_2d(M23, pi;
-                box=box, normalize_dirs=:L1, precompute=:full)
+            cache_full = Inv.fibered_barcode_cache_2d(M23, pi, opts_exact;
+                normalize_dirs=:L1, precompute=:full)
 
             bar = Inv.fibered_barcode(cache_full, [1.0, 1.0], 0.25; values=:t)
             @test bar == Dict((2.5, 5.5) => 1)
@@ -1167,8 +1176,8 @@ end
             @test st.n_index_barcodes_computed == st.n_chains
 
             # Lazy cache: ensure first query computes exactly one cell
-            cache_lazy = Inv.fibered_barcode_cache_2d(M23, pi;
-                box=box, normalize_dirs=:L1, precompute=:none)
+            cache_lazy = Inv.fibered_barcode_cache_2d(M23, pi, opts_exact;
+                normalize_dirs=:L1, precompute=:none)
 
             st0 = Inv.fibered_barcode_cache_stats(cache_lazy)
             @test st0.n_cells_computed == 0
@@ -1184,8 +1193,8 @@ end
             @test st2.n_cells_computed == 1
 
             # Polyhedral backend: index barcodes must agree exactly
-            cache_poly = Inv.fibered_barcode_cache_2d(M23, pi_poly;
-                box=box, normalize_dirs=:L1, precompute=:full)
+            cache_poly = Inv.fibered_barcode_cache_2d(M23, pi_poly, opts_exact;
+                normalize_dirs=:L1, precompute=:full)
 
             bar_poly_idx = Inv.fibered_barcode_index(cache_poly, [1.0, 1.0], 0.25)
             @test bar_poly_idx == Dict((2, 4) => 1)
@@ -1223,7 +1232,7 @@ end
             @test sb.barcodes[1, 2] == Inv.fibered_barcode(cache_full, dirs[1], x0; values=:t)
 
             # Cache-aware exact matching distance: reuse a shared arrangement.
-            arr_shared = Inv.fibered_arrangement_2d(pi; box=box, normalize_dirs=:L1, precompute=:cells)
+            arr_shared = Inv.fibered_arrangement_2d(pi, opts_exact; normalize_dirs=:L1, precompute=:cells)
             cache23 = Inv.fibered_barcode_cache_2d(M23, arr_shared; precompute=:full)
             cache3  = Inv.fibered_barcode_cache_2d(M3,  arr_shared; precompute=:full)
 
@@ -1231,13 +1240,14 @@ end
             @test isapprox(d_cache, d1; atol=1e-12)
 
             if Threads.nthreads() > 1
-                d_serial = PM.matching_distance_exact_2d(cacheM, cacheN; threads = false)
-                d_thread = PM.matching_distance_exact_2d(cacheM, cacheN; threads = true)
+                d_serial = PM.matching_distance_exact_2d(cache23, cache3; threads = false)
+                d_thread = PM.matching_distance_exact_2d(cache23, cache3; threads = true)
                 @test d_thread == d_serial
             end
 
             # Arrangement-exact sliced kernel: compare to the slice-list backend.
-            slices2 = PM.matching_distance_exact_slices_2d(pi; box=box, weight=:lesnick_l1, normalize_dirs=:L1)
+            fam2 = PM.matching_distance_exact_slices_2d(pi, opts_exact; normalize_dirs=:L1)
+            slices2 = fam2.slices
             k_slices = PM.slice_kernel(M23, M3, slices2; kind=:bottleneck_gaussian, sigma=1.0)
             k_cache  = Inv.slice_kernel(cache23, cache3;
                                         kind=:bottleneck_gaussian, sigma=1.0,
@@ -1245,8 +1255,8 @@ end
             @test isapprox(k_cache, k_slices; atol=1e-12)
 
             if Threads.nthreads() > 1
-                k_serial = PM.slice_kernel(cacheM, cacheN; kernel = :wasserstein, p = 1.0, threads = false)
-                k_thread = PM.slice_kernel(cacheM, cacheN; kernel = :wasserstein, p = 1.0, threads = true)
+                k_serial = PM.slice_kernel(cache23, cache3; kind = :wasserstein_gaussian, sigma = 1.0, threads = false)
+                k_thread = PM.slice_kernel(cache23, cache3; kind = :wasserstein_gaussian, sigma = 1.0, threads = true)
                 @test isapprox(k_thread, k_serial; rtol = 1e-12, atol = 1e-12)
             end
         end
@@ -1294,10 +1304,11 @@ end
     P, H, pi = PB.encode_fringe_boxes(Ups, Downs)
     M = IR.pmodule_from_fringe(H)
     Z = PM.zero_pmodule(M.Q, QQ)
+    opts_lp = PM.InvariantOptions()
 
     # Deterministic directions/offsets so the test is stable.
     dirs = Inv.default_directions(pi; n_dirs=3, max_den=3, include_axes=true, normalize=:L1)
-    offs = Inv.default_offsets(pi; n_offsets=3)
+    offs = Inv.default_offsets(pi, opts_lp; n_offsets=3)
 
     # -----------------------------------------------------------------------
     # Manual weighted p-mean check for sliced Wasserstein.
@@ -1330,7 +1341,7 @@ end
     manual_sw = s^(1 / agg_p)
 
     got_sw = Inv.sliced_wasserstein_distance(
-        M, Z, pi;
+        M, Z, pi, opts_lp;
         directions=dirs,
         offsets=offs,
         weight=:none,
@@ -1355,7 +1366,7 @@ end
     manual_sb = s2^(1 / agg_p)
 
     got_sb = Inv.sliced_bottleneck_distance(
-        M, Z, pi;
+        M, Z, pi, opts_lp;
         directions=dirs,
         offsets=offs,
         weight=:none,
@@ -1397,7 +1408,7 @@ end
     end
 
     got_mw = Inv.matching_wasserstein_distance_approx(
-        M, Z, pi;
+        M, Z, pi, opts_lp;
         directions=dirs,
         offsets=offs,
         weight=:lesnick_linf,
@@ -1644,8 +1655,8 @@ end
 
     # Simple chain module tests
     P = chain_poset(3)
-    M23 = IR.pmodule_from_fringe(one_by_one_fringe(P, [2,3]))
-    M3  = IR.pmodule_from_fringe(one_by_one_fringe(P, [3]))
+    M23 = IR.pmodule_from_fringe(one_by_one_fringe(P, FF.principal_upset(P, 2), FF.principal_downset(P, 3)))
+    M3  = IR.pmodule_from_fringe(one_by_one_fringe(P, FF.principal_upset(P, 3), FF.principal_downset(P, 3)))
 
     arr = Inv.projected_arrangement(P, [0.0, 1.0, 2.0])
     c23 = Inv.projected_barcode_cache(M23, arr)
@@ -1686,8 +1697,22 @@ end
 end
 
 @testset "fibered slice family + typed caches" begin
-    box = [-1.0, 1.0, -1.0, 1.0]
-    arr_shared = Inv.fibered_arrangement_2d(pi; box=box, normalize_dirs=:L1, precompute=:cells)
+    Inv = PM.Invariants
+    # Build a simple 2D PLBackend encoding with three vertical stripes (chain of length 3).
+    Ups = [PLB.BoxUpset([0.0, -10.0]), PLB.BoxUpset([1.0, -10.0])]
+    Downs = PLB.BoxDownset[]
+    Phi = zeros(QQ, 0, length(Ups))
+    P, H, pi = PLB.encode_fringe_boxes(Ups, Downs, Phi)
+
+    r2 = PM.locate(pi, [0.5, 0.0])
+    r3 = PM.locate(pi, [2.0, 0.0])
+
+    M23 = IR.pmodule_from_fringe(one_by_one_fringe(P, FF.principal_upset(P, r2), FF.principal_downset(P, r3)))
+    M3  = IR.pmodule_from_fringe(one_by_one_fringe(P, FF.principal_upset(P, r3), FF.principal_downset(P, r3)))
+
+    box = ([-1.0, -1.0], [2.0, 1.0])
+    opts = PM.InvariantOptions(box=box)
+    arr_shared = Inv.fibered_arrangement_2d(pi, opts; normalize_dirs=:L1, precompute=:cells)
 
     fam = Inv.fibered_slice_family_2d(arr_shared; direction_weight=:lesnick_l1, store_values=true)
     @test fam.arrangement === arr_shared
@@ -1700,7 +1725,7 @@ end
     @test eltype(cache23.index_barcodes) <: Union{Nothing,Inv.IndexBarcode}
 
     # exact distance matches slice-list backend
-    d_slices = PM.matching_distance_exact_2d(M23, M3, pi; box=box, weight=:lesnick_l1, normalize_dirs=:L1)
+    d_slices = PM.matching_distance_exact_2d(M23, M3, pi, opts; weight=:lesnick_l1, normalize_dirs=:L1)
     d_cache  = PM.matching_distance_exact_2d(cache23, cache3; weight=:lesnick_l1, family=fam, threads=false)
     @test isapprox(d_cache, d_slices; atol=1e-12)
 
@@ -1709,7 +1734,8 @@ end
     @test isapprox(d_thr, d_cache; atol=1e-12)
 
     # kernel matches slice-list backend (uniform cell weighting)
-    slices2 = PM.matching_distance_exact_slices_2d(pi; box=box, weight=:lesnick_l1, normalize_dirs=:L1)
+    fam2 = PM.matching_distance_exact_slices_2d(pi, opts; normalize_dirs=:L1)
+    slices2 = fam2.slices
     k_slices = PM.slice_kernel(M23, M3, slices2; kind=:bottleneck_gaussian, sigma=1.0, normalize_weights=true)
     k_cache  = PM.slice_kernel(cache23, cache3; kind=:bottleneck_gaussian, sigma=1.0,
                                direction_weight=:lesnick_l1, cell_weight=:uniform,

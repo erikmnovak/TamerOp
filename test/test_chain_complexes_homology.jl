@@ -21,17 +21,28 @@ function one_vertex_module(dim::Int)
     return MD.PModule{QQ}(P, [dim], Dict{Tuple{Int,Int}, Matrix{QQ}}())
 end
 
-function scalar_morphism(M, a::Int)
-    A = fill(QQ(a), M.dims[1], M.dims[1])
-    return MD.PMorphism{QQ}(M, M, [A])
+function scalar_morphism(M::MD.PModule{QQ}, a::Int)
+    comps = Vector{Matrix{QQ}}(undef, M.Q.n)
+    for v in 1:M.Q.n
+        dv = M.dims[v]
+        comps[v] = dv == 0 ? zeros(QQ, 0, 0) : fill(QQ(a), dv, dv)
+    end
+    return MD.PMorphism{QQ}(M, M, comps)
+end
+
+function compose_morphism(g::MD.PMorphism{QQ}, f::MD.PMorphism{QQ})
+    @assert f.cod === g.dom
+    n = f.dom.Q.n
+    comps = [g.comps[v] * f.comps[v] for v in 1:n]
+    return MD.PMorphism{QQ}(f.dom, g.cod, comps)
 end
 
 @testset "Homological algebra edge cases on finite posets" begin
     # One-point poset: incidence algebra is just the base field.
     P1 = chain_poset(1)
-    S = MD.pmodule_from_fringe(one_by_one_fringe(P1, FF.principal_upset(P1, 1), FF.principal_downset(P1, 1)))
+    S = IR.pmodule_from_fringe(one_by_one_fringe(P1, FF.principal_upset(P1, 1), FF.principal_downset(P1, 1)))
 
-    PM.Ext(S, S, PM.DerivedFunctorOptions(maxdeg=3))
+    E = PM.Ext(S, S, PM.DerivedFunctorOptions(maxdeg=3))
     @test PM.dim(E, 0) == 1
     @test all(PM.dim(E, t) == 0 for t in 1:3)
 
@@ -613,11 +624,11 @@ end
 end
 
 @testset "rhom_map_second and hyperExt_map_second functoriality" begin
-    P = FF.chain_poset(2)
+    P = chain_poset(2)
 
     # simples at vertices 1 and 2
-    S1 = IR.pmodule_from_fringe(IR.one_by_one_fringe(P, FF.principal_upset(P, 1), FF.principal_downset(P, 1)))
-    S2 = IR.pmodule_from_fringe(IR.one_by_one_fringe(P, FF.principal_upset(P, 2), FF.principal_downset(P, 2)))
+    S1 = IR.pmodule_from_fringe(one_by_one_fringe(P, FF.principal_upset(P, 1), FF.principal_downset(P, 1)))
+    S2 = IR.pmodule_from_fringe(one_by_one_fringe(P, FF.principal_upset(P, 2), FF.principal_downset(P, 2)))
 
     # C concentrated in degree 0
     C = PM.ModuleCochainComplex([S1], PM.PMorphism{QQ}[]; tmin=0, check=true)
@@ -643,7 +654,7 @@ end
     Mid = PM.hyperExt_map_second(idN, H, H; t=1)
     @test Mid == Matrix{QQ}(I, 2, 2)
 
-    twoN = scalar_morphism(N, N, 2)
+    twoN = scalar_morphism(N, 2)
     Mtwo = PM.hyperExt_map_second(twoN, H, H; t=1)
     @test Mtwo == 2 * Matrix{QQ}(I, 2, 2)
 
@@ -661,10 +672,10 @@ end
 end
 
 @testset "hyperExt_map_first contravariant functoriality" begin
-    P = FF.chain_poset(2)
+    P = chain_poset(2)
 
-    S1 = IR.pmodule_from_fringe(IR.one_by_one_fringe(P, FF.principal_upset(P, 1), FF.principal_downset(P, 1)))
-    S2 = IR.pmodule_from_fringe(IR.one_by_one_fringe(P, FF.principal_upset(P, 2), FF.principal_downset(P, 2)))
+    S1 = IR.pmodule_from_fringe(one_by_one_fringe(P, FF.principal_upset(P, 1), FF.principal_downset(P, 1)))
+    S2 = IR.pmodule_from_fringe(one_by_one_fringe(P, FF.principal_upset(P, 2), FF.principal_downset(P, 2)))
 
     M, _, _, _, _ = PM.direct_sum(S1, S1)
     N, _, _, _, _ = PM.direct_sum(S2, S2)
