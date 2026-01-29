@@ -1,0 +1,9 @@
+[deps]
+CairoMakie = "13f3f980-e62b-5c42-98c6-ff1f3baf88f0"
+JSON3 = "0f8b85d8-7281-11e9-16c2-39a750bddbf1"
+
+[weakdeps]
+Nemo = "2edaba10-b0f1-5616-af89-8c11ac63239a"
+
+[extensions]
+PosetModulesNemoExt = "Nemo"

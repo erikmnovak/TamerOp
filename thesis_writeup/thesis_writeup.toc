@@ -1,0 +1,92 @@
+\babel@toc {english}{}\relax 
+\contentsline {section}{\numberline {1}Introduction}{3}{section.1}%
+\contentsline {section}{\numberline {2}Background mathematical information}{3}{section.2}%
+\contentsline {subsection}{\numberline {2.1}Posets as categories; persistence modules as functors}{3}{subsection.2.1}%
+\contentsline {subsection}{\numberline {2.2}1-parameter persistence}{5}{subsection.2.2}%
+\contentsline {subsection}{\numberline {2.3}Multiparameter persistence and why it is hard}{6}{subsection.2.3}%
+\contentsline {subsection}{\numberline {2.4}Two complementary viewpoints}{7}{subsection.2.4}%
+\contentsline {subsection}{\numberline {2.5}Survey of partial solutions}{8}{subsection.2.5}%
+\contentsline {subsection}{\numberline {2.6}Brief software landscape}{9}{subsection.2.6}%
+\contentsline {subsection}{\numberline {2.7}Notation and conventions}{9}{subsection.2.7}%
+\contentsline {section}{\numberline {3}Tame modules}{10}{section.3}%
+\contentsline {subsection}{\numberline {3.1}Why ``tame'' is the right hypothesis for computation}{10}{subsection.3.1}%
+\contentsline {subsection}{\numberline {3.2}Encoding posets and encoding maps}{11}{subsection.3.2}%
+\contentsline {subsection}{\numberline {3.3}Definitions of tameness in this framework}{12}{subsection.3.3}%
+\contentsline {subsection}{\numberline {3.4}Why non-abelianity fears are usually irrelevant in computation}{12}{subsection.3.4}%
+\contentsline {subsection}{\numberline {3.5}Fringe presentations as a computable interface}{14}{subsection.3.5}%
+\contentsline {subsection}{\numberline {3.6}What tameness buys you: mathematical consequences}{16}{subsection.3.6}%
+\contentsline {subsection}{\numberline {3.7}What tameness buys you: algorithmic consequences}{16}{subsection.3.7}%
+\contentsline {paragraph}{Finite linear algebra.}{16}{section*.27}%
+\contentsline {paragraph}{Homological algebra in a finite abelian category.}{17}{section*.28}%
+\contentsline {subsection}{\numberline {3.8}Bridge to implementation}{17}{subsection.3.8}%
+\contentsline {section}{\numberline {4}Overview of TAMER-OP}{19}{section.4}%
+\contentsline {subsection}{\numberline {4.1}Design goals stated mathematically}{19}{subsection.4.1}%
+\contentsline {subsection}{\numberline {4.2}The end-to-end pipeline}{19}{subsection.4.2}%
+\contentsline {subsection}{\numberline {4.3}Core mathematical objects in the API}{19}{subsection.4.3}%
+\contentsline {subsection}{\numberline {4.4}Architectural layering}{19}{subsection.4.4}%
+\contentsline {subsection}{\numberline {4.5}Reproducibility and correctness}{19}{subsection.4.5}%
+\contentsline {section}{\numberline {5}The presentation formats}{19}{section.5}%
+\contentsline {subsection}{\numberline {5.1}Philosophy: multiple equivalent front-ends}{19}{subsection.5.1}%
+\contentsline {subsection}{\numberline {5.2}Finite fringe presentations}{19}{subsection.5.2}%
+\contentsline {subsection}{\numberline {5.3}$\mathbb {Z}^n$ presentations}{19}{subsection.5.3}%
+\contentsline {subsection}{\numberline {5.4}$\mathbb {R}^n$ and piecewise-linear presentations}{19}{subsection.5.4}%
+\contentsline {subsection}{\numberline {5.5}Conversions between formats}{19}{subsection.5.5}%
+\contentsline {subsection}{\numberline {5.6}Validation and other sanity checks}{19}{subsection.5.6}%
+\contentsline {subsection}{\numberline {5.7}Serialization and I/O}{19}{subsection.5.7}%
+\contentsline {section}{\numberline {6}Finite encoding constructors}{19}{section.6}%
+\contentsline {subsection}{\numberline {6.1}The encoding problem}{19}{subsection.6.1}%
+\contentsline {subsection}{\numberline {6.2}Region/signature idea}{19}{subsection.6.2}%
+\contentsline {subsection}{\numberline {6.3}Encoding algorithms by ambient domain}{19}{subsection.6.3}%
+\contentsline {subsection}{\numberline {6.4}Constructing the finite poset structure}{19}{subsection.6.4}%
+\contentsline {subsection}{\numberline {6.5}Point location and evaluation map}{19}{subsection.6.5}%
+\contentsline {subsection}{\numberline {6.6}Building a common encoding for multiple modules}{19}{subsection.6.6}%
+\contentsline {subsection}{\numberline {6.7}Complexity and failure modes}{19}{subsection.6.7}%
+\contentsline {subsection}{\numberline {6.8}Correctness and diagnostics}{19}{subsection.6.8}%
+\contentsline {section}{\numberline {7}Invariants}{19}{section.7}%
+\contentsline {subsection}{\numberline {7.1}Meta principle: invariants factor through the encoding}{19}{subsection.7.1}%
+\contentsline {subsection}{\numberline {7.2}Dimension-type invariants}{19}{subsection.7.2}%
+\contentsline {subsection}{\numberline {7.3}Rank-type invariants}{19}{subsection.7.3}%
+\contentsline {subsection}{\numberline {7.4}Mobius inversions and signed measures}{19}{subsection.7.4}%
+\contentsline {subsection}{\numberline {7.5}Slice-based invariants and distances}{19}{subsection.7.5}%
+\contentsline {subsection}{\numberline {7.6}Vectorizations and kernels}{19}{subsection.7.6}%
+\contentsline {subsection}{\numberline {7.7}Homological invariants derived from resolutions}{19}{subsection.7.7}%
+\contentsline {subsection}{\numberline {7.8}Geometry-aware invariants for when $Q = \mathbb {R}^n$}{19}{subsection.7.8}%
+\contentsline {subsection}{\numberline {7.9}Stability and robustness discussion}{19}{subsection.7.9}%
+\contentsline {subsection}{\numberline {7.10}Practical API summary}{19}{subsection.7.10}%
+\contentsline {section}{\numberline {8}Homological Algebra and Derived Functors}{19}{section.8}%
+\contentsline {subsection}{\numberline {8.1}The Abelian Category of $P$-modules}{19}{subsection.8.1}%
+\contentsline {subsection}{\numberline {8.2}Projective and Injective Objects}{19}{subsection.8.2}%
+\contentsline {subsection}{\numberline {8.3}Resolutions}{19}{subsection.8.3}%
+\contentsline {subsection}{\numberline {8.4}Ext and Tor: definitions and computational model}{19}{subsection.8.4}%
+\contentsline {subsection}{\numberline {8.5}Multiplicative structures and higher structure}{19}{subsection.8.5}%
+\contentsline {subsection}{\numberline {8.6}Double complexes and spectral sequences}{19}{subsection.8.6}%
+\contentsline {subsection}{\numberline {8.7}The ergonomics of derived categories}{19}{subsection.8.7}%
+\contentsline {subsection}{\numberline {8.8}Relationship to multigraded commutative algebra}{19}{subsection.8.8}%
+\contentsline {subsection}{\numberline {8.9}What you use all this for in TDA}{19}{subsection.8.9}%
+\contentsline {section}{\numberline {9}Transport and comparison}{19}{section.9}%
+\contentsline {subsection}{\numberline {9.1}Change of posets as functorial transport}{19}{subsection.9.1}%
+\contentsline {subsection}{\numberline {9.2}Comparing modules on different encodings}{19}{subsection.9.2}%
+\contentsline {subsection}{\numberline {9.3}Comparison via invariants}{19}{subsection.9.3}%
+\contentsline {subsection}{\numberline {9.4}Interoperability with multipers and RIVET}{19}{subsection.9.4}%
+\contentsline {subsection}{\numberline {9.5}Case studies}{19}{subsection.9.5}%
+\contentsline {section}{\numberline {10}Statistics}{19}{section.10}%
+\contentsline {subsection}{\numberline {10.1}Data model for experiments}{19}{subsection.10.1}%
+\contentsline {subsection}{\numberline {10.2}Feature extraction recipes}{19}{subsection.10.2}%
+\contentsline {subsection}{\numberline {10.3}Basic inferential statistics}{19}{subsection.10.3}%
+\contentsline {subsection}{\numberline {10.4}Learning-oriented workflows}{19}{subsection.10.4}%
+\contentsline {subsection}{\numberline {10.5}Diagnostic plots}{19}{subsection.10.5}%
+\contentsline {subsection}{\numberline {10.6}Reproducibility and reporting}{19}{subsection.10.6}%
+\contentsline {section}{\numberline {11}Speed optimizations}{19}{section.11}%
+\contentsline {subsection}{\numberline {11.1}Where time is spent}{19}{subsection.11.1}%
+\contentsline {subsection}{\numberline {11.2}Tradeoffs in exactness versus speed}{19}{subsection.11.2}%
+\contentsline {subsection}{\numberline {11.3}Sparsity-aware algorithms}{19}{subsection.11.3}%
+\contentsline {subsection}{\numberline {11.4}Caching and memoization strategies}{19}{subsection.11.4}%
+\contentsline {subsection}{\numberline {11.5}Parallelism}{19}{subsection.11.5}%
+\contentsline {subsection}{\numberline {11.6}Geometry backend: controlling combinatorial explosion}{19}{subsection.11.6}%
+\contentsline {section}{\numberline {12}Benchmarks}{19}{section.12}%
+\contentsline {subsection}{\numberline {12.1}Philosophy and reproducibility}{19}{subsection.12.1}%
+\contentsline {subsection}{\numberline {12.2}Microbenchmarks (unit tests)}{19}{subsection.12.2}%
+\contentsline {subsection}{\numberline {12.3}End-to-end benchmarks}{19}{subsection.12.3}%
+\contentsline {subsection}{\numberline {12.4}Comparisons with multipers and RIVET}{19}{subsection.12.4}%
+\contentsline {subsection}{\numberline {12.5}Discussion of results}{19}{subsection.12.5}%
+\contentsline {section}{\numberline {13}Conclusion}{19}{section.13}%

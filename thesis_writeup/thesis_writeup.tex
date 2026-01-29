@@ -1,0 +1,1600 @@
+\documentclass{article}
+
+% PACKAGES
+
+% correct encoding and typography
+\usepackage[english]{babel}
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+
+% math
+\usepackage{amsfonts, latexsym, mathtools, amsthm, amssymb, amscd}
+\usepackage{euscript}
+\usepackage{esvect}
+\usepackage{bm}
+\usepackage{physics}
+
+% aesthetics color options
+\usepackage{xcolor, graphicx}
+\usepackage{pdfpages}
+
+% to access the last page
+\usepackage{lastpage}
+
+% better document formatting
+\usepackage{fancyhdr}
+\usepackage[a4paper, right=1in, left=1in, bottom=1.2in, top=1.2in, centering]{geometry}
+\usepackage{fullpage}
+
+\usepackage{datetime2}
+
+% better stylistic formatting
+\usepackage{parskip}
+\usepackage{enumitem}
+\usepackage{framed}
+\usepackage{longtable}
+
+% embedding and referencing
+\usepackage{hyperref}
+\hypersetup{colorlinks=true,citecolor=blue,urlcolor =black,linkbordercolor={1 0 0}}
+
+% TikZ (workflow diagrams)
+\usepackage{tikz}
+\usetikzlibrary{arrows.meta,positioning,fit,calc,backgrounds,matrix}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% Command formatting for ease-of-life
+
+% new math symbols taking no arguments
+\newcommand{\kk}{\Bbbk}
+\newcommand{\minus}{\smallsetminus}
+\newcommand{\dotp}{\boldsymbol{\cdot}}
+
+%redefined math symbols taking no arguments
+\newcommand{\<}{\langle}
+\renewcommand{\>}{\rangle}
+\renewcommand{\iff}{\Leftrightarrow}
+\renewcommand{\implies}{\Rightarrow}
+
+% Arrows
+\newcommand{\from}{\leftarrow}
+\newcommand{\ffrom}{\longleftarrow}
+\newcommand{\goesto}{\rightsquigarrow}
+\newcommand{\into}{\hookrightarrow}
+
+% Basic bbface (blackboard bold) lettering command:
+\newcommand{\bbb}[1]{\ensuremath{\mathbb{#1}}}
+
+% Boldface lettering command used for vectors:
+\newcommand{\bvec}[1]{\ensuremath{\mathbf{#1}}}
+
+% Other lettering
+\newcommand{\eps}{\varepsilon}
+
+
+% some operators and delimiters
+\DeclareMathOperator{\proj}{proj}
+\DeclareMathOperator{\im}{im}
+\DeclareMathOperator{\coker}{coker}
+\DeclareMathOperator{\coim}{coim}
+\DeclareMathOperator{\Span}{Span}
+\DeclareMathOperator{\Stab}{Stab}
+\DeclareMathOperator{\Orb}{Orb}
+\DeclareMathOperator{\Cov}{Cov}
+\DeclareMathOperator{\Var}{Var}
+\DeclareMathOperator{\EE}{E}
+\DeclareMathOperator{\Tor}{Tor}
+\DeclareMathOperator{\Ext}{Ext}
+
+
+% Other more involved shortcuts
+
+%for overline math
+\newcommand{\ol}[1]{{\overline{#1}}}
+
+%redefined math symbols taking arguments
+\renewcommand{\mod}[1]{\ (\mathrm{mod}\ #1)}
+
+%for easy 2 x 2 matrices
+\newcommand{\twobytwo}[1]{\left[\begin{array}{@{}cc@{}}#1\end{array}\right]}
+
+%for easy column vectors of size 2
+\newcommand{\tworow}[1]{\left[\begin{array}{@{}c@{}}#1\end{array}\right]}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%Below are the theorem, definition, example, lemma, etc. body types.
+
+\newtheorem{theorem}{Theorem}
+\newtheorem*{proposition}{Proposition}
+\newtheorem{lemma}[theorem]{Lemma}
+\newtheorem{corollary}[theorem]{Corollary}
+\newtheorem{conjecture}[theorem]{Conjecture}
+\newtheorem{postulate}[theorem]{Postulate}
+\theoremstyle{definition}
+\newtheorem{defn}[theorem]{Definition}
+\newtheorem{example}[theorem]{Example}
+
+\theoremstyle{remark}
+\newtheorem*{remark}{Remark}
+\newtheorem*{notation}{Notation}
+\newtheorem*{note}{Note}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%Some formatting tidbits for margins, paragraphs, and removing orphans
+
+% make widows and orphans rare
+\clubpenalty =10000
+\widowpenalty =10000
+
+% formatting of paragraphs and separation
+\setlength{\parindent}{0pt}
+\setlength{\parskip}{5pt plus 1pt}
+\setlength{\headheight}{13.6pt}
+
+\setlength\marginparwidth{2.2in}
+\setlength\marginparsep{1mm}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+\title{Implementation and Ramifications of TAMER-OP: a Toolkit for Algebraic Module Encodings over $\mathbb{R}^n$ and Other Posets}
+\author{Erik Mendes Novak}
+
+\begin{document}
+	\maketitle
+	
+	\tableofcontents
+	
+	
+	\section{Introduction}
+	
+	%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+	% Section 2: Background mathematical information
+	%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+	
+	\section{Background mathematical information}\label{sec:background}
+	
+	Persistent homology assigns to data a family of homology groups indexed by a
+	(possibly multi-dimensional) parameter, together with linear maps relating the
+	groups as the parameter increases.  The resulting algebraic object is a
+	\emph{persistence module}.  In one parameter, persistence modules admit a clean
+	structure theory (barcodes) and robust metrics; in multiple parameters, the same
+	classification program becomes substantially more subtle.  This section records
+	the minimal language needed to state the objects studied in this thesis and to
+	motivate the computational strategy pursued by TAMER-OP.
+	
+	Throughout, fix a coefficient field $\kk$ unless explicitly stated otherwise.
+	When we discuss implementation choices later, we will emphasize why exact
+	arithmetic over $\bbb{Q}$ is often preferred for certifying ranks and homological
+	invariants (cf.\ \S\ref{sec:background:conventions}).
+	
+	\subsection{Posets as categories; persistence modules as functors}
+	\label{sec:background:posets-as-cats}
+	
+	\subsubsection*{Posets and thin categories}
+	
+	\begin{defn}[Poset]\label{def:poset}
+		A \emph{partially ordered set} (poset) is a set $Q$ equipped with a binary relation
+		$\leq$ that is reflexive ($q\leq q$), antisymmetric ($q\leq q'$ and $q'\leq q$
+		implies $q=q'$), and transitive ($q\leq q'$ and $q'\leq q''$ implies $q\leq q''$).
+	\end{defn}
+	
+	\begin{defn}[Poset as a category]\label{def:poset-as-category}
+		Given a poset $(Q,\leq)$, define a (small) category, which we also denote by $Q$,
+		whose objects are elements of $Q$, and such that for $q,q'\in Q$ there is a unique
+		morphism $q\to q'$ if and only if $q\leq q'$, and no morphism otherwise.  Composition
+		is forced by transitivity, and identities are forced by reflexivity.
+	\end{defn}
+	
+	A category arising from a poset in this way is \emph{thin}: between any two objects
+	there is at most one morphism.  This viewpoint is the standard bridge between order
+	theory and functorial algebraic constructions.
+	
+	\subsubsection*{Modules over a poset}
+	
+	\begin{defn}[Poset module / persistence module]\label{def:Q-module}
+		Let $(Q,\leq)$ be a poset and let $\mathbf{Vect}_{\kk}$ denote the category of
+		$\kk$-vector spaces and $\kk$-linear maps.  A \emph{$Q$-module} (or \emph{persistence
+			module indexed by $Q$}) is a covariant functor
+		\[
+		M \colon Q \longrightarrow \mathbf{Vect}_{\kk}.
+		\]
+		Concretely, this is the data of:
+		\begin{enumerate}[label=(\roman*)]
+			\item a vector space $M(q)$ for each $q\in Q$, and
+			\item for each comparable pair $q\leq q'$, a linear \emph{structure map}
+			\[
+			M(q\leq q') \colon M(q)\to M(q'),
+			\]
+		\end{enumerate}
+		subject to the functoriality conditions
+		\[
+		M(q\leq q)=\mathrm{id}_{M(q)}\qquad\text{and}\qquad
+		M(q\leq q'')=M(q'\leq q'')\circ M(q\leq q')\ \text{for }q\leq q'\leq q''.
+		\]
+	\end{defn}
+	
+	The indexing poset $Q$ will typically be $\bbb{R}$ or $\bbb{R}^n$ with the usual
+	order(s), or $\bbb{Z}^n$ with the product (coordinatewise) order.  The degree $q$
+	is sometimes called a \emph{parameter value}, and $M(q)$ a \emph{fiber} or
+	\emph{stalk}.
+	
+	\begin{defn}[Morphisms]\label{def:morphism-of-Q-modules}
+		A morphism of $Q$-modules $f\colon M\to N$ is a natural transformation of functors.
+		Equivalently, it is a family of linear maps $f_q\colon M(q)\to N(q)$ indexed by
+		$q\in Q$ such that for every $q\leq q'$ the following square commutes:
+		\[
+		\begin{CD}
+			M(q) @>{M(q\leq q')}>> M(q')\\
+			@V{f_q}VV @VV{f_{q'}}V\\
+			N(q) @>{N(q\leq q')}>> N(q').
+		\end{CD}
+		\]
+	\end{defn}
+	
+	We write $\mathrm{Hom}_Q(M,N)$ for the $\kk$-vector space of such natural
+	transformations (when the fibers are finite-dimensional, $\mathrm{Hom}_Q(M,N)$
+	itself is often computable by linear algebra).
+	
+	\subsubsection*{Functor categories are abelian}
+	
+	The category of $\kk$-vector spaces is abelian, and functor categories into an
+	abelian category remain abelian.  In particular, $Q$-modules admit kernels,
+	cokernels, images, and short exact sequences.
+	
+	\begin{proposition}[Pointwise abelian structure]\label{prop:functor-category-abelian}
+		For any small category $\mathcal{C}$, the functor category
+		$\mathbf{Vect}_{\kk}^{\mathcal{C}}=\mathrm{Fun}(\mathcal{C},\mathbf{Vect}_{\kk})$
+		is abelian.  In particular, for $\mathcal{C}=Q$ a poset category, kernels and
+		cokernels are computed \emph{objectwise}: for a morphism $f\colon M\to N$ one has
+		\[
+		(\ker f)(q)=\ker(f_q),\qquad (\mathrm{coker}\,f)(q)=\mathrm{coker}(f_q),
+		\]
+		and similarly for images and coimages, with the induced structure maps coming from
+		functoriality.
+	\end{proposition}
+	
+	\begin{remark}
+		Proposition~\ref{prop:functor-category-abelian} is conceptually important because it
+		reduces many categorical constructions on persistence modules to familiar linear
+		algebra at each parameter value.  Much of TAMER-OP is built around exploiting this
+		pointwise nature after reducing an a priori infinite indexing poset to a finite one.
+	\end{remark}
+	
+	\subsubsection*{Upsets, downsets, and indicator modules}
+	
+	A recurrent theme (central to Miller's theory of tameness) is that many
+	computationally tractable persistence modules can be assembled from very simple
+	``indicator'' modules associated to order ideals and filters.
+	
+	\begin{defn}[Upsets and downsets]\label{def:upset-downset}
+		Let $Q$ be a poset.
+		\begin{enumerate}[label=(\roman*)]
+			\item An \emph{upset} (order filter) is a subset $U\subseteq Q$ such that if
+			$q\in U$ and $q\leq q'$, then $q'\in U$.
+			\item A \emph{downset} (order ideal) is a subset $D\subseteq Q$ such that if
+			$q'\in D$ and $q\leq q'$, then $q\in D$.
+		\end{enumerate}
+		For $q\in Q$, the \emph{principal upset} and \emph{principal downset} are
+		\[
+		\uparrow q := \{q'\in Q : q\leq q'\},\qquad
+		\downarrow q := \{q'\in Q : q'\leq q\}.
+		\]
+	\end{defn}
+	
+	\begin{defn}[Indicator modules]\label{def:indicator-modules}
+		Let $U\subseteq Q$ be an upset.  The \emph{upset indicator module} $\kk[U]$ is the
+		$Q$-module defined by
+		\[
+		\kk[U](q) :=
+		\begin{cases}
+			\kk & q\in U,\\
+			0 & q\notin U,
+		\end{cases}
+		\]
+		and for $q\leq q'$ the structure map $\kk[U](q\leq q')$ is the identity
+		$\kk\to\kk$ when $q,q'\in U$ and is the unique zero map otherwise.  Likewise, for a
+		downset $D\subseteq Q$, define the \emph{downset indicator module} $\kk[D]$ by the
+		same formula with $D$ in place of $U$.
+	\end{defn}
+	
+	\begin{remark}
+		The closure property in Definition~\ref{def:upset-downset} is exactly what guarantees
+		functoriality for the ``identity within the region, zero outside'' convention in
+		Definition~\ref{def:indicator-modules}.  For general subsets $S\subseteq Q$, the same
+		prescription can fail to define a functor because composition along chains may force
+		a map to be zero even when both endpoints lie in $S$.
+	\end{remark}
+	
+	\begin{remark}[Yoneda intuition]\label{rmk:yoneda-principal-upset}
+		When $Q$ is viewed as a category, the representable functor
+		$\mathrm{Hom}_Q(q,-)$ takes values in sets; its $\kk$-linearization yields precisely
+		the principal upset indicator $\kk[\uparrow q]$.  Dually, the corepresentable
+		$\mathrm{Hom}_Q(-,q)$ linearizes to $\kk[\downarrow q]$.  For finite $Q$, these
+		principal indicator modules behave like indecomposable projectives and injectives
+		in the functor category, and they serve as building blocks for resolutions (compare
+		with \cite{Mil20}).
+	\end{remark}
+	
+	\subsection{1-parameter persistence}\label{sec:background:1d}
+	
+	This subsection recalls the classical one-parameter story, both to establish
+	notation and to emphasize what breaks in the multiparameter setting.
+	
+	\subsubsection*{From filtrations to persistence modules}
+	
+	\begin{defn}[Filtration]\label{def:filtration}
+		Let $Q$ be a poset.  A \emph{$Q$-filtration} of a topological space $X$ is a functor
+		\[
+		\mathcal{F}\colon Q\longrightarrow \mathbf{Top}
+		\]
+		such that $\mathcal{F}(q)$ is a subspace of $X$ for each $q$, and for $q\leq q'$ the
+		morphism $\mathcal{F}(q\leq q')$ is the inclusion $\mathcal{F}(q)\hookrightarrow
+		\mathcal{F}(q')$.  Equivalently, $\mathcal{F}$ is an order-preserving assignment of
+		subspaces.
+	\end{defn}
+	
+	Applying singular homology with coefficients in $\kk$ yields a persistence module.
+	
+	\begin{defn}[Persistent homology module]\label{def:persistent-homology-module}
+		Given a $Q$-filtration $\mathcal{F}$ and an integer $i\geq 0$, the associated
+		$i$th \emph{persistent homology module} is the composite functor
+		\[
+		H_i(\mathcal{F};\kk)\colon Q \xrightarrow{\ \mathcal{F}\ } \mathbf{Top}
+		\xrightarrow{\ H_i(-;\kk)\ } \mathbf{Vect}_{\kk}.
+		\]
+	\end{defn}
+	
+	The case $Q=(\bbb{R},\leq)$ (or $Q=\bbb{Z}$) is the classical \emph{one-parameter}
+	setting.  The filtration may arise, for example, from sublevel sets of a function
+	$f\colon X\to \bbb{R}$, where $\mathcal{F}(t)=f^{-1}((-\infty,t])$.
+	
+	\subsubsection*{Interval modules and barcodes}
+	
+	The exceptional feature of one-parameter persistence is that (under mild finiteness
+	hypotheses) modules admit a complete decomposition into interval summands.
+	
+	\begin{defn}[Interval module]\label{def:interval-module}
+		Let $I\subseteq \bbb{R}$ be an interval (possibly infinite or half-open, depending on
+		the chosen convention).  The \emph{interval module} $\kk_I$ is the $\bbb{R}$-module
+		defined by
+		\[
+		\kk_I(t)=
+		\begin{cases}
+			\kk & t\in I,\\
+			0 & t\notin I,
+		\end{cases}
+		\]
+		with structure maps $\kk_I(s\leq t)$ equal to the identity on $\kk$ when $s,t\in I$
+		and the zero map otherwise.
+	\end{defn}
+	
+	To state the classification theorem, one usually imposes a finiteness condition,
+	such as \emph{pointwise finite-dimensional} (p.f.d.), meaning $\dim_{\kk} M(t)<\infty$
+	for all $t$, together with an appropriate tameness condition to rule out pathologies
+	in the indexing by $\bbb{R}$ (see \cite{CB15,CDSGO16}).
+	
+	\begin{theorem}[Barcode decomposition, informal statement]\label{thm:barcode}
+		Let $M$ be a p.f.d.\ persistence module indexed by $\bbb{R}$ satisfying a standard
+		tameness condition (e.g.\ q-tameness).  Then $M$ decomposes as a direct sum of
+		interval modules,
+		\[
+		M \cong \bigoplus_{\alpha\in A} \kk_{I_\alpha},
+		\]
+		and the multiset of intervals $\{I_\alpha\}$ is uniquely determined by $M$ up to
+		reordering.  This multiset is the \emph{barcode} (or persistence diagram) of $M$.
+	\end{theorem}
+	
+	The earliest formulations of this result for discrete indexing and finitely generated
+	modules go back to persistent homology in computational topology; see, for example,
+	\cite{ZC05,EH10}.  For $\bbb{R}$-indexed modules,
+	a definitive representation-theoretic proof is given by Crawley-Boevey
+	\cite{CB15}.
+	
+	\subsubsection*{Stability and distances}
+	
+	A major reason barcodes are useful in applications is \emph{stability}: small changes
+	in input data yield small changes in the output barcode with respect to a natural
+	metric.  There are several equivalent (or closely related) metrics in one parameter,
+	notably the bottleneck distance on persistence diagrams and the interleaving distance
+	on persistence modules; see \cite{CDSGO16,Les15} for
+	systematic treatments.
+	
+	For the purposes of this thesis, we will use one-parameter stability primarily as a
+	benchmark: it is an example of a situation where both (i) a complete discrete
+	invariant exists (Theorem~\ref{thm:barcode}) and (ii) that invariant interacts well
+	with perturbations.  Both features become substantially more complicated in multiple
+	parameters.
+	
+	\subsection{Multiparameter persistence and why it is hard}\label{sec:background:multi-hard}
+	
+	\subsubsection*{Definition and basic examples}
+	
+	\begin{defn}[Multiparameter persistence module]\label{def:multi-parameter-module}
+		Fix $n\geq 2$.  A (real-parameter) \emph{$n$-parameter persistence module} is a
+		$\bbb{R}^n$-module, i.e.\ a functor $M\colon (\bbb{R}^n,\leq)\to\mathbf{Vect}_{\kk}$,
+		where the order is coordinatewise:
+		\[
+		a=(a_1,\dots,a_n)\leq b=(b_1,\dots,b_n)\quad\Longleftrightarrow\quad
+		a_i\leq b_i\ \text{for all }i.
+		\]
+		Likewise, a \emph{lattice} $n$-parameter persistence module is a $\bbb{Z}^n$-module.
+	\end{defn}
+	
+	Such modules arise from \emph{multifiltrations} $\mathcal{F}\colon \bbb{R}^n\to
+	\mathbf{Top}$, for instance from a function $f\colon X\to \bbb{R}^n$ via
+	$\mathcal{F}(a)=f^{-1}((-\infty,a_1]\times\cdots\times(-\infty,a_n])$, and then
+	applying homology as in Definition~\ref{def:persistent-homology-module}.
+	
+	\subsubsection*{Why barcodes do not generalize directly}
+	
+	When $n\geq 2$, the classification landscape changes qualitatively.  There is no
+	analog of Theorem~\ref{thm:barcode} in which modules decompose uniquely into
+	interval-like building blocks (rectangles, axis-aligned boxes, etc.).  One reason is
+	representation-theoretic: the category of multiparameter persistence modules (even
+	with finite-dimensionality restrictions) contains families of indecomposables
+	depending on continuous parameters and exhibits behavior described as ``wild'' in
+	the sense of quiver representation theory \cite{CZ09,Oud15}.
+	
+	At an informal level, ``wild'' means that the isomorphism classification problem is
+	at least as complicated as classifying representations of arbitrary finite-dimensional
+	algebras.  Consequently, one does not expect a complete discrete invariant such as a
+	barcode to exist in general.
+	
+	\begin{remark}[What replaces barcodes?]\label{rmk:what-replaces-barcodes}
+		In multiparameter persistence, one typically trades completeness for computability and
+		stability: instead of a single complete invariant, one studies families of computable
+		invariants (rank-based, homological, and/or slice-based) that are informative for
+		specific tasks and data regimes.  Much of the design philosophy of TAMER-OP is to build
+		a flexible pipeline that supports such families in a uniform algebraic framework.
+	\end{remark}
+	
+	\subsubsection*{Invariants that still make sense}
+	
+	Even though complete classification fails, many useful invariants remain available.
+	
+	\begin{defn}[Rank invariant]\label{def:rank-invariant}
+		Let $M$ be a $Q$-module.  The \emph{rank invariant} of $M$ is the function
+		\[
+		\rho_M \colon \{(q,q')\in Q\times Q : q\leq q'\}\longrightarrow \bbb{Z}_{\geq 0},
+		\qquad
+		\rho_M(q,q') := \mathrm{rank}\big(M(q\leq q')\big).
+		\]
+	\end{defn}
+	
+	\begin{defn}[Hilbert function / dimension function]\label{def:hilbert-function}
+		The \emph{dimension function} (often called the \emph{Hilbert function} in graded
+		settings) of a $Q$-module $M$ is
+		\[
+		h_M \colon Q\to \bbb{Z}_{\geq 0},\qquad h_M(q):=\dim_{\kk} M(q).
+		\]
+	\end{defn}
+	
+	\begin{remark}
+		For $Q=\bbb{N}^n$ and suitably finite modules, $h_M$ is literally the Hilbert function
+		of a multigraded module over a polynomial ring.  For general posets, it is still a
+		basic and often stable summary of size.
+	\end{remark}
+	
+	Another robust idea is to reduce to one parameter by restricting along monotone
+	maps from a totally ordered set into $Q$.
+	
+	\begin{defn}[Restriction to a chain / slice]\label{def:slice}
+		Let $C$ be a totally ordered set (often $C=\bbb{R}$ or $\bbb{Z}$) and let
+		$\gamma\colon C\to Q$ be an order-preserving map.  The \emph{restriction} (or
+		\emph{slice}) of a $Q$-module $M$ along $\gamma$ is the $C$-module $\gamma^*M$
+		defined by composition:
+		\[
+		\gamma^*M := M\circ \gamma \colon C\to \mathbf{Vect}_{\kk}.
+		\]
+		When $C$ is totally ordered and $\gamma$ is injective, the image of $\gamma$ is a
+		chain in $Q$.
+	\end{defn}
+	
+	The restrictions $\gamma^*M$ are one-parameter persistence modules, hence admit
+	barcodes under the usual hypotheses.  Slicing therefore packages multiparameter data
+	into a family of one-parameter summaries; this idea is central in 2-parameter
+	visualization tools such as RIVET \cite{RIVET}.
+	
+	Finally, there are homological invariants arising from resolutions and derived
+	functors (Ext, Tor) that encode multi-parameter interactions.  These will be pursued
+	systematically later in the thesis, but the guiding idea is already visible in
+	Miller's program: introduce a finiteness condition strong enough to guarantee finite
+	presentations and resolutions (and thus computable derived invariants), while weak
+	enough to encompass common persistence modules arising from data \cite{Mil20}.
+	
+	\subsection{Two complementary viewpoints}\label{sec:background:viewpoints}
+	
+	Multiparameter persistence can be approached from at least two complementary
+	perspectives.  The computational architecture of TAMER-OP is explicitly designed to
+	move between them.
+	
+	\subsubsection*{Topological viewpoint: multifiltrations}
+	
+	At the source is topology: data are used to build a multifiltration
+	$\mathcal{F}\colon \bbb{R}^n\to\mathbf{Top}$ (or $\bbb{Z}^n\to\mathbf{Top}$), and
+	persistent homology applies a functor $H_i(-;\kk)$ to obtain
+	\[
+	M_i := H_i(\mathcal{F};\kk)\colon \bbb{R}^n\to \mathbf{Vect}_{\kk}.
+	\]
+	The topological viewpoint is advantageous for:
+	\begin{itemize}
+		\item motivating what invariants should mean geometrically (birth, death, and
+		interactions across parameters);
+		\item importing stability statements from the theory of interleavings and perturbation
+		bounds; and
+		\item making contact with geometric constructions of filtrations (sublevel sets, distance
+		functions, Vietoris--Rips and \v{C}ech complexes, etc.; see \cite{EH10}).
+	\end{itemize}
+	
+	\subsubsection*{Algebraic viewpoint: multigraded commutative algebra}
+	
+	When the indexing poset is discrete and additive, persistence modules are closely
+	related to multigraded modules over polynomial rings.
+	
+	\begin{proposition}[Equivalence with multigraded modules (discrete setting)]
+		\label{prop:graded-module-equivalence}
+		Let $n\geq 1$ and consider the poset $(\bbb{N}^n,\leq)$ with coordinatewise order.
+		Then the category of $\bbb{N}^n$-modules $M\colon \bbb{N}^n\to \mathbf{Vect}_{\kk}$
+		is equivalent to the category of $\bbb{N}^n$-graded modules over the polynomial ring
+		$\kk[x_1,\dots,x_n]$ with degree-preserving homomorphisms.
+	\end{proposition}
+	
+	\begin{remark}[Sketch of correspondence]
+		Given a persistence module $M$, form the graded $\kk$-vector space
+		$\bigoplus_{a\in \bbb{N}^n} M(a)$ and let $x_i$ act by the structure maps
+		$M(a\leq a+e_i)\colon M(a)\to M(a+e_i)$.  Functoriality ensures that the $x_i$ commute.
+		Conversely, a graded $\kk[x_1,\dots,x_n]$-module determines the structure maps by
+		multiplication with monomials.  See \cite{CZ09,Oud15} for
+		detailed treatments in the persistence context.
+	\end{remark}
+	
+	This algebraic viewpoint brings powerful tools---resolutions, Betti numbers, Hilbert
+	series---but also reveals why classification becomes hard when
+	$n\geq 2$: $\kk[x_1,\dots,x_n]$ is no longer a PID, and multigraded modules can have
+	intricate syzygies and moduli.
+	
+	\subsubsection*{Finite posets and incidence algebras}
+	
+	TAMER-OP often works with finite posets (encoding posets) obtained by compressing a
+	large or continuous parameter space.  For a finite poset $P$, $P$-modules can be
+	viewed as finite-dimensional representations of the incidence algebra of $P$ (or of a
+	quiver with commutativity relations determined by $P$).  This provides both:
+	\begin{itemize}
+		\item a representation-theoretic interpretation of projectives/injectives and
+		resolutions (cf.\ Remark~\ref{rmk:yoneda-principal-upset}), and
+		\item an algorithmic opportunity: for finite $P$, most constructions reduce to finite
+		linear algebra, and many ``global'' constraints can be enforced by working only
+		along cover relations (Hasse edges).
+	\end{itemize}
+	
+	\subsection{Survey of partial solutions}
+	\label{sec:background:partial-solutions}
+	
+	Because multiparameter persistence resists complete classification, a large body of
+	work focuses on \emph{partial} invariants and practical pipelines.  The following
+	four themes recur throughout the literature and motivate the design choices of this
+	thesis.
+	
+	\subsubsection*{(i) Slicing and fibered barcodes}
+	
+	The restriction construction in Definition~\ref{def:slice} reduces a multiparameter
+	module to a one-parameter module, hence to a barcode.  Varying the slice (for
+	instance, varying a line of positive slope in $\bbb{R}^2$) yields a family of barcodes
+	that can be used for visualization or for defining distances by integrating (or
+	taking suprema of) one-parameter distances.  In the 2-parameter case, the
+	\emph{fibered barcode} viewpoint underlies the RIVET framework \cite{RIVET}.
+	
+	From a computational standpoint, slicing has two key advantages:
+	\begin{enumerate}[label=(\roman*)]
+		\item it leverages mature one-parameter algorithms, and
+		\item it provides stable summaries for applications even when the full module is too
+		large to manipulate directly.
+	\end{enumerate}
+	Its main limitation is incompleteness: different modules can have identical slices.
+	
+	\subsubsection*{(ii) Rank-based invariants and M\"obius inversion}
+	
+	The rank invariant (Definition~\ref{def:rank-invariant}) is one of the most basic
+	multiparameter invariants.  In one parameter, the rank function determines the
+	barcode, and the barcode can be recovered from ranks by an inclusion--exclusion
+	(M\"obius inversion) formula.  In higher parameters, an analogous inversion yields
+	\emph{signed} measures on axis-aligned rectangles (sometimes called \emph{signed
+		barcodes} or \emph{rectangle measures}).  These objects can be used as:
+	\begin{itemize}
+		\item sparse, computable summaries of the rank invariant on a chosen grid, and
+		\item feature representations for statistics/learning pipelines (e.g.\ kernels on
+		signed measures).
+	\end{itemize}
+	From the algebraic side, such M\"obius inversions are naturally phrased on products of
+	chains, and they fit well with finite encodings (cf.\ (iv) below).
+	
+	\subsubsection*{(iii) Commutative algebra invariants via resolutions}
+	
+	Under the equivalence in Proposition~\ref{prop:graded-module-equivalence}, a
+	$\bbb{N}^n$-module becomes a multigraded $\kk[x_1,\dots,x_n]$-module, and one can
+	study:
+	\begin{itemize}
+		\item minimal free resolutions and multigraded Betti numbers,
+		\item Tor/Ext groups and their algebra structures,
+		\item associated primes and socles, and
+		\item Hilbert series and local cohomology.
+	\end{itemize}
+	These invariants detect multi-parameter interactions that rank functions and slices
+	can miss.  However, they require a finiteness condition strong enough to ensure that
+	resolutions are finite in a computational sense.  For real-parameter modules, the
+	usual noetherian hypotheses fail, motivating Miller's theory of \emph{tameness} as a
+	replacement \cite{Mil20}.
+	
+	\subsubsection*{(iv) Geometric/combinatorial encoding strategies}
+	
+	A guiding principle in this thesis is that many modules of interest are
+	\emph{piecewise constant} over the parameter space in a controlled way.  An
+	\emph{encoding} compresses the indexing poset $Q$ (often $\bbb{R}^n$ or $\bbb{Z}^n$)
+	to a finite poset $P$ so that the module factors through $P$ and all subsequent
+	computations may be carried out on the finite object.
+	
+	In Miller's framework, tameness can be characterized in several equivalent ways,
+	including (among others) the existence of a finite encoding and the existence of
+	certain finite ``fringe'' presentations by upset and downset indicator modules
+	\cite{Mil20}.  The computational moral is that once such a finite encoding
+	is constructed, one can safely deploy the abelian and homological algebra of finite
+	poset modules (kernels, images, Ext/Tor, resolutions) using finite linear algebra.
+	
+	\subsection{Brief software landscape}
+	\label{sec:background:software-landscape}
+	
+	This thesis is not primarily a software survey, but it is useful to clarify how
+	different toolchains emphasize different parts of the multiparameter landscape.
+	We will return to more detailed comparisons in later sections, after the TAMER-OP data
+	model and pipeline are established.
+	
+	\begin{itemize}
+		\item \textbf{RIVET.} In the 2-parameter case, RIVET is centered on the fibered
+		barcode: it supports interactive exploration of how one-parameter barcodes vary over
+		a family of lines, and it provides infrastructure for rank-based visualization and
+		related distances \cite{RIVET}.
+		
+		\item \textbf{multipers.} The multipers ecosystem (as commonly used in applied TDA)
+		targets scalable computation of multiparameter summaries and feature maps (often
+		slice-based, rank-based, or image/landscape-type constructions).  Its emphasis is
+		typically on practical pipelines rather than complete algebraic structure.  (A precise
+		feature-by-feature comparison depends on the chosen backends and will be addressed
+		later.)
+		
+		\item \textbf{TAMER-OP.} TAMER-OP is designed around Miller's tame-module viewpoint:
+		build or ingest a presentation over a large indexing poset, compress it via a finite
+		encoding poset, and then compute a broad family of invariants (rank-based,
+		homological/derived, geometric, and statistical) by systematically exploiting abelian
+		and homological algebra over the finite encoding.
+	\end{itemize}
+	
+	\begin{remark}[Setting expectations for comparisons]\label{rmk:comparison-expectations}
+		Comparisons are most meaningful when the underlying mathematical object is held fixed.
+		For example, comparing fibered barcodes is natural when both toolchains work with
+		2-parameter modules and slice-based summaries.  Comparing resolution-based invariants
+		is meaningful when both toolchains expose (or can emulate) multigraded homological
+		algebra.  TAMER-OP's main distinguishing feature is that it treats \emph{finite encodings}
+		as first-class objects, so that many invariants can be computed uniformly once the
+		encoding is in place.
+	\end{remark}
+	
+	\subsection{Notation and conventions}\label{sec:background:conventions}
+	
+	\subsubsection*{Coefficients and exactness}
+	
+	Unless stated otherwise, modules take values in $\mathbf{Vect}_{\kk}$ for a fixed
+	field $\kk$.  In implementations, there is a persistent tradeoff between speed and
+	certifiability:
+	\begin{itemize}
+		\item Over floating-point fields (e.g.\ $\bbb{R}$), numerical linear algebra is fast
+		but can introduce rank errors near degeneracies.
+		\item Over exact fields (notably $\bbb{Q}$), ranks, kernels, and Smith/row-reduction
+		type computations are certifiable but may be more expensive.
+	\end{itemize}
+	TAMER-OP is designed so that exact computations over $\bbb{Q}$ can be used when needed,
+	especially for invariants derived from ranks and homological algebra (kernels,
+	cokernels, Ext/Tor dimensions).
+	
+	\subsubsection*{Orders on $\bbb{Z}^n$ and $\bbb{R}^n$}
+	
+	We use the coordinatewise order on $\bbb{Z}^n$ and $\bbb{R}^n$:
+	\[
+	a\leq b \iff a_i\leq b_i\ \text{for all }i.
+	\]
+	When writing $a<b$, we mean $a\leq b$ and $a\neq b$.  The standard basis vectors are
+	$e_1,\dots,e_n$.
+	
+	For a finite poset $P$, we generally denote its order by $\leq$ as well; the intended
+	meaning should be clear from context.  When $P$ is used as an encoding poset for an
+	ambient parameter space, elements of $P$ are sometimes called \emph{regions}.
+	
+	\subsubsection*{Birth/death terminology and (co)presentations}
+	
+	When working with indicator modules (Definition~\ref{def:indicator-modules}) and their
+	linear combinations, we follow the ``birth/death'' intuition from persistence:
+	\begin{itemize}
+		\item Upsets model \emph{birth} regions (where generators become present and persist
+		upward in the order).
+		\item Downsets model \emph{death} constraints (where relations become enforced downward
+		in the order).
+	\end{itemize}
+	A \emph{presentation} will typically mean a cokernel of a map between free objects
+	built from upset indicators, while a \emph{copresentation} dually involves downset
+	indicators.  In Miller's terminology, \emph{fringe presentations} mix these two
+	directions and are tailored to tame modules over general posets \cite{Mil20}.
+	
+	% ============================================================
+	% Section 3: Tame modules
+	% ============================================================
+	
+	\section{Tame modules}
+	\label{sec:tame-modules}
+	
+	Multiparameter persistence is often presented as a story about functoriality: a
+	multifiltration of spaces (or chain complexes) gives rise to a functor from a parameter
+	poset into vector spaces, and this functor is the algebraic object one studies.
+	The difficulty is that, once the parameter poset has dimension $\ge 2$, there is no
+	reasonable discrete classification of all such functors, even under strong finiteness
+	conditions such as pointwise finite-dimensionality; in representation-theoretic language,
+	the classification problem becomes ``wild'' in general \cite{CZ09}.
+	For computational purposes one therefore needs a \emph{hypothesis of controlled
+		complexity}---a notion of finiteness that is strong enough to guarantee that modules admit
+	finite descriptions and are stable under the constructions one cares about, but flexible
+	enough to encompass the examples arising in applications.
+	
+	In this thesis we adopt Ezra Miller's framework of \emph{tame modules over posets}
+	\cite{Mil20}.  The guiding idea is that the module should have only finitely many
+	distinct ``regions of algebraic behavior'' in parameter space, so that it can be
+	represented by \emph{finite data} after passing through a suitable \emph{encoding}.
+	A primary goal of TAMER-OP is to turn this philosophy into concrete data structures and
+	algorithms; the present section sets up the mathematical backbone that makes such an
+	implementation sensible.
+	
+	\subsection{Why ``tame'' is the right hypothesis for computation}
+	\label{subsec:why-tame}
+	
+	The classical $1$-parameter theory enjoys a powerful structure theorem:
+	under mild hypotheses, persistence modules decompose as direct sums of interval modules,
+	and the resulting multiset of intervals is encoded by a barcode or persistence diagram.
+	This viewpoint underlies much of applied persistent homology, as well as practical
+	algorithms for computing invariants from filtered data \cite{ZC05}.
+	One rigorous formulation of this classification is due to Crawley--Boevey:
+	pointwise finite-dimensional persistence modules over a totally ordered index set admit
+	interval decompositions under appropriate finiteness hypotheses \cite{CB15}.
+	
+	The multiparameter setting behaves fundamentally differently.  Even for
+	$\bbb{Z}^n$-indexed modules with $n\ge 2$, indecomposables occur in families and the
+	category does not admit a discrete complete invariant analogous to a barcode \cite{CZ09}.
+	From a computational perspective, this means that one should not expect a \emph{complete}
+	classification of multiparameter persistence modules by a finite combinatorial object.
+	Instead, one aims for a framework in which
+	\begin{enumerate}[label=(\roman*)]
+		\item the objects of interest admit \emph{finite representations},
+		\item the relevant algebraic constructions (kernels/cokernels, derived functors, etc.)
+		stay within the class, and
+		\item the invariants one computes are \emph{functorial} and stable under natural
+		operations on the input data.
+	\end{enumerate}
+	
+	Miller's notion of tameness is designed with exactly these desiderata in mind.
+	Very roughly, a module is tame if it is constant on finitely many regions of parameter
+	space and therefore can be expressed via a finite ``model poset'' that records the
+	comparability relations among these regions \cite{Mil20}.
+	The definition is arranged so that the category of tame modules (with an appropriate
+	restriction on morphisms) is abelian, hence supports homological algebra; moreover,
+	tameness admits several equivalent characterizations---combinatorial, topological, and
+	homological---that are captured by the syzygy theorem (Theorem~\ref{thm:syzygy} below).
+	
+	\subsection{Encoding posets and encoding maps}
+	\label{subsec:encoding-posets}
+	
+	The central finiteness notion used throughout this thesis is \emph{finite poset encoding}.
+	Intuitively, an encoding replaces a large (typically infinite) poset $Q$ by a smaller
+	poset $P$ whose elements represent ``regions'' of the parameter space, such that the
+	module on $Q$ is obtained by pullback from a module on $P$.
+	
+	\begin{defn}[Poset encoding {\cite[Def.~4.1]{Mil20}}]
+		\label{def:poset-encoding}
+		Let $Q$ be a poset, viewed as a category in the usual way.
+		An \emph{encoding} of a $Q$-module $M$ by a poset $P$ consists of
+		\begin{enumerate}[label=(\roman*)]
+			\item an order-preserving map (equivalently, a functor) $\pi \colon Q \to P$, and
+			\item a $P$-module $H \colon P \to \mathbf{Vect}_{\kk}$
+		\end{enumerate}
+		together with an isomorphism of $Q$-modules
+		\[
+		M \ \cong \ \pi^*H \ := \ H\circ \pi .
+		\]
+		The encoding is called \emph{finite} if $P$ has finitely many elements and each stalk
+		$H(p)$ is a finite-dimensional $\kk$-vector space.
+	\end{defn}
+	
+	\begin{remark}[Encodings as ``finite models'']
+		\label{rem:encoding-fibers}
+		If $M\cong \pi^*H$, then $M$ is constant on each fiber $\pi^{-1}(p)$: for any
+		$q,q'\in Q$ with $\pi(q)=\pi(q')=p$, the only morphism $p\to p$ in the poset category
+		is the identity, so the structure maps of $M$ restrict to identities on the shared stalk
+		$H(p)$.  Thus a finite encoding exhibits $M$ as having finitely many ``constant
+		regions'' indexed by $P$.
+		Conversely, in many geometric situations a partition of the parameter space into finitely
+		many constant regions determines a finite encoding by taking $P$ to be the poset of
+		regions ordered by reachability (or by closure relations); see \cite{Mil20} for the
+		general equivalence among the various constructions.
+	\end{remark}
+	
+	The functorial viewpoint is especially important in what follows, so we record the basic
+	formalism.
+	
+	\begin{defn}[Pullback along a poset morphism]
+		\label{def:pullback}
+		Let $\pi\colon Q\to P$ be a poset morphism.  Precomposition defines a functor
+		\[
+		\pi^* \colon \mathbf{Vect}_{\kk}^{P} \longrightarrow \mathbf{Vect}_{\kk}^{Q},
+		\qquad
+		H \longmapsto H\circ \pi.
+		\]
+		We refer to $\pi^*$ as the \emph{pullback} (or restriction) functor along $\pi$.
+	\end{defn}
+	
+	\begin{lemma}[Exactness of pullback]
+		\label{lem:pullback-exact}
+		For any poset morphism $\pi\colon Q\to P$, the pullback functor $\pi^*$ is exact.
+		In particular, it preserves finite limits and colimits (kernels, cokernels, and finite
+		direct sums).
+	\end{lemma}
+	
+	\begin{proof}
+		The category $\mathbf{Vect}_{\kk}^{P}$ of $P$-modules is a functor category with values
+		in $\mathbf{Vect}_{\kk}$, hence limits and colimits are computed pointwise.
+		Given a short exact sequence $0\to H'\to H\to H''\to 0$ of $P$-modules, evaluating at
+		any $p\in P$ yields a short exact sequence of vector spaces.  Precomposing with $\pi$
+		and then evaluating at $q\in Q$ simply evaluates the original sequence at $\pi(q)$, so
+		exactness is preserved at every stalk, hence globally.
+	\end{proof}
+	
+	Definition~\ref{def:poset-encoding} formalizes the idea that the module ``factors
+	through'' a finite poset.  The following terminology, also standard in \cite{Mil20}, is
+	useful when one wishes to emphasize the dependence on a fixed encoding map.
+	
+	\begin{defn}[Subordinate encoding {\cite[Def.~4.7]{Mil20}}]
+		\label{def:subordinate}
+		An encoding map $\pi\colon Q\to P$ is said to be \emph{subordinate} to a $Q$-module $M$
+		if there exists a $P$-module $H$ such that $M\cong \pi^*H$.
+	\end{defn}
+	
+	\begin{example}[Indicator modules admit trivial finite encodings {\cite[Ex.~4.6]{Mil20}}]
+		\label{ex:indicator-encoding}
+		Let $U\subseteq Q$ be an upset (upward-closed set).  Then the indicator module $\kk[U]$
+		(defined in Subsection~\ref{subsec:fringe-presentations}) admits a finite encoding by the
+		two-element chain $0<1$ via the map $\pi\colon Q\to\{0<1\}$ sending $U$ to $1$ and
+		$Q\setminus U$ to $0$; the corresponding module $H$ has $H(1)=\kk$ and $H(0)=0$.
+		Dually, any downset indicator module $\kk[D]$ is encoded by the same chain with the
+		roles of $0$ and $1$ reversed.
+	\end{example}
+	
+	\subsection{Definitions of tameness in this framework}
+	\label{subsec:def-tameness}
+	
+	The previous subsection defined what it means for a module to be encoded by a fixed
+	poset $P$.  Tameness is the assertion that such an encoding exists with $P$ finite.
+	
+	\begin{defn}[$P$-tame and tame modules]
+		\label{def:tame-module}
+		Fix a poset $Q$.
+		\begin{enumerate}[label=(\roman*)]
+			\item Let $P$ be a finite poset.  A $Q$-module $M$ is \emph{$P$-tame} if there exists a
+			poset morphism $\pi\colon Q\to P$ and a $P$-module $H$ with finite-dimensional stalks
+			such that $M\cong \pi^*H$.
+			\item A $Q$-module $M$ is \emph{tame} if it is $P$-tame for some finite poset $P$.
+			Equivalently, $M$ admits a finite poset encoding subordinate to it in the sense of
+			Definition~\ref{def:poset-encoding}.
+		\end{enumerate}
+	\end{defn}
+	
+	\begin{remark}[Comparison with other finiteness notions]
+		\label{rem:other-tameness}
+		There are several finiteness conditions in the persistence literature, especially over
+		$\bbb{R}^n$ and $\bbb{Z}^n$, including variants of ``constructibility'' and ``$q$-tameness''
+		based on finiteness of ranks of structure maps.
+		Those conditions are well adapted to stability questions and to certain metric structures,
+		but they do not by themselves supply a finite combinatorial model that supports the full
+		suite of homological computations one might wish to perform.
+		Finite encodings are a \emph{stronger, more combinatorial} hypothesis: they guarantee
+		that all information about $M$ is carried by a finite poset $P$ together with finite
+		linear algebra on the stalks of a $P$-module.  In particular, tameness is expressly
+		designed to enable algorithmic computation in principle \cite{Mil20}.
+	\end{remark}
+	
+	A subtle point is that \emph{not every} $Q$-module homomorphism between tame modules
+	should be regarded as ``computably tame''.  Allowing all homomorphisms can take one
+	outside the tame world (for example, kernels of arbitrary maps need not be finitely
+	encoded).  The correct remedy is to restrict to morphisms compatible with a common
+	finite description.
+	
+	\begin{defn}[Tame morphisms and the tame category {\cite[Def.~4.27, Def.~4.29]{Mil20}}]
+		\label{def:tame-morphism}
+		Let $M,N$ be tame $Q$-modules.
+		A homomorphism $\varphi\colon M\to N$ of $Q$-modules is called \emph{tame} if there
+		exists a finite ``constant subdivision'' of $Q$ that is subordinate to both $M$ and $N$,
+		such that on each constant region the induced linear map is independent of the chosen
+		parameter value (see \cite[Def.~4.27]{Mil20} for the precise formulation).
+		The \emph{category of tame $Q$-modules} is the category whose objects are tame
+		$Q$-modules and whose morphisms are tame homomorphisms.
+	\end{defn}
+	
+	\begin{theorem}[Tame modules form an abelian category {\cite[Prop.~4.31]{Mil20}}]
+		\label{thm:tame-abelian}
+		For any poset $Q$, the category of tame $Q$-modules (with tame morphisms) is abelian.
+		In particular, it has kernels and cokernels, finite products and coproducts, and every
+		monomorphism (resp.\ epimorphism) is a kernel (resp.\ cokernel).
+	\end{theorem}
+	
+	\subsection{Why non-abelianity fears are usually irrelevant in computation}
+	\label{subsec:tame-nonabelianity-practice}
+
+	The worry voiced by many users of multiparameter persistence is the following.
+	The ambient category $\mathbf{Vect}_{\kk}^{Q}$ of $Q$-modules is abelian, so it is natural
+	to form kernels, cokernels, homology, and derived functors there.
+	However, the full subcollection of \emph{tame} objects inside $\mathbf{Vect}_{\kk}^{Q}$ is
+	not automatically stable under these operations if one allows \emph{arbitrary} natural
+	transformations between tame objects.  In other words, tameness can fail to be preserved
+	if one performs abelian constructions in $\mathbf{Vect}_{\kk}^{Q}$ without restricting the
+	class of morphisms.
+
+	This subsection unpacks the mathematical content behind that concern and explains why,
+	from the standpoint of computation, the bad behavior is almost never encountered.
+	The key point is that there are two distinct notions of ``morphism between tame modules'',
+	and only one of them is compatible with finite data structures.
+
+	\subsubsection*{Homomorphisms of tame objects versus tame morphisms}
+
+	Recall from Remark~\ref{rem:tame-morphisms-practice} that a finite encoding
+	$\pi\colon Q\to P$ converts a tame $Q$-module into a $P$-module for a finite poset $P$.
+	In that finite setting, morphisms are ordinary natural transformations in
+	$\mathbf{Vect}_{\kk}^{P}$, hence are controlled by finitely many linear maps.
+
+	Inside $\mathbf{Vect}_{\kk}^{Q}$, however, a natural transformation
+	$\varphi\colon M\to N$ between tame modules can vary on infinitely many degrees even when
+	$M$ and $N$ are each constant on finitely many regions.  Miller isolates the maps that
+	are compatible with finite encodings by requiring \emph{constancy of the transformation
+	on constant regions}:
+	a homomorphism $\varphi$ is called \emph{tame} if there exists a finite constant subdivision
+	subordinate to both $M$ and $N$ such that on each region $I$ the composite map
+	$M_I\to M_q\to N_q\to N_I$ is independent of $q\in I$ \cite[Def.~4.27]{Mil20}.
+	The category of tame modules uses these tame homomorphisms as its morphisms
+	\cite[Def.~4.29 and Rem.~4.30]{Mil20}.  The resulting category is abelian by
+	Theorem~\ref{thm:tame-abelian}.
+
+	\subsubsection*{A concrete failure mode}
+
+	The distinction between arbitrary homomorphisms and tame morphisms is not cosmetic.
+	The following example demonstrates that kernels can leave the tame world if the morphism
+	is allowed to vary infinitely within a constant region.
+
+	\begin{example}[A kernel of a homomorphism of tame modules need not be tame {\cite[Ex.~4.25]{Mil20}}]
+		\label{ex:kernel-not-tame}
+		Let $Q=\mathbb{R}^2$ with the coordinatewise partial order, and let
+		$L=\{(x,y)\in\mathbb{R}^2 : x+y=1\}$ be the antidiagonal line.
+		Let $U\subseteq Q$ be the closed upset above $L$, and let $U^{\circ}$ be its interior.
+		Consider the tame modules
+		\[
+			M=\kk[U]\oplus \kk[U],
+			\qquad
+			N=\kk[U]/\kk[U^{\circ}],
+		\]
+		where $N$ is supported on $L$.
+		Define a surjection $\varphi\colon M\twoheadrightarrow N$ by taking $\varphi$ to be
+		zero on $U^{\circ}$ and, for each point $(x,y)\in L$, sending the two standard basis
+		vectors of $M_{(x,y)}=\kk^2$ to the scalars $y$ and $-x$ in $N_{(x,y)}=\kk$.
+
+		Then $K=\ker\varphi$ is \emph{not} tame.  Indeed, for $(x,y)\in L$, the stalk $K_{(x,y)}$
+		is the one-dimensional subspace of $\kk^2$ spanned by $(x,y)$, and these lines are pairwise
+		distinct as $(x,y)$ varies along $L$.  Consequently, any constant subdivision subordinate to $K$
+		must separate distinct points of $L$ into distinct constant regions, forcing infinitely many regions.
+	\end{example}
+
+	The phenomenon in Example~\ref{ex:kernel-not-tame} is that $M$ and $N$ are each constant on a
+	finite subdivision of $Q$ (three regions: below $L$, on $L$, and above $L$), but the map
+	$\varphi$ is \emph{not} constant on the region $L$ itself.  Hence $\varphi$ is not a tame
+	homomorphism, so there is no reason for its kernel to remain tame.
+
+	\subsubsection*{The tame category is closed under the usual constructions}
+
+	Once morphisms are required to be tame, the basic abelian operations are safe.
+
+	\begin{lemma}[Kernels and cokernels of tame homomorphisms are tame {\cite[Lem.~4.28]{Mil20}}]
+		\label{lem:tame-kernel-cokernel}
+		Let $\varphi\colon M\to N$ be a tame homomorphism of $Q$-modules.
+		Then $\ker\varphi$ and $\coker\varphi$ are tame modules, and the canonical maps
+		$\ker\varphi\to M$ and $N\to\coker\varphi$ are tame morphisms.
+		The same statement holds in the semialgebraic, PL, subanalytic, or class~$X$ settings
+		when the constant subdivision witnessing tameness is of the corresponding type.
+	\end{lemma}
+
+	\begin{proof}
+		Choose a finite constant subdivision of $Q$ that is subordinate to $M$, $N$, and $\varphi$
+		(as required in the definition of a tame homomorphism).
+		For each constant region $I$, fix identifications $M_q\cong M_I$ and $N_q\cong N_I$
+		for all $q\in I$ so that the structure maps of $M$ and $N$ agree with the transition
+		maps among the regionwise vector spaces.
+		By tameness of $\varphi$, the induced linear map $M_I\to N_I$ is independent of $q\in I$.
+
+		Define regionwise vector spaces
+		\[
+			K_I:=\ker(M_I\to N_I),
+			\qquad
+			C_I:=\coker(M_I\to N_I).
+		\]
+		Using the structure maps between regions, these assemble into $Q$-modules $K$ and $C$.
+		By construction, $K=\ker\varphi$ and $C=\coker\varphi$ in the abelian category
+		$\mathbf{Vect}_{\kk}^{Q}$, and the chosen constant subdivision is subordinate to both $K$
+		and $C$.  Hence $K$ and $C$ are tame.  The auxiliary hypotheses (PL, semialgebraic, etc.)
+		are preserved because the same subdivision witnesses tameness in those settings.
+	\end{proof}
+
+	Lemma~\ref{lem:tame-kernel-cokernel} is the formal version of the slogan that
+	``computations with tame modules stay tame'' as long as the maps used in the computation
+	come from finite data.  Example~\ref{ex:kernel-not-tame} shows that if one insists on allowing
+	\emph{all} homomorphisms between tame objects, then kernels and cokernels can escape the tame
+	world, but those escaping morphisms are precisely the ones that do not admit a finite encoding.
+
+	\subsubsection*{Why the pathological maps do not appear in algorithms}
+
+	Any explicit computation in this thesis ultimately proceeds by passing to some finite encoding
+	$\pi\colon Q\to P$ and working in the finite functor category $\mathbf{Vect}_{\kk}^{P}$.
+	In that regime, every morphism is represented by finitely many linear maps, and pulling back
+	along $\pi$ produces a tame homomorphism in the sense of Definition~\ref{def:tame-morphism}.
+	Exactness of pullback (Lemma~\ref{lem:pullback-exact}) then implies that kernels and cokernels
+	computed at the finite level remain finite after pulling back.
+
+	More explicitly, if $M\cong\pi^{*}H$ and $N\cong\pi^{*}G$ for $P$-modules $H$ and $G$, and if
+	$\bar\varphi\colon H\to G$ is a morphism in $\mathbf{Vect}_{\kk}^{P}$, then
+	$\varphi:=\pi^{*}\bar\varphi$ is a tame homomorphism of $Q$-modules, and
+	\[
+		\ker(\varphi)\cong \pi^{*}(\ker\bar\varphi),
+		\qquad
+		\coker(\varphi)\cong \pi^{*}(\coker\bar\varphi),
+	\]
+	because $\pi^{*}$ is exact.  Therefore the outputs of the standard constructions
+	(kernel, cokernel, homology of a complex, and derived functors computed via finite
+	resolutions) remain tame whenever the computation is expressed at the level of a finite
+	encoding.  In particular, the ``risky'' behavior in Example~\ref{ex:kernel-not-tame} cannot
+	occur unless one is willing to specify a morphism that varies on infinitely many degrees
+	inside a constant region, which is not compatible with the finite data structures used for
+	encoding and computation.
+
+	\subsubsection*{Recent results that restore full abelianity under geometric hypotheses}
+
+	The preceding discussion explains why Miller restricts morphisms in the tame category.
+	There is also a complementary line of results showing that, for many geometric classes of
+	finite encodings, the restriction is in practice unnecessary: under suitable hypotheses on
+	encoding fibers, every homomorphism between encodable modules can be realized inside a
+	finite encoding.
+
+	One precise formulation is due to Waas \cite{Waa24}, who introduces a connectivity condition
+	on encoding fibers ensuring that any finite set of encodable modules admits a \emph{common}
+	encoding that captures \emph{all} morphisms between them \cite[Prop.~3.5]{Waa24}.
+	In particular, the resulting class of encodable persistence modules forms a full abelian
+	subcategory of $\mathbf{Vect}_{\kk}^{Q}$ \cite[Thm.~1.1]{Waa24}.
+	For parameter posets $Q=\mathbb{R}^n$, his hypotheses are satisfied by natural families of
+	``geometric'' regions built from topologically closed PL, semialgebraic, or subanalytic
+	upsets (and their complements and finite unions).
+
+	Conceptually, the point is that the failure in Example~\ref{ex:kernel-not-tame} relies on
+	large disconnected families of degrees (here the continuum of points on $L$) along which a map
+	can vary independently.  Connectivity hypotheses on encoding fibers rule out that degree of
+	freedom, forcing morphisms to be controlled by finite combinatorial data.  Waas also notes that
+	one can alternatively prove the corresponding subanalytic statement by translating the problem
+	into constructible sheaf theory and invoking results of Miller and Kashiwara-Schapira
+	\cite[Rem.~3.19]{Waa24}, \cite{Mil23,KS18}.
+
+	These developments give a precise mathematical interpretation of the informal claim that
+	``if the input is tame, then the output is almost always tame'': the non-tame outputs arise
+	from morphisms that do not admit finite encodings, and such morphisms are excluded either
+	(i) by working in the tame category (tame morphisms by definition), or
+	(ii) by restricting attention to the geometric subclasses of tame modules for which all
+	relevant morphisms are automatically encodable.
+
+	\subsection{Fringe presentations as a computable interface}
+	\label{subsec:fringe-presentations}
+	
+	Finite encodings are the most conceptually direct way to impose combinatorial finiteness,
+	but they are not always the most convenient format for \emph{input} or for certain
+	computations.  Miller's framework supplies a complementary algebraic interface:
+	\emph{fringe presentations}.  These generalize the idea of presenting a module via
+	generators and relations, where generators are organized as upsets (birth regions) and
+	relations as downsets (death regions).
+	
+	We begin by recalling the relevant combinatorics of subsets of a poset.
+	
+	\begin{defn}[Upsets and downsets]
+		\label{def:upset-downset}
+		Let $Q$ be a poset.
+		\begin{enumerate}[label=(\roman*)]
+			\item An \emph{upset} (or upper set) in $Q$ is a subset $U\subseteq Q$ such that
+			$q\in U$ and $q\le q'$ imply $q'\in U$.
+			\item A \emph{downset} (or lower set) in $Q$ is a subset $D\subseteq Q$ such that
+			$q\in D$ and $q'\le q$ imply $q'\in D$.
+		\end{enumerate}
+		For $q\in Q$, the \emph{principal upset} generated by $q$ is $\uparrow q := \{q'\in Q : q\le q'\}$,
+		and the \emph{principal downset} is $\downarrow q := \{q'\in Q : q'\le q\}$.
+	\end{defn}
+	
+	\begin{defn}[Indicator modules for upsets and downsets]
+		\label{def:indicator-modules}
+		Let $Q$ be a poset and let $S\subseteq Q$.
+		The \emph{indicator module} (or \emph{indicator $Q$-module}) $\kk[S]$ is the
+		$Q$-module defined on objects by
+		\[
+		\kk[S](q) :=
+		\begin{cases}
+			\kk & \text{if } q\in S,\\
+			0   & \text{if } q\notin S,
+		\end{cases}
+		\]
+		and on morphisms by the rule that for $q\le q'$ the structure map
+		$\kk[S](q\le q')\colon \kk[S](q)\to \kk[S](q')$ is the identity $\kk\to\kk$ when both
+		$q,q'\in S$, and is $0$ otherwise.
+		When $S=U$ is an upset, $\kk[U]$ is called an \emph{upset module}; when $S=D$ is a
+		downset, $\kk[D]$ is called a \emph{downset module}.
+	\end{defn}
+	
+	\begin{remark}[Projectives and injectives on a finite poset]
+		\label{rem:proj-inj-finite-poset}
+		When $P$ is a finite poset, the category $\mathbf{Vect}_{\kk}^{P}$ can be identified
+		with the category of finite-dimensional representations of the Hasse quiver of $P$ with
+		commutativity relations (equivalently, with modules over the incidence algebra of $P$).
+		In this setting, principal upset modules $\kk[\uparrow p]$ are the indecomposable
+		projective objects and principal downset modules $\kk[\downarrow p]$ are the
+		indecomposable injective objects.  This is one reason indicator modules are the correct
+		building blocks for computable homological algebra; see \cite{Mil20} for a detailed
+		development in the general poset setting.
+	\end{remark}
+	
+	The next definition packages a tame module using finitely many upsets and downsets
+	together with a matrix over $\kk$.  This is the abstraction of ``birth'' and ``death''
+	data familiar from barcodes, but adapted to general posets.
+	
+	\begin{defn}[Fringe presentation {\cite[Def.~3.16]{Mil20}}]
+		\label{def:fringe-presentation}
+		Let $Q$ be a poset and let $M$ be a $Q$-module.
+		A \emph{fringe presentation} of $M$ consists of
+		\begin{enumerate}[label=(\roman*)]
+			\item a direct sum $F = \bigoplus_{i\in I}\kk[U_i]$ of upset modules,
+			\item a direct sum $E = \bigoplus_{j\in J}\kk[D_j]$ of downset modules, and
+			\item a $Q$-module homomorphism $\varphi\colon F\to E$
+		\end{enumerate}
+		such that $\im(\varphi)\cong M$ and the component maps
+		$\kk[U_i]\to \kk[D_j]$ satisfy a mild connectivity condition (see \cite[Def.~3.14]{Mil20}).
+		The fringe presentation is \emph{finite} if the index sets $I$ and $J$ are finite.
+	\end{defn}
+	
+	\begin{remark}[Relation to classical presentations]
+		\label{rem:fringe-as-presentation}
+		If $Q=\bbb{Z}^n$ with the usual partial order, then $Q$-modules can be interpreted as
+		$\bbb{Z}^n$-graded modules over the polynomial ring $\kk[x_1,\dots,x_n]$ (Section~2.4).
+		In that language, upset modules behave like ``free/flat'' pieces and downset modules
+		behave like ``injective'' pieces; the map $\varphi$ organizes generators (birth upsets)
+		and relations (death downsets) in a way that is robust under changes of geometry and
+		does not depend on choosing a coordinate-aligned region decomposition.
+	\end{remark}
+	
+	Fringe presentations become especially concrete once one writes the map $\varphi$ in
+	coordinates.
+	
+	\begin{defn}[Monomial matrix {\cite[Def.~3.17]{Mil20}}]
+		\label{def:monomial-matrix}
+		Let $\varphi\colon F\to E$ be a \emph{finite} fringe presentation with
+		$F=\bigoplus_{i=1}^{m}\kk[U_i]$ and $E=\bigoplus_{j=1}^{r}\kk[D_j]$.
+		Choosing the natural bases on the $1$-dimensional stalks of each indicator summand,
+		the map $\varphi$ can be encoded by an $r\times m$ matrix $\Phi=(\Phi_{j i})$ with
+		entries in $\kk$, whose columns are indexed by the birth upsets $U_i$ and whose rows
+		are indexed by the death downsets $D_j$.  We refer to $\Phi$ as a \emph{monomial matrix}
+		for $\varphi$.
+	\end{defn}
+	
+	\begin{lemma}[Support condition for monomial matrices {\cite[Prop.~3.18]{Mil20}}]
+		\label{lem:monomial-support}
+		With notation as in Definition~\ref{def:monomial-matrix}, one necessarily has
+		$\Phi_{j i}=0$ whenever $U_i\cap D_j=\varnothing$.  Conversely, any matrix
+		$\Phi\in \kk^{r\times m}$ satisfying $\Phi_{j i}=0$ when $U_i\cap D_j=\varnothing$
+		determines a fringe presentation map $\varphi\colon F\to E$.
+	\end{lemma}
+	
+	\begin{example}[A single interval in one parameter]
+		\label{ex:interval-fringe}
+		Let $Q=\bbb{R}$ with its total order and consider the interval module $\kk[a,b)$.
+		This module can be realized as the image of a map from the upset module $\kk[a,\infty)$
+		to the downset module $\kk(-\infty,b)$, and the corresponding monomial matrix is the
+		$1\times 1$ matrix $[1]$.  For a direct sum of intervals (a barcode), the matching of
+		births to deaths is reflected by a monomial matrix that is a permutation matrix after
+		choosing orderings of births and deaths; compare \cite[Ex.~3.19]{Mil20} and the
+		interval decomposition theorem \cite{CB15}.
+	\end{example}
+	
+	\subsection{What tameness buys you: mathematical consequences}
+	\label{subsec:tame-math}
+	
+	The principal reason tameness is a useful organizing principle is that it is not a single
+	isolated definition but rather part of a web of equivalent finiteness conditions, each
+	suited to different tasks (geometric modeling, algebraic presentation, homological
+	computation).  The main structural result is Miller's syzygy theorem.
+	
+	\begin{theorem}[Syzygy theorem {\cite[Thm.~6.12]{Mil20}}]
+		\label{thm:syzygy}
+		Let $Q$ be a poset and let $M$ be a $Q$-module.  Then $M$ is tame if and only if it
+		admits (and hence admits all of) the following finite descriptions:
+		\begin{enumerate}[label=(\roman*)]
+			\item a finite poset encoding subordinate to $M$;
+			\item a finite fringe presentation of $M$;
+			\item finite resolutions by upset modules and by downset modules.
+		\end{enumerate}
+		Moreover, the constructions can be chosen compatibly with suitable auxiliary geometric
+		structures (e.g.\ semialgebraic or piecewise-linear settings) when $Q$ sits inside a
+		partially ordered real vector space, and tame morphisms lift to morphisms of the
+		corresponding finite presentations/resolutions.
+	\end{theorem}
+	
+	\begin{remark}[Why equivalences matter for software]
+		\label{rem:equivalences-matter}
+		Theorem~\ref{thm:syzygy} has two practical interpretations:
+		\begin{enumerate}[label=(\roman*)]
+			\item It legitimizes switching among data representations depending on what is being
+			computed.  One might build a module from geometric data (suggesting a region-based
+			encoding), transform it to a fringe presentation to expose ``birth/death'' structure,
+			and then compute derived invariants via an indicator resolution.
+			\item It explains why it is sensible to base a computational pipeline on finite encodings.
+			If a module is tame, then \emph{some} finite encoding exists, and any other finite
+			representation can (in principle) be converted to an encoding suitable for computation.
+		\end{enumerate}
+		TAMER-OP is designed around these equivalences: the library implements multiple entry points
+		(fringe-style and region-style) and reduces computations to finite poset models.
+	\end{remark}
+	
+	A more elementary but extremely important consequence is that, once an encoding is fixed,
+	many constructions can be carried out on the finite poset $P$ and then transported back
+	to $Q$.
+	
+	\begin{lemma}[Reduction along an encoding]
+		\label{lem:reduction-along-encoding}
+		Suppose $M\cong \pi^*H$ where $\pi\colon Q\to P$ is a finite encoding and $H$ is a
+		$P$-module.
+		Then every structure map of $M$ is obtained by applying $H$ to the image under $\pi$:
+		for $q\le q'$ in $Q$,
+		\[
+		M(q\le q') \ = \ H\!\big(\pi(q)\le \pi(q')\big).
+		\]
+		In particular, any invariant of $M$ that is defined functorially from the diagram of
+		vector spaces and structure maps (for example, ranks of structure maps, limits/colimits,
+		or derived functors computed from resolutions) can be computed from $H$ on the finite
+		poset $P$.
+	\end{lemma}
+	
+	\begin{proof}
+		The identity $M=H\circ\pi$ is the definition of pullback.  The final statement follows
+		because $\pi^*$ is exact (Lemma~\ref{lem:pullback-exact}) and because the data of $M$
+		is completely determined by the data of $H$ together with $\pi$.
+	\end{proof}
+	
+	\subsection{What tameness buys you: algorithmic consequences}
+	\label{subsec:tame-algo}
+	
+	The abstract consequences above translate directly into a computational strategy.
+	
+	\paragraph{Finite linear algebra.}
+	If $P$ is finite and $H$ is a $P$-module with finite-dimensional stalks, then $H$ is
+	specified by:
+	\begin{enumerate}[label=(\roman*)]
+		\item a finite list of vector spaces $H(p)$, and
+		\item linear maps $H(p\le p')$ subject only to functoriality constraints.
+	\end{enumerate}
+	In a finite poset, functoriality can be enforced by recording maps only along cover
+	relations (the Hasse diagram) and composing along paths.  This is precisely the kind of
+	finite linear-algebraic data structure on which one can implement kernels, images,
+	cokernels, ranks, and derived constructions.
+	
+	\paragraph{Homological algebra in a finite abelian category.}
+	The abelian category $\mathbf{Vect}_{\kk}^{P}$ has enough projectives and injectives,
+	and its basic building blocks are the principal upset and downset modules
+	(Remark~\ref{rem:proj-inj-finite-poset}).  Consequently, one can compute projective and
+	injective resolutions by explicit finite algorithms, and then compute $\Tor$ and $\Ext$
+	groups by linear algebra on chain complexes.
+	When a $Q$-module is tame, Theorem~\ref{thm:syzygy} guarantees that such finite
+	resolutions exist \emph{upstairs} in $Q$ as well (in the appropriate tame category),
+	but the key computational reduction is that it suffices to resolve the encoded object on
+	a finite poset model.
+	
+	\subsection{Bridge to implementation}
+	\label{subsec:tame-bridge}
+	
+	The remainder of this thesis is concerned with turning the preceding theory into a
+	usable computational toolkit.  The next sections explain:
+	\begin{enumerate}[label=(\roman*)]
+		\item which concrete finite presentations and encodings TAMER-OP supports,
+		\item how finite encoding posets are constructed from geometric or algebraic input,
+		\item how invariants and derived functors are computed on finite poset models, and
+		\item how these computations feed into a statistics pipeline for data analysis.
+	\end{enumerate}
+	In short: tameness provides the \emph{mathematical contract} that makes the entire
+	data-ingestion-to-statistics pipeline finite and computable.
+	
+	
+	
+	\section{Overview of TAMER-OP}
+	
+
+	
+	
+	\subsection{Design goals stated mathematically}
+	
+	
+	
+	\subsection{The end-to-end pipeline}
+	
+	\subsection{Core mathematical objects in the API}
+	
+	\subsection{Architectural layering}
+	
+	\subsection{Reproducibility and correctness}
+	
+	\section{The presentation formats}
+	
+	\subsection{Philosophy: multiple equivalent front-ends}
+	
+	\subsection{Finite fringe presentations}
+	
+	\subsection{$\mathbb{Z}^n$ presentations}
+	
+	\subsection{$\mathbb{R}^n$ and piecewise-linear presentations}
+	
+	\subsection{Conversions between formats}
+	
+	\subsection{Validation and other sanity checks}
+	
+	\subsection{Serialization and I/O}
+	
+	\section{Finite encoding constructors}
+	
+	\subsection{The encoding problem}
+	
+	\subsection{Region/signature idea}
+	
+	\subsection{Encoding algorithms by ambient domain}
+	
+	\subsection{Constructing the finite poset structure}
+	
+	\subsection{Point location and evaluation map}
+	
+	\subsection{Building a common encoding for multiple modules}
+	
+	\subsection{Complexity and failure modes}
+	
+	\subsection{Correctness and diagnostics}
+	
+	\section{Invariants}
+	
+	\subsection{Meta principle: invariants factor through the encoding}
+	
+	\subsection{Dimension-type invariants}
+	
+	\subsection{Rank-type invariants}
+	
+	\subsection{Mobius inversions and signed measures}
+	
+	\subsection{Slice-based invariants and distances}
+	
+	\subsection{Vectorizations and kernels}
+	
+	\subsection{Homological invariants derived from resolutions}
+	
+	\subsection{Geometry-aware invariants for when $Q = \mathbb{R}^n$}
+	
+	\subsection{Stability and robustness discussion}
+	
+	\subsection{Practical API summary}
+	
+	\section{Homological Algebra and Derived Functors}
+	
+	\subsection{The Abelian Category of $P$-modules}
+	
+	\subsection{Projective and Injective Objects}
+	
+	\subsection{Resolutions}
+	
+	\subsection{Ext and Tor: definitions and computational model}
+	
+	\subsection{Multiplicative structures and higher structure}
+	
+	\subsection{Double complexes and spectral sequences}
+	
+	\subsection{The ergonomics of derived categories}
+	
+	\subsection{Relationship to multigraded commutative algebra}
+	
+	\subsection{What you use all this for in TDA}
+	
+	\section{Transport and comparison}
+	
+	\subsection{Change of posets as functorial transport}
+	
+	\subsection{Comparing modules on different encodings}
+	
+	\subsection{Comparison via invariants}
+	
+	\subsection{Interoperability with multipers and RIVET}
+	
+	\subsection{Case studies}
+	
+	\section{Statistics}
+	
+	\subsection{Data model for experiments}
+	
+	\subsection{Feature extraction recipes}
+	
+	\subsection{Basic inferential statistics}
+	
+	\subsection{Learning-oriented workflows}
+	
+	\subsection{Diagnostic plots}
+	
+	\subsection{Reproducibility and reporting}
+	
+	\section{Speed optimizations}
+	
+	\subsection{Where time is spent}
+	
+	\subsection{Tradeoffs in exactness versus speed}
+	
+	\subsection{Sparsity-aware algorithms}
+	
+	\subsection{Caching and memoization strategies}
+	
+	\subsection{Parallelism}
+	
+	\subsection{Geometry backend: controlling combinatorial explosion}
+	
+	\section{Benchmarks}
+	
+	\subsection{Philosophy and reproducibility}
+	
+	\subsection{Microbenchmarks (unit tests)}
+	
+	\subsection{End-to-end benchmarks}
+
+	\subsection{Comparisons with multipers and RIVET}
+	
+	\subsection{Discussion of results}
+	
+	\section{Conclusion}
+	aa
+	
+	% ------------------------------------------------------------
+	% References
+	% ------------------------------------------------------------
+
+	
+	\begin{thebibliography}{99}
+		
+		\bibitem[Mil20]{Mil20}
+		E.~Miller.
+		\newblock \emph{Homological algebra of modules over posets}.
+		\newblock \href{https://arxiv.org/abs/2008.00063}{arXiv:2008.00063}, 2020.
+		
+		
+
+		\bibitem[Waa24]{Waa24}
+		L.~Waas.
+		\newblock \emph{Notes on abelianity of categories of finitely encodable persistence modules}.
+		\newblock \href{https://arxiv.org/abs/2407.08666}{arXiv:2407.08666}, 2024.
+
+		\bibitem[Mil23]{Mil23}
+		E.~Miller.
+		\newblock \emph{Stratifications of real vector spaces from constructible sheaves with conical microsupport}.
+		\newblock \emph{Journal of Applied and Computational Topology}, 7(3):473--489, 2023.
+		\newblock \href{https://doi.org/10.1007/s41468-023-00112-1}{doi:10.1007/s41468-023-00112-1}.
+
+		\bibitem[KS18]{KS18}
+		M.~Kashiwara and P.~Schapira.
+		\newblock \emph{Persistent homology and microlocal sheaf theory}.
+		\newblock \emph{Journal of Applied and Computational Topology}, 2(1--2):83--113, 2018.
+		\newblock \href{https://arxiv.org/abs/1705.00955}{arXiv:1705.00955}.
+\bibitem[CB15]{CB15}
+		W.~Crawley-Boevey.
+		\newblock \emph{Decomposition of pointwise finite-dimensional persistence
+			modules}.
+		\newblock \emph{Journal of Algebra and Its Applications}, 14(5):1550066, 2015.
+		\newblock \href{https://doi.org/10.1142/S0219498815500668}{doi:10.1142/S0219498815500668}.
+		
+		\bibitem[ZC05]{ZC05}
+		A.~Zomorodian and G.~Carlsson.
+		\newblock \emph{Computing persistent homology}.
+		\newblock \emph{Discrete \& Computational Geometry}, 33:249--274, 2005.
+		\newblock \href{https://doi.org/10.1007/s00454-004-1146-y}{doi:10.1007/s00454-004-1146-y}.
+		
+		\bibitem[CZ09]{CZ09}
+		G.~Carlsson and A.~Zomorodian.
+		\newblock \emph{The theory of multidimensional persistence}.
+		\newblock \emph{Discrete \& Computational Geometry}, 42:71--93, 2009.
+		\newblock \href{https://doi.org/10.1007/s00454-009-9176-0}{doi:10.1007/s00454-009-9176-0}.
+		
+		\bibitem[CEH07]{CEH07}
+		D.~Cohen-Steiner, H.~Edelsbrunner, and J.~Harer.
+		\newblock \emph{Stability of persistence diagrams}.
+		\newblock \emph{Discrete \& Computational Geometry}, 37(1):103--120, 2007.
+		\newblock \href{https://doi.org/10.1007/s00454-006-1276-5}{doi:10.1007/s00454-006-1276-5}.
+		
+		\bibitem[ELZ02]{ELZ02}
+		H.~Edelsbrunner, D.~Letscher, and A.~Zomorodian.
+		\newblock \emph{Topological persistence and simplification}.
+		\newblock \emph{Discrete \& Computational Geometry}, 28:511--533, 2002.
+		\newblock \href{https://doi.org/10.1007/s00454-002-2885-2}{doi:10.1007/s00454-002-2885-2}.
+		
+		\bibitem[Les15]{Les15}
+		M.~Lesnick.
+		\newblock \emph{The theory of the interleaving distance on multidimensional
+			persistence modules}.
+		\newblock \emph{Foundations of Computational Mathematics}, 15(3):613--650, 2015.
+		\newblock \href{https://doi.org/10.1007/s10208-015-9255-y}{doi:10.1007/s10208-015-9255-y}.
+		
+		\bibitem[LW15]{LW15}
+		M.~Lesnick and M.~Wright.
+		\newblock \emph{Interactive visualization of 2-D persistence modules}.
+		\newblock \href{https://arxiv.org/abs/1512.00180}{arXiv:1512.00180}, 2015.
+		
+		\bibitem[RIVET]{RIVET}
+		M.~Lesnick and M.~Wright.
+		\newblock \emph{RIVET: The rank invariant visualization and exploration tool}
+		(software).
+		\newblock \url{https://github.com/rivetTDA/rivet}.
+		
+		\bibitem[LS24]{LS24}
+		D.~Loiseaux and H.~Schreiber.
+		\newblock \emph{multipers: Multiparameter persistence for machine learning}.
+		\newblock \emph{Journal of Open Source Software}, 9(103):6773, 2024.
+		\newblock \href{https://doi.org/10.21105/joss.06773}{doi:10.21105/joss.06773}.
+		
+		\bibitem[CDSGO16]{CDSGO16}
+		F.~Chazal, V.~de~Silva, M.~Glisse, and S.~Y. Oudot.
+		\newblock \emph{The Structure and Stability of Persistence Modules}.
+		\newblock SpringerBriefs in Mathematics. Springer, 2016.
+		\newblock \href{https://doi.org/10.1007/978-3-319-42545-0}{doi:10.1007/978-3-319-42545-0}.
+		
+		\bibitem[Oud15]{Oud15}
+		S.~Y. Oudot.
+		\newblock \emph{Persistence Theory: From Quiver Representations to Data Analysis}.
+		\newblock Mathematical Surveys and Monographs, Vol.~209. American Mathematical
+		Society, 2015.
+		
+		\bibitem[EH10]{EH10}
+		H.~Edelsbrunner and J.~L. Harer.
+		\newblock \emph{Computational Topology: An Introduction}.
+		\newblock American Mathematical Society, 2010.
+		
+		\bibitem[Mac98]{Mac98}
+		S.~Mac~Lane.
+		\newblock \emph{Categories for the Working Mathematician}.
+		\newblock Graduate Texts in Mathematics, Vol.~5. Springer, 2nd edition, 1998.
+		\newblock \href{https://doi.org/10.1007/978-1-4757-4721-8}{doi:10.1007/978-1-4757-4721-8}.
+		
+		\bibitem[Wei94]{Wei94}
+		C.~A. Weibel.
+		\newblock \emph{An Introduction to Homological Algebra}.
+		\newblock Cambridge Studies in Advanced Mathematics, Vol.~38. Cambridge
+		University Press, 1994.
+		
+		\bibitem[Eis95]{Eis95}
+		D.~Eisenbud.
+		\newblock \emph{Commutative Algebra with a View Toward Algebraic Geometry}.
+		\newblock Graduate Texts in Mathematics, Vol.~150. Springer, 1995.
+		\newblock \href{https://doi.org/10.1007/978-1-4612-5350-1}{doi:10.1007/978-1-4612-5350-1}.
+		
+		\bibitem[MS05]{MS05}
+		E.~Miller and B.~Sturmfels.
+		\newblock \emph{Combinatorial Commutative Algebra}.
+		\newblock Graduate Texts in Mathematics, Vol.~227. Springer, 2005.
+		\newblock \href{https://doi.org/10.1007/b138602}{doi:10.1007/b138602}.
+		
+	\end{thebibliography}
+	
+	
+\end{document}
