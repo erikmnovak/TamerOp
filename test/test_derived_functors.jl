@@ -164,13 +164,13 @@ end
 
     beta = [QQ(1)]
     alpha = [QQ(1)]
-    _, coords_2 = PM.yoneda_product(E24, 1, beta, E12, 1, alpha; ELN=E14)
+    _, coords_2 = PM.DerivedFunctors.yoneda_product(E24, 1, beta, E12, 1, alpha; ELN=E14)
     @test coords_2[1] != 0
 
     # Via the chain 1 -> 3 -> 4
     E34 = DF.Ext(S3, S4, PM.DerivedFunctorOptions(maxdeg=1))
     E13 = DF.Ext(S1, S3, PM.DerivedFunctorOptions(maxdeg=2))
-    _, coords_3 = PM.yoneda_product(E34, 1, [QQ(1)], E13, 1, [QQ(1)]; ELN=E14)
+    _, coords_3 = PM.DerivedFunctors.yoneda_product(E34, 1, [QQ(1)], E13, 1, [QQ(1)]; ELN=E14)
     @test coords_3[1] != 0
 
     # In a 1-dimensional target, the two products must be proportional.
@@ -215,12 +215,12 @@ end
     @test PM.dim(E02, 2) == 1
 
     # Left bracketing: (e23 * e12) * e01
-    _, x = PM.yoneda_product(E23, 1, [QQ(1)], E12, 1, [QQ(1)]; ELN=E13)  # x in Ext^2(S1,S123)
-    _, left = PM.yoneda_product(E13, 2, x, E01, 1, [QQ(1)]; ELN=E03)
+    _, x = PM.DerivedFunctors.yoneda_product(E23, 1, [QQ(1)], E12, 1, [QQ(1)]; ELN=E13)  # x in Ext^2(S1,S123)
+    _, left = PM.DerivedFunctors.yoneda_product(E13, 2, x, E01, 1, [QQ(1)]; ELN=E03)
 
     # Right bracketing: e23 * (e12 * e01)
-    _, y = PM.yoneda_product(E12, 1, [QQ(1)], E01, 1, [QQ(1)]; ELN=E02)  # y in Ext^2(S0,S12)
-    _, right = PM.yoneda_product(E23, 1, [QQ(1)], E02, 2, y; ELN=E03)
+    _, y = PM.DerivedFunctors.yoneda_product(E12, 1, [QQ(1)], E01, 1, [QQ(1)]; ELN=E02)  # y in Ext^2(S0,S12)
+    _, right = PM.DerivedFunctors.yoneda_product(E23, 1, [QQ(1)], E02, 2, y; ELN=E03)
 
     # Nontriviality + associativity up to sign in a 1-dimensional target.
     @test left[1] != 0
@@ -370,7 +370,7 @@ end
 
         # Cached multiplication must match a direct call to the mathematical core (Yoneda product)
         # in the same Ext space and bases.
-        _, coords_direct = PM.yoneda_product(A.E, 1, x.coords, A.E, 1, y.coords; ELN=A.E)
+        _, coords_direct = PM.DerivedFunctors.yoneda_product(A.E, 1, x.coords, A.E, 1, y.coords; ELN=A.E)
         @test prod1.coords == coords_direct
         @test prod2.coords == coords_direct
     end
@@ -396,8 +396,7 @@ end
 end
 
 @testset "Sparse assembly replacements (dense->sparse removed)" begin
-    DF = PM.DerivedFunctors
-
+    
     # 0) _append_scaled_triplets! matches the old findnz(sparse(F)) pattern (up to matrix equality)
     let
         F = QQ[1 0; 2 3]
@@ -518,8 +517,7 @@ end
             cols = (cod_offsets[j] + 1):cod_offsets[j+1]
             Fref_dense[rows, cols] .+= c .* A
         end
-        Fref = sparse(togglezeros!(Fref_dense))  # ok if you omit; sparse(Fref_dense) also works
-        # If you don't have togglezeros!, just do: Fref = sparse(Fref_dense)
+        Fref = sparse(Fref_dense)
 
         F1 = DF._precompose_on_hom_cochains_from_projective_coeff(M, dom_gens, cod_gens, dom_offsets, cod_offsets, coeff_dense)
         F2 = DF._precompose_on_hom_cochains_from_projective_coeff(M, dom_gens, cod_gens, dom_offsets, cod_offsets, coeff_sparse)

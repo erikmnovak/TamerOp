@@ -238,14 +238,24 @@ import ..PLBackend
 import ..ChainComplexes
 import ..ZnEncoding
 import ..DerivedFunctors
+import ..DerivedFunctors.Resolutions
+import ..DerivedFunctors.ExtTorSpaces
+import ..DerivedFunctors.Functoriality
+import ..DerivedFunctors.Algebras
+import ..DerivedFunctors.SpectralSequences
+import ..DerivedFunctors.Backends
+import ..DerivedFunctors.HomExtEngine
+import ..DerivedFunctors.Utils
 import ..ModuleComplexes
 import ..ChangeOfPosets
 import ..Invariants
 
 export CoreModules, Stats, RegionGeometry, ExactQQ, FiniteFringe, IndicatorTypes, Encoding,
        Modules, AbelianCategories, IndicatorResolutions, FlangeZn, Serialization, Viz2D,
-       PLPolyhedra, PLBackend, ChainComplexes, ZnEncoding, DerivedFunctors, ModuleComplexes,
-       ChangeOfPosets, Invariants
+       PLPolyhedra, PLBackend, ChainComplexes, ZnEncoding, DerivedFunctors,
+       Resolutions, ExtTorSpaces, Functoriality, Algebras, SpectralSequences, Backends,
+       HomExtEngine, Utils,
+       ModuleComplexes, ChangeOfPosets, Invariants
 
 # -----------------------------------------------------------------------------
 # Helper predicates for lifting bindings safely.
@@ -331,6 +341,14 @@ const _ADVANCED_MODULES = Module[
     ChainComplexes,
     ZnEncoding,
     DerivedFunctors,
+    DerivedFunctors.Resolutions,
+    DerivedFunctors.ExtTorSpaces,
+    DerivedFunctors.Functoriality,
+    DerivedFunctors.Algebras,
+    DerivedFunctors.SpectralSequences,
+    DerivedFunctors.Backends,
+    DerivedFunctors.HomExtEngine,
+    DerivedFunctors.Utils,
     ModuleComplexes,
     ChangeOfPosets,
     Invariants,
@@ -350,12 +368,6 @@ for M in _ADVANCED_MODULES
     end
 end
 
-# -----------------------------------------------------------------------------
-# 3) Explicitly lift core derived-functor entry points.
-#
-# These are frequently imported (not owned) symbols, so if they are missed by
-# the bulk-lift heuristics we still want them in Advanced for convenience.
-# -----------------------------------------------------------------------------
 end # module Advanced
 
 end # module

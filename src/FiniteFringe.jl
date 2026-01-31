@@ -336,6 +336,35 @@ end
 
 Base.length(U::Upset) = length(U.mask)
 Base.length(D::Downset) = length(D.mask)
+Base.eltype(::Type{Upset}) = Int
+Base.eltype(::Type{Downset}) = Int
+Base.IteratorSize(::Type{Upset}) = Base.HasLength()
+Base.IteratorSize(::Type{Downset}) = Base.HasLength()
+
+# Iterate over vertices contained in an upset/downset.
+function Base.iterate(U::Upset, state::Int=1)
+    n = length(U.mask)
+    i = state
+    @inbounds while i <= n
+        if U.mask[i]
+            return i, i + 1
+        end
+        i += 1
+    end
+    return nothing
+end
+
+function Base.iterate(D::Downset, state::Int=1)
+    n = length(D.mask)
+    i = state
+    @inbounds while i <= n
+        if D.mask[i]
+            return i, i + 1
+        end
+        i += 1
+    end
+    return nothing
+end
 
 # Allocation-free bitset predicates (used heavily in matching / slicing code).
 @inline function is_subset(a::BitVector, b::BitVector)

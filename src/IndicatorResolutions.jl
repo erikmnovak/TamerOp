@@ -22,7 +22,7 @@ using ..ExactQQ: QQ, rrefQQ, rankQQ, rankQQ_restricted, nullspaceQQ, solve_fullc
 using ..Modules: CoverCache, cover_cache, clear_cover_cache!, _cover_cache,
                  CoverEdgeMapStore, _find_sorted_index,
                  PModule, PMorphism, dim_at,
-                 zero_pmodule, zero_morphism, map_leq
+                 zero_pmodule, zero_morphism, map_leq, id_morphism
 
 import ..AbelianCategories
 using ..AbelianCategories: kernel_with_inclusion, _cokernel_module

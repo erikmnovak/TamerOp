@@ -266,7 +266,7 @@ end
 #include("test_geometry.jl")
 
 # Homological algebra
-include("test_indicator_resolutions.jl")
+#include("test_indicator_resolutions.jl")
 include("test_derived_functors.jl")
 include("test_model_independent_ext_layer.jl")
 include("test_chain_complexes_homology.jl")

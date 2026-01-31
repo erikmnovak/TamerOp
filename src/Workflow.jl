@@ -591,12 +591,34 @@ Return the minimality report stored inside `res` (may be `nothing`).
 """
 minimality_report(res::ResolutionResult) = res.minimality
 
+# Forward minimality helpers for explicit resolution objects.
+minimality_report(res::DerivedFunctors.Resolutions.ProjectiveResolution{QQ};
+                  check_cover::Bool=true) =
+    DerivedFunctors.minimality_report(res; check_cover=check_cover)
+minimality_report(res::DerivedFunctors.Resolutions.InjectiveResolution{QQ};
+                  check_hull::Bool=true) =
+    DerivedFunctors.minimality_report(res; check_hull=check_hull)
+
 """
     is_minimal(res::ResolutionResult) -> Bool
 
 Return whether the resolution stored in `res` was proven minimal by the chosen backend.
 """
 is_minimal(res::ResolutionResult) = res.minimal
+
+is_minimal(res::DerivedFunctors.Resolutions.ProjectiveResolution{QQ};
+           check_cover::Bool=true) =
+    DerivedFunctors.is_minimal(res; check_cover=check_cover)
+is_minimal(res::DerivedFunctors.Resolutions.InjectiveResolution{QQ};
+           check_hull::Bool=true) =
+    DerivedFunctors.is_minimal(res; check_hull=check_hull)
+
+assert_minimal(res::DerivedFunctors.Resolutions.ProjectiveResolution{QQ};
+               check_cover::Bool=true) =
+    DerivedFunctors.assert_minimal(res; check_cover=check_cover)
+assert_minimal(res::DerivedFunctors.Resolutions.InjectiveResolution{QQ};
+               check_hull::Bool=true) =
+    DerivedFunctors.assert_minimal(res; check_hull=check_hull)
 
 
 

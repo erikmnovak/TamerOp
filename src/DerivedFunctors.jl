@@ -654,7 +654,7 @@ module Resolutions
 
     using ...CoreModules: QQ, ResolutionOptions
     using ...Modules: PModule, PMorphism
-    using ...FiniteFringe: FinitePoset, FringeModule, Upset, cover_edges
+    using ...FiniteFringe: FinitePoset, FringeModule, Upset, cover_edges, is_subset
     using ...AbelianCategories: kernel_with_inclusion
     using ...IndicatorResolutions
     using  ...IndicatorResolutions: _injective_hull, _cokernel_module
@@ -908,7 +908,7 @@ module Resolutions
             for j in 1:n_cod
                 Uj = cod_bases[j]
                 # Nonzero iff cod upset is contained in dom upset.
-                if FiniteFringe.is_subset(Uj, Ui)
+                if is_subset(Uj, Ui)
                     push!(I, j)
                     push!(J, i)
                     push!(V, one(QQ))
@@ -3475,7 +3475,7 @@ module Functoriality
 
     import ..GradedSpaces: dim
 
-    import ..ExtTorSpaces: _cochain_vector_from_morphism, split_cochain
+    import ..ExtTorSpaces: _cochain_vector_from_morphism, split_cochain, _blockdiag_on_hom_cochains, _morphism_to_vector
 
 
 
@@ -4939,7 +4939,7 @@ module Algebras
     # Graded-space interface (shared function objects).
     import ..GradedSpaces: degree_range, dim, basis, representative, coordinates, cycles, boundaries
 
-    import ..ExtTorSpaces: _cochain_vector_from_morphism
+    import ..ExtTorSpaces: _cochain_vector_from_morphism, split_cochain, _Ext_projective
     import ..Resolutions: _same_poset
 
 
@@ -6732,7 +6732,10 @@ using .Resolutions:
     minimality_report,
     ProjectiveMinimalityReport, InjectiveMinimalityReport,
     is_minimal, assert_minimal,
-    lift_injective_chainmap
+    lift_injective_chainmap,
+    _coeff_matrix_upsets,
+    _flatten_gens_at,
+    _solve_downset_postcompose_coeff
 
 using .ExtTorSpaces:
     Hom, HomSpace,
@@ -6750,7 +6753,10 @@ using .Functoriality:
     tor_map_first, tor_map_second,
     connecting_hom, connecting_hom_first,
     ExtLongExactSequenceSecond, ExtLongExactSequenceFirst,
-    TorLongExactSequenceFirst, TorLongExactSequenceSecond
+    TorLongExactSequenceFirst, TorLongExactSequenceSecond,
+    _precompose_on_hom_cochains_from_projective_coeff,
+    _tensor_map_on_tor_chains_from_projective_coeff,
+    _tor_blockdiag_map_on_chains
 
 using .Algebras:
     yoneda_product,
@@ -6778,7 +6784,6 @@ using .HomExtEngine:
     build_hom_tot_complex,
     build_hom_bicomplex_data,
     ext_dims_via_resolutions, pi0_count
-
 
 
 
