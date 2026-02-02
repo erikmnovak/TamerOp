@@ -1853,6 +1853,26 @@ function page_terms(ss::SpectralSequence{QQ}, r::Symbol)
     error("page_terms(ss,r): unsupported symbol")
 end
 
+# Internal helper used by page_terms_dict/page_dims_dict and higher-level wrappers.
+function _ss_page_data(ss::SpectralSequence{QQ}, r::Union{Int,Symbol})
+    if r isa Int
+        if r < 1
+            error("_ss_page_data: r must be >= 1")
+        end
+        if r >= ss.rmax_possible
+            return SSPageData{QQ}(r, ss.Einf_dims, ss.Einf_spaces)
+        end
+        if !haskey(ss.page_cache, r)
+            ss.page_cache[r] = _ss_compute_page_data(ss.DC, ss.Tot, ss.blocks, ss.first, r)
+        end
+        return ss.page_cache[r]
+    end
+    if r == :inf || r == :infty
+        return SSPageData{QQ}(ss.rmax_possible, ss.Einf_dims, ss.Einf_spaces)
+    end
+    error("_ss_page_data: unsupported symbol")
+end
+
 """
     dr_target(ss, r, (a,b)) -> Union{Tuple{Int,Int},Nothing}
 
@@ -2069,6 +2089,20 @@ function filtration_dims(ss::SpectralSequence{QQ}, t::Int)
     return out
 end
 
+function filtration_dims(ss::SpectralSequence{QQ}, p::Int, t::Int)
+    if t < ss.Tot.tmin || t > ss.Tot.tmax
+        return 0
+    end
+    tidx = t - ss.Tot.tmin + 1
+    if p <= ss.pmin
+        return size(ss.filt_img[1, tidx], 2)
+    elseif p >= ss.pmax
+        return 0
+    else
+        return size(ss.filt_img[p - ss.pmin + 1, tidx], 2)
+    end
+end
+
 function filtration_basis(ss::SpectralSequence{QQ}, p::Int, t::Int)
     if t < ss.Tot.tmin || t > ss.Tot.tmax
         return zeros(QQ, 0, 0)
@@ -2268,10 +2302,18 @@ function page_terms_dict(ss::SpectralSequence{QQ}, r::Union{Int,Symbol}; nonzero
     pd = _ss_page_data(ss, r)
     out = Dict{Tuple{Int,Int},SubquotientData{QQ}}()
     if nonzero_only
-        for (a, b) in ss.support
-            sq = pd.spaces[a - ss.DC.amin + 1, b - ss.DC.bmin + 1]
-            if sq.dimH != 0
-                out[(a,b)] = sq
+        if hasproperty(ss, :support)
+            for (a, b) in ss.support
+                sq = pd.spaces[a - ss.DC.amin + 1, b - ss.DC.bmin + 1]
+                if sq.dimH != 0
+                    out[(a,b)] = sq
+                end
+            end
+        else
+            for a in ss.DC.amin:ss.DC.amax
+                for b in ss.DC.bmin:ss.DC.bmax
+                    out[(a,b)] = pd.spaces[a - ss.DC.amin + 1, b - ss.DC.bmin + 1]
+                end
             end
         end
     else
@@ -2296,10 +2338,18 @@ function page_dims_dict(ss::SpectralSequence{QQ}, r::Union{Int,Symbol}; nonzero_
     pd = _ss_page_data(ss, r)
     out = Dict{Tuple{Int,Int},Int}()
     if nonzero_only
-        for (a, b) in ss.support
-            d = pd.dims[a - ss.DC.amin + 1, b - ss.DC.bmin + 1]
-            if d != 0
-                out[(a,b)] = d
+        if hasproperty(ss, :support)
+            for (a, b) in ss.support
+                d = pd.dims[a - ss.DC.amin + 1, b - ss.DC.bmin + 1]
+                if d != 0
+                    out[(a,b)] = d
+                end
+            end
+        else
+            for a in ss.DC.amin:ss.DC.amax
+                for b in ss.DC.bmin:ss.DC.bmax
+                    out[(a,b)] = pd.dims[a - ss.DC.amin + 1, b - ss.DC.bmin + 1]
+                end
             end
         end
     else
@@ -2461,7 +2511,7 @@ struct ExtensionProblem
     pieces::Vector{NamedTuple{(:a,:b,:p,:term),Tuple{Int,Int,Int,SubquotientData{QQ}}}}
     B::Matrix{QQ}
     Binv::Matrix{QQ}
-    ranges::Vector{UnitRange{Int}}
+    ranges::Dict{Tuple{Int,Int},UnitRange{Int}}
 end
 
 """
@@ -2481,16 +2531,28 @@ function extension_problem(ss::SpectralSequence{QQ}, t::Int)
     pd = _ss_page_data(ss, :inf)
 
     pieces = NamedTuple{(:a,:b,:p,:term),Tuple{Int,Int,Int,SubquotientData{QQ}}}[]
-    for (a, b) in ss.support
-        if a + b != t
-            continue
+    if hasproperty(ss, :support)
+        for (a, b) in ss.support
+            if a + b != t
+                continue
+            end
+            sq = pd.spaces[a - ss.DC.amin + 1, b - ss.DC.bmin + 1]
+            if sq.dimH == 0
+                continue
+            end
+            p = (ss.first == :vertical) ? a : b
+            push!(pieces, (a=a, b=b, p=p, term=sq))
         end
-        sq = pd.spaces[a - ss.DC.amin + 1, b - ss.DC.bmin + 1]
-        if sq.dimH == 0
-            continue
+    else
+        for a in ss.DC.amin:ss.DC.amax
+            for b in ss.DC.bmin:ss.DC.bmax
+                a + b == t || continue
+                sq = pd.spaces[a - ss.DC.amin + 1, b - ss.DC.bmin + 1]
+                sq.dimH == 0 && continue
+                p = (ss.first == :vertical) ? a : b
+                push!(pieces, (a=a, b=b, p=p, term=sq))
+            end
         end
-        p = (ss.first == :vertical) ? a : b
-        push!(pieces, (a=a, b=b, p=p, term=sq))
     end
 
     spl = split_total_cohomology(ss, t)

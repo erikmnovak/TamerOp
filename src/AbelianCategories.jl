@@ -24,7 +24,7 @@ using LinearAlgebra
 using SparseArrays
 
 import ..FiniteFringe
-using ..FiniteFringe: cover_edges
+using ..FiniteFringe: cover_edges, nvertices
 
 using ..CoreModules: QQ
 using ..ExactQQ: rrefQQ, rankQQ, nullspaceQQ, solve_fullcolumnQQ, colspaceQQ
@@ -55,7 +55,7 @@ export kernel_with_inclusion, kernel,
 "Kernel of f with inclusion iota : ker(f) to dom(f), degreewise."
 function kernel_with_inclusion(f::PMorphism{QQ}; cache::Union{Nothing,CoverCache}=nothing)
     M = f.dom
-    n = M.Q.n
+    n = nvertices(M.Q)
 
     basisK = Vector{Matrix{QQ}}(undef, n)
     K_dims = zeros(Int, n)
@@ -93,7 +93,7 @@ function kernel_with_inclusion(f::PMorphism{QQ}; cache::Union{Nothing,CoverCache
             # Induced map K(u) -> K(v): express M(u->v)*basisK[u] in basisK[v].
             T  = maps_u_M[j]
             Im = T * basisK[u]
-            X  = solve_fullcolumnQQ(basisK[v], Im)
+            X  = solve_fullcolumnQQ(basisK[v], Im; check_rhs=false)
 
             outu[j] = X
             ip = _find_sorted_index(preds[v], u)
@@ -121,7 +121,7 @@ Compute the image submodule Im subseteq cod(f) with the inclusion morphism iota:
 function image_with_inclusion(f::PMorphism{QQ}; cache::Union{Nothing,CoverCache}=nothing)
     N = f.cod
     Q = N.Q
-    n = Q.n
+    n = nvertices(Q)
 
     bases = Vector{Matrix{QQ}}(undef, n)
     dims  = zeros(Int, n)
@@ -180,7 +180,7 @@ end
 # the quotient q : E0 -> C.  The quotient is represented by surjections q_i whose
 # kernels are colspace(iota_i).
 function _cokernel_module(iota::PMorphism{QQ}; cache::Union{Nothing,CoverCache}=nothing)
-    E = iota.cod; Q = E.Q; n = Q.n
+    E = iota.cod; Q = E.Q; n = nvertices(Q)
     Cdims  = zeros(Int, n)
     qcomps = Vector{Matrix{QQ}}(undef, n)     # each is (dim C_i) x (dim E_i)
 
@@ -248,7 +248,7 @@ function _difference_morphism(f::PMorphism{QQ}, g::PMorphism{QQ})
     if f.dom !== g.dom || f.cod !== g.cod
         error("need parallel morphisms with the same domain and codomain")
     end
-    comps = Matrix{QQ}[f.comps[i] - g.comps[i] for i in 1:f.dom.Q.n]
+    comps = Matrix{QQ}[f.comps[i] - g.comps[i] for i in 1:nvertices(f.dom.Q)]
     return PMorphism{QQ}(f.dom, f.cod, comps)
 end
 
@@ -378,7 +378,7 @@ This method is implemented for QQ using exact rank computations.
 function is_monomorphism(f::PMorphism{QQ})
     Q = f.dom.Q
     @assert f.cod.Q === Q
-    for i in 1:Q.n
+    for i in 1:nvertices(Q)
         if rankQQ(f.comps[i]) != f.dom.dims[i]
             return false
         end
@@ -395,7 +395,7 @@ Implemented for QQ via exact ranks.
 function is_epimorphism(f::PMorphism{QQ})
     Q = f.dom.Q
     @assert f.cod.Q === Q
-    for i in 1:Q.n
+    for i in 1:nvertices(Q)
         if rankQQ(f.comps[i]) != f.cod.dims[i]
             return false
         end
@@ -543,8 +543,8 @@ function pushout(f::PMorphism{QQ}, g::PMorphism{QQ}; cache::Union{Nothing,CoverC
     S, iB, iC, pB, pC = direct_sum_with_maps(B, C)
     Q = S.Q
     # phi = iB o f - iC o g : A -> B oplus C
-    phi_comps = Vector{Matrix{QQ}}(undef, Q.n)
-    for u in 1:Q.n
+    phi_comps = Vector{Matrix{QQ}}(undef, nvertices(Q))
+    for u in 1:nvertices(Q)
         phi_comps[u] = iB.comps[u] * f.comps[u] - iC.comps[u] * g.comps[u]
     end
     phi = PMorphism{QQ}(A, S, phi_comps)
@@ -552,9 +552,9 @@ function pushout(f::PMorphism{QQ}, g::PMorphism{QQ}; cache::Union{Nothing,CoverC
     P, q = _cokernel_module(phi; cache=cache)
 
     # inB = q o iB, inC = q o iC
-    inB_comps = Vector{Matrix{QQ}}(undef, Q.n)
-    inC_comps = Vector{Matrix{QQ}}(undef, Q.n)
-    for u in 1:Q.n
+    inB_comps = Vector{Matrix{QQ}}(undef, nvertices(Q))
+    inC_comps = Vector{Matrix{QQ}}(undef, nvertices(Q))
+    for u in 1:nvertices(Q)
         inB_comps[u] = q.comps[u] * iB.comps[u]
         inC_comps[u] = q.comps[u] * iC.comps[u]
     end
@@ -728,17 +728,17 @@ function pullback(f::PMorphism{QQ}, g::PMorphism{QQ}; cache::Union{Nothing,Cover
     Q = S.Q
 
     # psi = f o pB - g o pC : B oplus C -> D
-    psi_comps = Vector{Matrix{QQ}}(undef, Q.n)
-    for u in 1:Q.n
+    psi_comps = Vector{Matrix{QQ}}(undef, nvertices(Q))
+    for u in 1:nvertices(Q)
         psi_comps[u] = f.comps[u] * pB.comps[u] - g.comps[u] * pC.comps[u]
     end
     psi = PMorphism{QQ}(S, D, psi_comps)
 
     P, iota = kernel_with_inclusion(psi; cache=cache)  # iota : P -> S
 
-    prB_comps = Vector{Matrix{QQ}}(undef, Q.n)
-    prC_comps = Vector{Matrix{QQ}}(undef, Q.n)
-    for u in 1:Q.n
+    prB_comps = Vector{Matrix{QQ}}(undef, nvertices(Q))
+    prC_comps = Vector{Matrix{QQ}}(undef, nvertices(Q))
+    for u in 1:nvertices(Q)
         prB_comps[u] = pB.comps[u] * iota.comps[u]
         prC_comps[u] = pC.comps[u] * iota.comps[u]
     end
@@ -824,7 +824,7 @@ function is_exact(ses::ShortExactSequence{QQ}; cache::Union{Nothing,CoverCache}=
     @assert p.cod === C
 
     # p o i = 0
-    for u in 1:B.Q.n
+    for u in 1:nvertices(B.Q)
         comp = p.comps[u] * i.comps[u]
         all(iszero, comp) || (ses.checked = true; ses.exact = false; return false)
     end
@@ -848,7 +848,7 @@ function is_exact(ses::ShortExactSequence{QQ}; cache::Union{Nothing,CoverCache}=
 
     # Compare subspaces at each vertex using ranks.
     Q = B.Q
-    for u in 1:Q.n
+    for u in 1:nvertices(Q)
         Au = incK.comps[u]
         Bu = incIm.comps[u]
         rA = rankQQ(Au)
@@ -891,8 +891,8 @@ function _induced_map_to_kernelQQ(g::PMorphism{QQ},
     @assert g.cod === kB.cod
     Kdom = kA.dom
     Kcod = kB.dom
-    comps = Vector{Matrix{QQ}}(undef, Q.n)
-    for u in 1:Q.n
+    comps = Vector{Matrix{QQ}}(undef, nvertices(Q))
+    for u in 1:nvertices(Q)
         rhs = g.comps[u] * kA.comps[u]  # B_u x dim kerA_u
         comps[u] = solve_fullcolumnQQ(kB.comps[u], rhs)  # dim kerB_u x dim kerA_u
     end
@@ -908,8 +908,8 @@ function _induced_map_from_cokernelQQ(h::PMorphism{QQ},
     @assert h.cod === qB.dom
     Cdom = qA.cod
     Ccod = qB.cod
-    comps = Vector{Matrix{QQ}}(undef, Q.n)
-    for u in 1:Q.n
+    comps = Vector{Matrix{QQ}}(undef, nvertices(Q))
+    for u in 1:nvertices(Q)
         Qsrc = qA.comps[u]
         rinv = _right_inverse_full_rowQQ(Qsrc)
         rhs = qB.comps[u] * h.comps[u]  # cokerB_u x A_u
@@ -952,7 +952,7 @@ function _check_commutative_squareQQ(g1::PMorphism{QQ}, f1::PMorphism{QQ},
     @assert f2.cod === g2.dom
     @assert f1.dom === f2.dom
     @assert g1.cod === g2.cod
-    for u in 1:Q.n
+    for u in 1:nvertices(Q)
         left = g1.comps[u] * f1.comps[u]
         right = g2.comps[u] * f2.comps[u]
         left == right || return false
@@ -1038,8 +1038,8 @@ function snake_lemma(top::ShortExactSequence{QQ},
     c2 = _induced_map_from_cokernelQQ(bottom.p, qB, qC)
 
     # Connecting morphism delta : ker(fC) -> coker(fA)
-    delta_comps = Vector{Matrix{QQ}}(undef, Q.n)
-    for u in 1:Q.n
+    delta_comps = Vector{Matrix{QQ}}(undef, nvertices(Q))
+    for u in 1:nvertices(Q)
         kdim = KerC.dims[u]
         if kdim == 0 || CokA.dims[u] == 0
             delta_comps[u] = zeros(QQ, CokA.dims[u], kdim)
@@ -1205,7 +1205,7 @@ function _direct_sum_many_with_maps(mods::AbstractVector{<:PModule{K}}) where {K
     m == 0 && error("_direct_sum_many_with_maps: need at least one module")
 
     Q = mods[1].Q
-    n = Q.n
+    n = nvertices(Q)
     for M in mods
         if M.Q !== Q
             error("_direct_sum_many_with_maps: modules must live on the same poset")
@@ -1426,7 +1426,7 @@ This is intended for quick REPL inspection. It prints:
 ASCII-only by design.
 """
 function Base.show(io::IO, M::PModule{K}) where {K}
-    nverts = M.Q.n
+    nverts = nvertices(M.Q)
     s, nnz, mx = _dims_stats(M.dims)
 
     print(io, "PModule(")
@@ -1449,7 +1449,7 @@ This is still cheap: it only scans `dims` once and does not compute ranks,
 images, kernels, etc.
 """
 function Base.show(io::IO, ::MIME"text/plain", M::PModule{K}) where {K}
-    nverts = M.Q.n
+    nverts = nvertices(M.Q)
     s, nnz, mx = _dims_stats(M.dims)
 
     println(io, "PModule")
@@ -1472,8 +1472,8 @@ Compact one-line summary for a vertexwise morphism of P-modules.
 We intentionally avoid any expensive linear algebra (ranks, images, etc.) here.
 """
 function Base.show(io::IO, f::PMorphism{K}) where {K}
-    n_dom = f.dom.Q.n
-    n_cod = f.cod.Q.n
+    n_dom = nvertices(f.dom.Q)
+    n_cod = nvertices(f.cod.Q)
 
     dom_sum, _, _ = _dims_stats(f.dom.dims)
     cod_sum, _, _ = _dims_stats(f.cod.dims)
@@ -1506,8 +1506,8 @@ intended per-vertex matrix sizes, without verifying them (verification can be
 added as a separate validator; printing should stay cheap and noninvasive).
 """
 function Base.show(io::IO, ::MIME"text/plain", f::PMorphism{K}) where {K}
-    n_dom = f.dom.Q.n
-    n_cod = f.cod.Q.n
+    n_dom = nvertices(f.dom.Q)
+    n_cod = nvertices(f.cod.Q)
 
     dom_sum, dom_nnz, dom_max = _dims_stats(f.dom.dims)
     cod_sum, cod_nnz, cod_max = _dims_stats(f.cod.dims)
@@ -1546,7 +1546,7 @@ Compact one-line summary for `Submodule`.
 function Base.show(io::IO, S::Submodule{K}) where {K}
     N = sub(S)
     M = ambient(S)
-    nverts = M.Q.n
+    nverts = nvertices(M.Q)
     sub_sum, _, _ = _dims_stats(N.dims)
     amb_sum, _, _ = _dims_stats(M.dims)
     print(io,
@@ -1565,7 +1565,7 @@ Verbose multi-line summary for `Submodule`. ASCII-only.
 function Base.show(io::IO, ::MIME"text/plain", S::Submodule{K}) where {K}
     N = sub(S)
     M = ambient(S)
-    nverts = M.Q.n
+    nverts = nvertices(M.Q)
 
     sub_sum, sub_nnz, sub_max = _dims_stats(N.dims)
     amb_sum, amb_nnz, amb_max = _dims_stats(M.dims)
@@ -1596,7 +1596,7 @@ Compact one-line summary for `ShortExactSequence`.
 NOTE: This does NOT call `is_exact(ses)`; it only reports cached status.
 """
 function Base.show(io::IO, ses::ShortExactSequence{K}) where {K}
-    nverts = ses.B.Q.n
+    nverts = nvertices(ses.B.Q)
     Asum, _, _ = _dims_stats(ses.A.dims)
     Bsum, _, _ = _dims_stats(ses.B.dims)
     Csum, _, _ = _dims_stats(ses.C.dims)
@@ -1625,7 +1625,7 @@ Verbose multi-line summary for `ShortExactSequence`. ASCII-only.
 NOTE: This does NOT call `is_exact(ses)`; it only reports cached status.
 """
 function Base.show(io::IO, ::MIME"text/plain", ses::ShortExactSequence{K}) where {K}
-    nverts = ses.B.Q.n
+    nverts = nvertices(ses.B.Q)
 
     Asum, Annz, Amax = _dims_stats(ses.A.dims)
     Bsum, Bnnz, Bmax = _dims_stats(ses.B.dims)
@@ -1670,7 +1670,7 @@ end
 Compact one-line summary for `SnakeLemmaResult`.
 """
 function Base.show(io::IO, sn::SnakeLemmaResult{K}) where {K}
-    nverts = sn.delta.dom.Q.n
+    nverts = nvertices(sn.delta.dom.Q)
     kerCsum, _, _ = _dims_stats(sn.kerC[1].dims)
     cokAsum, _, _ = _dims_stats(sn.cokA[1].dims)
 
@@ -1688,7 +1688,7 @@ end
 Verbose multi-line summary for `SnakeLemmaResult`. ASCII-only.
 """
 function Base.show(io::IO, ::MIME"text/plain", sn::SnakeLemmaResult{K}) where {K}
-    nverts = sn.delta.dom.Q.n
+    nverts = nvertices(sn.delta.dom.Q)
 
     println(io, "SnakeLemmaResult")
     println(io, "  kerA -> kerB -> kerC --delta--> cokerA -> cokerB -> cokerC")

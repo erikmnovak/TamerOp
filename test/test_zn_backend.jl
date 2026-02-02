@@ -51,7 +51,7 @@ mk_inj(b, coords; id=:E) = FZ.IndInj(mk_face(length(b), coords), b; id=id)
     # Resolution wrappers: compare against "encode + resolution" directly.
     enc1 = DF.encode_pmodule_from_flange(FG1, enc)
     res_wrap = DF.projective_resolution_Zn(FG1, enc, res; return_encoding=true)
-    @test res_wrap.P.leq == enc1.P.leq
+    @test FF.poset_equal(res_wrap.P, enc1.P)
     @test DF.betti_table(res_wrap.res) == DF.betti_table(DF.projective_resolution(enc1.M, res))
 
     res_min = PM.ResolutionOptions(maxlen=3, minimal=true, check=true)
@@ -212,7 +212,7 @@ end
 
         # The encoding poset should be a 3-chain:
         #   left of b  <  between  <  right of c.
-        @test P.n == 3
+        @test PM.nvertices(P) == 3
         @test Set(FF.cover_edges(P)) == Set([(1,2),(2,3)])
 
         # In 1D, critical coordinates come from:
@@ -235,7 +235,7 @@ end
 
         # Compare with the convenience wrapper.
         P2, H2, pi2 = PM.encode_from_flange(FG, enc)
-        @test P.n == P2.n
+        @test PM.nvertices(P) == PM.nvertices(P2)
         @test Set(FF.cover_edges(P)) == Set(FF.cover_edges(P2))
 
         # Fiber dimensions should match on all sampled degrees.
@@ -282,7 +282,7 @@ end
     P, M, pi = DF.encode_pmodule_from_flange(FG, enc)
 
     # Expected: only 3 regions along coordinate 1 (below, inside, above), and 1 slab along coord 2.
-    @test P.n == 3
+    @test PM.nvertices(P) == 3
 
     # pi should ignore coordinate 2
     for g1 in -3:4
@@ -295,7 +295,7 @@ end
     for g1 in -3:3, h1 in g1:4
         ug = PM.locate(pi, [g1, 0])
         uh = PM.locate(pi, [h1, 0])
-        @test P.leq[ug, uh]
+        @test FF.leq(P, ug, uh)
     end
 
     # Dimension consistency on a representative grid of lattice points
@@ -323,7 +323,7 @@ end
     M1, M2 = Ms
 
     # Critical coordinates along g1 are {0,1,2,3} giving <= 5 slabs => P.n <= 5.
-    @test P.n <= 5
+    @test PM.nvertices(P) <= 5
 
     for g1 in -1:4, g2 in (-5, 0, 5)
         g = [g1, g2]
@@ -356,7 +356,7 @@ end
     M2 = IR.pmodule_from_fringe(H2)
 
     # Sanity: the pushed module is defined on P
-    @test length(M2.dims) == P.n
+    @test length(M2.dims) == PM.nvertices(P)
 end
 
 @testset "ZnEncodingMap region_weights: exact methods agree" begin
@@ -501,21 +501,24 @@ end
         enc = PM.EncodingOptions(backend=:zn, max_regions=1000)
         Penc, Henc, pi = PM.encode_from_flange(FG, enc)
 
-        Q = PM.Invariants.region_poset(pi)
-        @test Q.n == Penc.n
-        @test Q.leq == Penc.leq
+        Q = PM.Invariants.region_poset(pi; poset_kind = :signature)
+        @test PM.nvertices(Q) == PM.nvertices(Penc)
+        @test FF.poset_equal(Q, Penc)
 
         # Cached repeat call should return the exact same poset object.
-        Q2 = PM.Invariants.region_poset(pi)
+        Q2 = PM.Invariants.region_poset(pi; poset_kind = :signature)
         @test Q2 === Q
+
+        Qdense = PM.Invariants.region_poset(pi; poset_kind = :dense)
+        @test FF.leq_matrix(Q) == FF.leq_matrix(Qdense)
 
         # Projected arrangement should work without requiring pi.P.
         arr = PM.projected_arrangement(pi; dirs=[[1.0]])
-        @test arr.Q.leq == Penc.leq
+        @test FF.poset_equal(arr.Q, Penc)
 
         # And should accept a provided Q for maximum speed.
         arr2 = PM.projected_arrangement(pi; dirs=[[1.0]], Q=Penc)
-        @test arr2.Q.leq == Penc.leq
+        @test FF.poset_equal(arr2.Q, Penc)
     end
 
     # -------------------------------------------------------------------------
@@ -543,20 +546,24 @@ end
             F2 = PLP.PLFringe(PLP.PLUpset[], [D], zeros(QQ, 1, 0))
 
             enc = PM.EncodingOptions(backend=:pl, max_regions=10_000)
-            Ppl, Hpl, pipl = PLP.encode_from_PL_fringes(F1, F2, enc)
+            Ppl, Hpl, pipl = PLP.encode_from_PL_fringes(F1, F2, enc; poset_kind = :signature)
+            @test Ppl isa PM.ZnEncoding.SignaturePoset
 
-            Qpl = PM.Invariants.region_poset(pipl)
-            @test Qpl.n == Ppl.n
-            @test Qpl.leq == Ppl.leq
+            Qpl = PM.Invariants.region_poset(pipl; poset_kind = :signature)
+            @test PM.nvertices(Qpl) == PM.nvertices(Ppl)
+            @test FF.poset_equal(Qpl, Ppl)
 
-            Qpl2 = PM.Invariants.region_poset(pipl)
+            Qpl2 = PM.Invariants.region_poset(pipl; poset_kind = :signature)
             @test Qpl2 === Qpl
 
+            Qpl_dense = PM.Invariants.region_poset(pipl; poset_kind = :dense)
+            @test FF.leq_matrix(Qpl) == FF.leq_matrix(Qpl_dense)
+
             arr = PM.projected_arrangement(pipl; dirs=[[1.0]])
-            @test arr.Q.leq == Ppl.leq
+            @test FF.poset_equal(arr.Q, Ppl)
 
             arr2 = PM.projected_arrangement(pipl; dirs=[[1.0]], Q=Ppl)
-            @test arr2.Q.leq == Ppl.leq
+            @test FF.poset_equal(arr2.Q, Ppl)
         end
     end
 
@@ -575,20 +582,51 @@ end
             Downs = [D]
 
             enc = PM.EncodingOptions(backend=:pl_backend, max_regions=10_000)
-            Pbx, Hbx, pibx = PB.encode_fringe_boxes(Ups, Downs, enc)
+            Pbx, Hbx, pibx = PB.encode_fringe_boxes(Ups, Downs, enc; poset_kind = :signature)
+            @test Pbx isa PM.ZnEncoding.SignaturePoset
 
-            Qbx = PM.Invariants.region_poset(pibx)
-            @test Qbx.n == Pbx.n
-            @test Qbx.leq == Pbx.leq
+            Qbx = PM.Invariants.region_poset(pibx; poset_kind = :signature)
+            @test PM.nvertices(Qbx) == PM.nvertices(Pbx)
+            @test FF.poset_equal(Qbx, Pbx)
 
-            Qbx2 = PM.Invariants.region_poset(pibx)
+            Qbx2 = PM.Invariants.region_poset(pibx; poset_kind = :signature)
             @test Qbx2 === Qbx
 
+            Qbx_dense = PM.Invariants.region_poset(pibx; poset_kind = :dense)
+            @test FF.leq_matrix(Qbx) == FF.leq_matrix(Qbx_dense)
+
             arr = PM.projected_arrangement(pibx; dirs=[[1.0]])
-            @test arr.Q.leq == Pbx.leq
+            @test FF.poset_equal(arr.Q, Pbx)
 
             arr2 = PM.projected_arrangement(pibx; dirs=[[1.0]], Q=Pbx)
-            @test arr2.Q.leq == Pbx.leq
+            @test FF.poset_equal(arr2.Q, Pbx)
+
+            Mbx = IR.pmodule_from_fringe(Hbx)
+            @test PM.rank_map(Mbx, 1, 1) >= 0
         end
+    end
+end
+
+@testset "encode poset_kind=:dense yields FinitePoset" begin
+    if isdefined(PM, :PLBackend)
+        PB = PM.PLBackend
+        Ups = [PB.BoxUpset([0.0])]
+        Downs = [PB.BoxDownset([2.0])]
+        enc = PM.EncodingOptions(backend=:pl_backend, max_regions=10_000, poset_kind=:dense)
+        P, _H, _pi = PM.encode(Ups, Downs, enc)
+        @test P isa PM.FinitePoset
+    end
+
+    PLP = PM.PLPolyhedra
+    if PLP.HAVE_POLY
+        n = 1
+        Uhp = PLP.make_hpoly([-1.0], 0.0)
+        Dhp = PLP.make_hpoly([1.0], 2.0)
+        U = PLP.PLUpset(PLP.PolyUnion(n, [Uhp]))
+        D = PLP.PLDownset(PLP.PolyUnion(n, [Dhp]))
+        F = PLP.PLFringe([U], [D], ones(QQ, 1, 1))
+        enc = PM.EncodingOptions(backend=:pl, max_regions=10_000, poset_kind=:dense)
+        P, _H, _pi = PM.encode(F, enc)
+        @test P isa PM.FinitePoset
     end
 end

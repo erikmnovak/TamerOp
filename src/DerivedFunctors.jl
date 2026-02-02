@@ -1,5 +1,7 @@
 module DerivedFunctors
 
+using ..CoreModules: QQ, EncodingOptions, ResolutionOptions, DerivedFunctorOptions
+
 """
 Utils: shared low-level utilities for the derived-functors layer.
 
@@ -147,7 +149,7 @@ module HomExtEngine
     using SparseArrays
     using ...CoreModules: QQ
     using ...ExactQQ: QQ, rankQQ, rankQQ_dim
-    using ...FiniteFringe: FinitePoset, Upset, Downset, cover_edges
+    using ...FiniteFringe: AbstractPoset, FinitePoset, Upset, Downset, cover_edges, nvertices
     using ...IndicatorTypes: UpsetPresentation, DownsetCopresentation
 
     """
@@ -160,9 +162,9 @@ module HomExtEngine
 
     Used internally to compute connected components of intersections `U cap D`.
     """
-    function _hasse_undirected(P::FinitePoset)
+    function _hasse_undirected(P::AbstractPoset)
         CE = cover_edges(P)
-        n = P.n
+        n = nvertices(P)
         adj = [Int[] for _ in 1:n]
         for (a, b) in CE
             push!(adj[a], b)
@@ -180,14 +182,14 @@ module HomExtEngine
     across many pairs (U, D). This cache memoizes results keyed by the pair of masks.
     """
     mutable struct CompCache
-        P::FinitePoset
+        P::AbstractPoset
         adj::Vector{Vector{Int}}
 
         components_of_mask::Dict{BitVector, Tuple{Vector{Int}, Int}}
         components_of_intersection::Dict{Tuple{BitVector,BitVector}, Tuple{Vector{Int}, Int}}
         component_inclusion_matrix::Dict{Tuple{UInt,UInt,UInt,UInt,Type},SparseMatrixCSC}
 
-        function CompCache(P::FinitePoset)
+        function CompCache(P::AbstractPoset)
             adj = _hasse_undirected(P)
             return new(P, adj,
                        Dict{BitVector, Tuple{Vector{Int}, Int}}(),
@@ -239,7 +241,7 @@ module HomExtEngine
     Compute connected components of the intersection mask `U.mask .& D.mask` in the undirected
     Hasse (cover) graph of the finite poset `P`.
     """
-    function _components_of_intersection(P::FinitePoset, U::Upset, D::Downset)
+    function _components_of_intersection(P::AbstractPoset, U::Upset, D::Downset)
         adj = _hasse_undirected(P)
         return _components_of_mask(adj, U.mask .& D.mask)
     end
@@ -383,7 +385,7 @@ module HomExtEngine
 
     Size of a block corresponding to `(U cap D)` in the component basis.
     """
-    function size_block(P::FinitePoset, U::Upset, D::Downset)
+    function size_block(P::AbstractPoset, U::Upset, D::Downset)
         _, ncomp = _components_of_intersection(P, U, D)
         return ncomp
     end
@@ -627,7 +629,7 @@ module HomExtEngine
     Return the number of connected components of `U cap D` in the undirected Hasse (cover) graph
     of the finite poset `P`.
     """
-    function pi0_count(P::FinitePoset, U::Upset, D::Downset)
+    function pi0_count(P::AbstractPoset, U::Upset, D::Downset)
         C = CompCache(P)
         _, ncomp = _components_cached!(C, U, 0, D, 0)
         return ncomp
@@ -654,11 +656,12 @@ module Resolutions
 
     using ...CoreModules: QQ, ResolutionOptions
     using ...Modules: PModule, PMorphism
-    using ...FiniteFringe: FinitePoset, FringeModule, Upset, cover_edges, is_subset
+    using ...FiniteFringe: AbstractPoset, FinitePoset, FringeModule, Upset, cover_edges, is_subset,
+                           leq, nvertices, poset_equal, upset_indices, downset_indices
     using ...AbelianCategories: kernel_with_inclusion
     using ...IndicatorResolutions
     using  ...IndicatorResolutions: _injective_hull, _cokernel_module
-    using ...FiniteFringe: FinitePoset
+    using ...FiniteFringe: AbstractPoset
     using ...ExactQQ: SparseRREFAugmented, SparseRow, _sparse_rref_push_augmented!
 
 
@@ -668,18 +671,8 @@ module Resolutions
     # Poset comparison utility
     # ----------------------------
 
-    function _same_poset(Q1::FinitePoset, Q2::FinitePoset)::Bool
-        # The leq-matrix is the canonical source of truth.
-        if Q1.n != Q2.n
-            return false
-        end
-        if Q1.leq != Q2.leq
-            return false
-        end
-
-        C1 = cover_edges(Q1)
-        C2 = cover_edges(Q2)
-        return convert(BitMatrix, C1) == convert(BitMatrix, C2)
+    function _same_poset(Q1::AbstractPoset, Q2::AbstractPoset)::Bool
+        return poset_equal(Q1, Q2)
     end
 
     # ----------------------------
@@ -709,14 +702,12 @@ module Resolutions
         return out
     end
 
-    function _active_upset_indices(P::FinitePoset, base_vertices::Vector{Int})
-        active = [Int[] for _ in 1:P.n]
+    function _active_upset_indices(P::AbstractPoset, base_vertices::Vector{Int})
+        active = [Int[] for _ in 1:nvertices(P)]
         @inbounds for i in 1:length(base_vertices)
             p = base_vertices[i]
-            for u in 1:P.n
-                if P.leq[p, u]
-                    push!(active[u], i)
-                end
+            for u in upset_indices(P, p)
+                push!(active[u], i)
             end
         end
         return active
@@ -725,7 +716,7 @@ module Resolutions
 
 
     """
-        _active_downset_indices(P::FinitePoset, base_vertices::Vector{Int}) -> Vector{Vector{Int}}
+        _active_downset_indices(P::AbstractPoset, base_vertices::Vector{Int}) -> Vector{Vector{Int}}
 
     For a direct sum of principal downsets
 
@@ -735,19 +726,17 @@ module Resolutions
 
     Convention:
     - A principal downset Dn(v) contains u iff u <= v.
-    - Summand i is active at u iff P.leq[u, base_vertices[i]].
+    - Summand i is active at u iff leq(P, u, base_vertices[i]).
 
     The returned lists are in increasing summand index order. This matches the fiber
     basis ordering used in `_injective_hull` and makes coefficient extraction stable.
     """
-    function _active_downset_indices(P::FinitePoset, base_vertices::Vector{Int})
-        active = [Int[] for _ in 1:P.n]
+    function _active_downset_indices(P::AbstractPoset, base_vertices::Vector{Int})
+        active = [Int[] for _ in 1:nvertices(P)]
         for i in 1:length(base_vertices)
             v = base_vertices[i]
-            for u in 1:P.n
-                if P.leq[u, v]
-                    push!(active[u], i)
-                end
+            for u in downset_indices(P, v)
+                push!(active[u], i)
             end
         end
         return active
@@ -776,7 +765,7 @@ module Resolutions
     To read the scalar for a map into k[Dn(w)], evaluate at u = w (the codomain
     base vertex), where the codomain generator is visible.
     """
-    function _coeff_matrix_downsets(P::FinitePoset,
+    function _coeff_matrix_downsets(P::AbstractPoset,
                                     dom_bases::Vector{Int},
                                     cod_bases::Vector{Int},
                                     f::PMorphism{QQ})
@@ -837,7 +826,7 @@ module Resolutions
     allocations and to exploit sorted active lists.
     - Assembles as sparse triplets, then calls `sparse(...)` once.
     """
-    function _coeff_matrix_upsets(P::FinitePoset,
+    function _coeff_matrix_upsets(P::AbstractPoset,
                                 dom_bases::Vector{Int},
                                 cod_bases::Vector{Int},
                                 f::PMorphism{QQ})
@@ -1557,7 +1546,7 @@ module Resolutions
             br = cod_bases[r]
             for c in 1:n_dom
                 bc = dom_bases[c]
-                if Q.leq[br, bc]   # br <= bc
+                if leq(Q, br, bc)   # br <= bc
                     idx += 1
                     var_idx[r, c] = idx
                 end
@@ -1794,12 +1783,12 @@ module Resolutions
     end
 
     # Pad a projective resolution with zeros so Ext(M,N; maxdeg=d) always has tmax=d.
-    function _zero_pmodule(Q::FinitePoset)
+    function _zero_pmodule(Q::AbstractPoset)
         edge = Dict{Tuple{Int,Int},Matrix{QQ}}()
         for (u,v) in cover_edges(Q)
             edge[(u,v)] = zeros(QQ, 0, 0)
         end
-        return PModule{QQ}(Q, zeros(Int, Q.n), edge)
+        return PModule{QQ}(Q, zeros(Int, nvertices(Q)), edge)
     end
 
     function _pad_projective_resolution!(res::ProjectiveResolution{QQ}, maxdeg::Int)
@@ -1818,7 +1807,7 @@ module Resolutions
             # Add the zero differential d_a : P_a -> P_{a-1} as a PMorphism.
             dom = res.Pmods[a+1]   # P_a
             cod = res.Pmods[a]     # P_{a-1}
-            comps = [zeros(QQ, cod.dims[v], dom.dims[v]) for v in 1:Q.n]
+            comps = [zeros(QQ, cod.dims[v], dom.dims[v]) for v in 1:nvertices(Q)]
             push!(res.d_mor, PMorphism{QQ}(dom, cod, comps))
 
             # Also pad the matrix-on-generators representation.
@@ -1854,7 +1843,8 @@ module ExtTorSpaces
 
     using ...IndicatorTypes: UpsetPresentation, DownsetCopresentation
     using ...Modules: PModule, PMorphism, map_leq, cover_cache
-    using ...FiniteFringe: FinitePoset, FringeModule, fiber_dimension, Upset, Downset
+    using ...FiniteFringe: AbstractPoset, FinitePoset, FringeModule, fiber_dimension, Upset, Downset,
+                           leq, leq_matrix, poset_equal, poset_equal_opposite, nvertices
     using ...AbelianCategories: kernel_with_inclusion
     using ...IndicatorResolutions: pmodule_from_fringe, indicator_resolutions,
         minimal_upset_presentation_one_step, minimal_downset_copresentation_one_step,
@@ -2113,7 +2103,7 @@ module ExtTorSpaces
         # NOTE: We store these as explicit fields (rather than via Base.getproperty shims)
         # so that field access stays type-stable and fast, and so the API has a single
         # canonical set of names.
-        Q::FinitePoset
+        Q::AbstractPoset
         M::PModule{K}
 
         # Projective resolution data and target module.
@@ -2660,7 +2650,7 @@ module ExtTorSpaces
     # This mirrors `_cochain_vector_from_morphism` but is specialized to projectives, and
     # it uses precomputed `active` upset indices for speed/stability.
     function _cochain_vector_from_projective_morphism(
-        Q::FinitePoset,
+        Q::AbstractPoset,
         bases::Vector{Int},
         active::Vector{Vector{Int}},
         offs::Vector{Int},
@@ -3069,8 +3059,8 @@ module ExtTorSpaces
 
     # NOTE: The maximum computed Tor degree is (length(T.dims) - 1).
 
-    function _op_poset(P::FinitePoset)
-        leq = transpose(P.leq)
+    function _op_poset(P::AbstractPoset)
+        leq = transpose(leq_matrix(P))
         return FinitePoset(leq; check=false)
     end
 
@@ -3108,7 +3098,7 @@ module ExtTorSpaces
     # Small helper used for defensive checks when the user supplies a precomputed resolution.
     # (We avoid requiring object identity `===` and instead check structural equality.)
     function _same_pmodule(M::PModule{QQ}, N::PModule{QQ})
-        return (M.Q.leq == N.Q.leq) && (M.dims == N.dims) && (M.edge_maps == N.edge_maps)
+        return poset_equal(M.Q, N.Q) && (M.dims == N.dims) && (M.edge_maps == N.edge_maps)
     end
 
     # Internal implementation: resolve the first argument (existing Tor behavior).
@@ -3117,7 +3107,7 @@ module ExtTorSpaces
                                 res::Union{Nothing, ProjectiveResolution{QQ}}=nothing)
         Pop = Rop.Q
         P = _op_poset(Pop)
-        @assert L.Q.leq == P.leq
+        @assert poset_equal(L.Q, P)
 
         # Projective resolution of Rop as a Pop module.
         if res === nothing
@@ -3183,7 +3173,7 @@ module ExtTorSpaces
                                 res::Union{Nothing, ProjectiveResolution{QQ}}=nothing)
         Pop = Rop.Q
         P = _op_poset(Pop)
-        @assert L.Q.leq == P.leq
+        @assert poset_equal(L.Q, P)
 
         # Projective resolution of L as a P module.
         resL = (res === nothing) ? projective_resolution(L, ResolutionOptions(maxlen=maxdeg)) : res
@@ -3471,6 +3461,7 @@ module Functoriality
     import ...ExactQQ: solve_fullcolumnQQ
 
     using ...Modules: PModule, PMorphism, map_leq
+    import ...FiniteFringe: nvertices, leq, poset_equal
     using ...ChainComplexes
     using ...AbelianCategories
 
@@ -3892,11 +3883,11 @@ module Functoriality
         for k in 0:upto
             active_M[k+1] = Dict{Int, Vector{Int}}()
             cod_bases_k = resM.gens[k+1]  # indices in the direct sum decomposition of P_k(M)
-            for u in 1:resM.M.Q.n
+            for u in 1:nvertices(resM.M.Q)
                 allowed = Int[]
                 for j in 1:length(cod_bases_k)
                     v = cod_bases_k[j]
-                    if resM.M.Q.leq[v, u]
+                    if leq(resM.M.Q, v, u)
                         push!(allowed, j)
                     end
                 end
@@ -4494,16 +4485,26 @@ module Functoriality
         Tor_s(Rop, L) -> Tor_s(Rop', L)
     in the chosen homology bases.
     """
-    function tor_map_first(T1::TorSpaceSecond{QQ}, T2::TorSpaceSecond{QQ}, f::PMorphism{QQ}; s::Int)
-        @assert T1.resL.M.Q.leq == T2.resL.M.Q.leq
+    function tor_map_first(T1::TorSpaceSecond{QQ}, T2::TorSpaceSecond{QQ}, f::PMorphism{QQ};
+        s::Union{Nothing,Int}=nothing,
+        n::Union{Nothing,Int}=nothing
+    )
+        s === nothing && (s = n)
+        s === nothing && error("tor_map_first: provide s or n")
+        @assert poset_equal(T1.resL.M.Q, T2.resL.M.Q)
         @assert T1.resL.gens == T2.resL.gens
-        @assert f.dom.Q.leq == T1.Rop.Q.leq
-        @assert f.cod.Q.leq == T2.Rop.Q.leq
+        @assert poset_equal(f.dom.Q, T1.Rop.Q)
+        @assert poset_equal(f.cod.Q, T2.Rop.Q)
 
         gens_s = T1.resL.gens[s + 1]
         F = _tor_blockdiag_map_on_chains(f, gens_s, T1.offsets[s + 1], T2.offsets[s + 1])
         return ChainComplexes.induced_map_on_homology(T1.homol[s + 1], T2.homol[s + 1], F)
     end
+
+    tor_map_first(f::PMorphism{QQ}, T1::TorSpaceSecond{QQ}, T2::TorSpaceSecond{QQ};
+        s::Union{Nothing,Int}=nothing,
+        n::Union{Nothing,Int}=nothing
+    ) = tor_map_first(T1, T2, f; s=s, n=n)
 
     """
         tor_map_second(T1, T2, g; s)
@@ -4516,10 +4517,15 @@ module Functoriality
         Tor_s(Rop, L) -> Tor_s(Rop, L')
     in the chosen homology bases.
     """
-    function tor_map_second(T1::TorSpaceSecond{QQ}, T2::TorSpaceSecond{QQ}, g::PMorphism{QQ}; s::Int)
-        @assert T1.Rop.Q.leq == T2.Rop.Q.leq
-        @assert g.dom.Q.leq == T1.resL.M.Q.leq
-        @assert g.cod.Q.leq == T2.resL.M.Q.leq
+    function tor_map_second(T1::TorSpaceSecond{QQ}, T2::TorSpaceSecond{QQ}, g::PMorphism{QQ};
+        s::Union{Nothing,Int}=nothing,
+        n::Union{Nothing,Int}=nothing
+    )
+        s === nothing && (s = n)
+        s === nothing && error("tor_map_second: provide s or n")
+        @assert poset_equal(T1.Rop.Q, T2.Rop.Q)
+        @assert poset_equal(g.dom.Q, T1.resL.M.Q)
+        @assert poset_equal(g.cod.Q, T2.resL.M.Q)
 
         # Lift g to a chain map between the chosen projective resolutions.
         coeffs = _lift_pmodule_map_to_projective_resolution_chainmap_coeff(T1.resL, T2.resL, g; upto=s)
@@ -4532,6 +4538,11 @@ module Functoriality
         )
         return ChainComplexes.induced_map_on_homology(T1.homol[s + 1], T2.homol[s + 1], F)
     end
+
+    tor_map_second(g::PMorphism{QQ}, T1::TorSpaceSecond{QQ}, T2::TorSpaceSecond{QQ};
+        s::Union{Nothing,Int}=nothing,
+        n::Union{Nothing,Int}=nothing
+    ) = tor_map_second(T1, T2, g; s=s, n=n)
 
     # ============================================================
     # Functoriality for TorSpace (resolve FIRST variable)
@@ -4552,12 +4563,22 @@ module Functoriality
     - The chain-level map is block-diagonal over the resolution summands: each summand
     is a copy of L_u, and we apply g_u on that block.
     """
-    function tor_map_second(T1::TorSpace{QQ}, T2::TorSpace{QQ}, g::PMorphism{QQ}; s::Int)
+    function tor_map_second(T1::TorSpace{QQ}, T2::TorSpace{QQ}, g::PMorphism{QQ};
+        s::Union{Nothing,Int}=nothing,
+        n::Union{Nothing,Int}=nothing
+    )
+        s === nothing && (s = n)
+        s === nothing && error("tor_map_second: provide s or n")
         @assert T1.resRop.gens == T2.resRop.gens
         gens_s = T1.resRop.gens[s + 1]
         F = _tor_blockdiag_map_on_chains(g, gens_s, T1.offsets[s + 1], T2.offsets[s + 1])
         return ChainComplexes.induced_map_on_homology(T1.homol[s+1], T2.homol[s+1], F)
     end
+
+    tor_map_second(g::PMorphism{QQ}, T1::TorSpace{QQ}, T2::TorSpace{QQ};
+        s::Union{Nothing,Int}=nothing,
+        n::Union{Nothing,Int}=nothing
+    ) = tor_map_second(T1, T2, g; s=s, n=n)
 
     """
         tor_map_first(T1::TorSpace{QQ}, T2::TorSpace{QQ}, f::PMorphism{QQ}; s::Int) -> Matrix{QQ}
@@ -4573,7 +4594,12 @@ module Functoriality
     - Tensor that chain map with L (using the same helper as the Tor boundary construction)
     - Pass to induced map on homology.
     """
-    function tor_map_first(T1::TorSpace{QQ}, T2::TorSpace{QQ}, f::PMorphism{QQ}; s::Int)
+    function tor_map_first(T1::TorSpace{QQ}, T2::TorSpace{QQ}, f::PMorphism{QQ};
+        s::Union{Nothing,Int}=nothing,
+        n::Union{Nothing,Int}=nothing
+    )
+        s === nothing && (s = n)
+        s === nothing && error("tor_map_first: provide s or n")
         # Lift f to a chain map between the two resolutions (must be compatible).
         coeffs = _lift_pmodule_map_to_projective_resolution_chainmap_coeff(T1.resRop, T2.resRop, f; upto=s)
         coeff = coeffs[s+1]
@@ -4587,6 +4613,11 @@ module Functoriality
 
         return ChainComplexes.induced_map_on_homology(T1.homol[s+1], T2.homol[s+1], F)
     end
+
+    tor_map_first(f::PMorphism{QQ}, T1::TorSpace{QQ}, T2::TorSpace{QQ};
+        s::Union{Nothing,Int}=nothing,
+        n::Union{Nothing,Int}=nothing
+    ) = tor_map_first(T1, T2, f; s=s, n=n)
 
     # -----------------------------------------------------------------------------
     # Connecting morphisms for Tor long exact sequences
@@ -4792,7 +4823,7 @@ module Functoriality
         A = i.dom
         B = i.cod
         C = p.cod
-        @assert B.Q.leq == A.Q.leq && B.Q.leq == C.Q.leq
+        @assert poset_equal(B.Q, A.Q) && poset_equal(B.Q, C.Q)
         @assert i.cod == p.dom
 
         # Shared resolution of Rop, padded out to maxdeg.
@@ -4809,7 +4840,12 @@ module Functoriality
         pH = [tor_map_second(TB, TC, p; s=s) for s in 0:maxdeg]
 
         # Connecting maps delta_s: Tor_s(Rop,C) -> Tor_{s-1}(Rop,A) for s = 1..maxdeg.
-        delta = [_connecting_tor(TA, TB, TC, i, p; s=s) for s in 1:maxdeg]
+        # Store a dummy zero map at index 1 (s=0) for consistent 1-based indexing.
+        delta = Vector{Matrix{QQ}}(undef, maxdeg + 1)
+        delta[1] = zeros(QQ, 0, dim(TC, 0))
+        for s in 1:maxdeg
+            delta[s + 1] = _connecting_tor(TA, TB, TC, i, p; s=s)
+        end
 
         return TorLongExactSequenceSecond{QQ}(Rop, A, B, C, i, p, TA, TB, TC, iH, pH, delta, maxdeg)
     end
@@ -4889,7 +4925,7 @@ module Functoriality
         A = i.dom
         B = i.cod
         C = p.cod
-        @assert B.Q.leq == A.Q.leq && B.Q.leq == C.Q.leq
+        @assert poset_equal(B.Q, A.Q) && poset_equal(B.Q, C.Q)
         @assert i.cod == p.dom
 
         # Shared resolution of L, padded out to maxdeg.
@@ -4906,7 +4942,12 @@ module Functoriality
         pH = [tor_map_first(TB, TC, p; s=s) for s in 0:maxdeg]
 
         # Connecting maps delta_s: Tor_s(C,L) -> Tor_{s-1}(A,L) for s = 1..maxdeg.
-        delta = [_connecting_tor(TA, TB, TC, i, p; s=s) for s in 1:maxdeg]
+        # Store a dummy zero map at index 1 (s=0) for consistent 1-based indexing.
+        delta = Vector{Matrix{QQ}}(undef, maxdeg + 1)
+        delta[1] = zeros(QQ, 0, dim(TC, 0))
+        for s in 1:maxdeg
+            delta[s + 1] = _connecting_tor(TA, TB, TC, i, p; s=s)
+        end
 
         return TorLongExactSequenceFirst{QQ}(L, A, B, C, i, p, TA, TB, TC, iH, pH, delta, maxdeg)
     end
@@ -4932,7 +4973,7 @@ module Algebras
     using ...CoreModules: QQ, DerivedFunctorOptions
     using ...Modules: PModule, PMorphism, map_leq
     using ...ChainComplexes
-    using ...FiniteFringe: FinitePoset, FringeModule, cover_edges
+    using ...FiniteFringe: FinitePoset, FringeModule, cover_edges, nvertices, leq, poset_equal
     using ...IndicatorResolutions: pmodule_from_fringe
 
     import ..Utils: compose
@@ -4943,6 +4984,7 @@ module Algebras
         TorSpaceSecond,
         representative, coordinates, cycles, boundaries
     import ..Functoriality: _lift_cocycle_to_chainmap_coeff
+    import ..Functoriality: _tensor_map_on_tor_chains_from_projective_coeff
 
     # Graded-space interface (shared function objects).
     import ..GradedSpaces: degree_range, dim, basis, representative, coordinates, cycles, boundaries
@@ -4978,7 +5020,7 @@ module Algebras
             mapsA = storeA.maps_to_succ
             mapsB = storeB.maps_to_succ
 
-            @inbounds for u in 1:A.Q.n
+            @inbounds for u in 1:nvertices(A.Q)
                 su = succs[u]
                 Au = mapsA[u]
                 Bu = mapsB[u]
@@ -5049,7 +5091,7 @@ module Algebras
                     end
 
                     v = mid_bases[j]
-                    if !resL.M.Q.leq[v, u]
+                    if !leq(resL.M.Q, v, u)
                         continue
                     end
 
@@ -5074,7 +5116,7 @@ module Algebras
                     continue
                 end
                 v = mid_bases[j]
-                if !resL.M.Q.leq[v, u]
+                if !leq(resL.M.Q, v, u)
                     continue
                 end
 
@@ -5571,7 +5613,7 @@ module Algebras
         end
 
         # Basic compatibility checks: same resolved module and same chosen resolution.
-        @assert A.E.M.Q.leq == T.resL.M.Q.leq
+        @assert poset_equal(A.E.M.Q, T.resL.M.Q)
         @assert A.E.res.gens == T.resL.gens
 
         # Choose a cocycle representative alpha in cochain degree m.
@@ -5587,7 +5629,7 @@ module Algebras
         cod_bases = T.resL.gens[(s - m) + 1]
 
         F = _tensor_map_on_tor_chains_from_projective_coeff(
-            T.Rop, dom_bases, cod_bases, coeff, T.offsets[s + 1], T.offsets[(s - m) + 1]
+            T.Rop, dom_bases, cod_bases, T.offsets[s + 1], T.offsets[(s - m) + 1], coeff
         )
 
         # Apply F to chosen Tor_s basis reps and express in Tor_{s-m} coordinates.
@@ -5827,6 +5869,7 @@ module SpectralSequences
 
     using ...Modules: PModule, map_leq
     using ...ChainComplexes
+    import ...IndicatorResolutions
     using ...IndicatorResolutions: upset_resolution, downset_resolution
 
     import ..HomExtEngine: build_hom_bicomplex_data
@@ -6733,7 +6776,7 @@ end
 
 using .Utils: compose
 
-using .Resolutions:
+import .Resolutions:
     ProjectiveResolution, InjectiveResolution,
     projective_resolution, injective_resolution,
     betti, betti_table, bass, bass_table,
@@ -6745,7 +6788,7 @@ using .Resolutions:
     _flatten_gens_at,
     _solve_downset_postcompose_coeff
 
-using .ExtTorSpaces:
+import .ExtTorSpaces:
     Hom, HomSpace,
     degree_range,
     ExtSpaceProjective, ExtSpaceInjective, ExtSpace,
@@ -6756,7 +6799,7 @@ using .ExtTorSpaces:
     projective_model, injective_model,
     hom_ext_first_page, ext_dimensions_via_indicator_resolutions
 
-using .Functoriality:
+import .Functoriality:
     ext_map_first, ext_map_second,
     tor_map_first, tor_map_second,
     connecting_hom, connecting_hom_first,
@@ -6767,21 +6810,22 @@ using .Functoriality:
     _tensor_map_on_tor_chains_from_projective_coeff,
     _tor_blockdiag_map_on_chains
 
-using .Algebras:
+import .Algebras:
     yoneda_product,
     ExtAlgebra, ExtElement,
     multiply, element, unit, precompute!,
     TorAlgebra, TorElement,
     set_chain_product!, set_chain_product_generator!,
     multiplication_matrix,
+    trivial_tor_product_generator,
     ext_action_on_tor
 
-using .SpectralSequences:
+import .SpectralSequences:
     ExtDoubleComplex, ExtSpectralSequence,
     TorDoubleComplex, TorSpectralSequence,
     TorSpectralPage
 
-using .Backends:
+import .Backends:
     ExtZn, ExtRn,
     pmodule_on_box,
     encode_pmodule_from_flange, encode_pmodules_from_flanges,
@@ -6793,6 +6837,93 @@ using .HomExtEngine:
     build_hom_tot_complex,
     build_hom_bicomplex_data,
     ext_dims_via_resolutions, pi0_count
+
+@inline _resolve_res_opts(opts::Union{ResolutionOptions,Nothing}) =
+    opts === nothing ? ResolutionOptions() : opts
+@inline _resolve_df_opts(opts::Union{DerivedFunctorOptions,Nothing}) =
+    opts === nothing ? DerivedFunctorOptions() : opts
+@inline _resolve_enc_opts(opts::Union{EncodingOptions,Nothing}) =
+    opts === nothing ? EncodingOptions() : opts
+
+# -----------------------------------------------------------------------------
+# Public opts-default wrappers
+# -----------------------------------------------------------------------------
+
+projective_resolution(M; opts=nothing) =
+    projective_resolution(M, _resolve_res_opts(opts))
+injective_resolution(M; opts=nothing) =
+    injective_resolution(M, _resolve_res_opts(opts))
+betti(M; opts=nothing) =
+    betti(M, _resolve_res_opts(opts))
+bass(M; opts=nothing) =
+    bass(M, _resolve_res_opts(opts))
+
+Ext(M, N; opts=nothing) =
+    Ext(M, N, _resolve_df_opts(opts))
+ExtInjective(M, N; opts=nothing) =
+    ExtInjective(M, N, _resolve_df_opts(opts))
+ExtSpace(M, N; opts=nothing, check::Bool=true) =
+    ExtSpace(M, N, _resolve_df_opts(opts); check=check)
+Tor(Rop, L; opts=nothing, res=nothing) =
+    Tor(Rop, L, _resolve_df_opts(opts); res=res)
+ExtAlgebra(M; opts=nothing) =
+    ExtAlgebra(M, _resolve_df_opts(opts))
+ext_action_on_tor(A, T, x; opts=nothing) =
+    ext_action_on_tor(A, T, x, _resolve_df_opts(opts))
+
+ExtDoubleComplex(M, N; opts=nothing) =
+    ExtDoubleComplex(M, N, _resolve_res_opts(opts))
+ExtSpectralSequence(M, N; opts=nothing, first::Symbol=:vertical) =
+    ExtSpectralSequence(M, N, _resolve_res_opts(opts); first=first)
+
+ExtZn(FG1, FG2; enc=nothing, df=nothing, kwargs...) =
+    ExtZn(FG1, FG2, _resolve_enc_opts(enc), _resolve_df_opts(df); kwargs...)
+ExtRn(F1, F2; enc=nothing, df=nothing) =
+    ExtRn(F1, F2, _resolve_enc_opts(enc), _resolve_df_opts(df))
+
+ExtLongExactSequenceSecond(M, A, B, C, i, p; opts=nothing) =
+    ExtLongExactSequenceSecond(M, A, B, C, i, p, _resolve_df_opts(opts))
+ExtLongExactSequenceSecond(M, ses; opts=nothing) =
+    ExtLongExactSequenceSecond(M, ses, _resolve_df_opts(opts))
+
+ExtLongExactSequenceFirst(A, B, C, N, i, p; opts=nothing) =
+    ExtLongExactSequenceFirst(A, B, C, N, i, p, _resolve_df_opts(opts))
+ExtLongExactSequenceFirst(ses, N; opts=nothing) =
+    ExtLongExactSequenceFirst(ses, N, _resolve_df_opts(opts))
+
+TorLongExactSequenceSecond(Rop, i, p; opts=nothing) =
+    TorLongExactSequenceSecond(Rop, i, p, _resolve_df_opts(opts))
+TorLongExactSequenceSecond(Rop, ses; opts=nothing) =
+    TorLongExactSequenceSecond(Rop, ses, _resolve_df_opts(opts))
+
+TorLongExactSequenceFirst(L, i, p; opts=nothing) =
+    TorLongExactSequenceFirst(L, i, p, _resolve_df_opts(opts))
+TorLongExactSequenceFirst(L, ses; opts=nothing) =
+    TorLongExactSequenceFirst(L, ses, _resolve_df_opts(opts))
+
+encode_pmodule_from_flange(FG; enc=nothing) =
+    encode_pmodule_from_flange(FG, _resolve_enc_opts(enc))
+encode_pmodules_from_flanges(FGs; enc=nothing) =
+    encode_pmodules_from_flanges(FGs, _resolve_enc_opts(enc))
+
+encode_pmodule_from_PL_fringe(F; enc=nothing) =
+    encode_pmodule_from_PL_fringe(F, _resolve_enc_opts(enc))
+encode_pmodules_from_PL_fringes(Fs; enc=nothing) =
+    encode_pmodules_from_PL_fringes(Fs, _resolve_enc_opts(enc))
+
+projective_resolution_Zn(FG; enc=nothing, res=nothing, return_encoding::Bool=false) =
+    projective_resolution_Zn(FG, _resolve_enc_opts(enc), _resolve_res_opts(res);
+                             return_encoding=return_encoding)
+injective_resolution_Zn(FG; enc=nothing, res=nothing, return_encoding::Bool=false) =
+    injective_resolution_Zn(FG, _resolve_enc_opts(enc), _resolve_res_opts(res);
+                            return_encoding=return_encoding)
+
+projective_resolution_Rn(FG; enc=nothing, res=nothing, return_encoding::Bool=false) =
+    projective_resolution_Rn(FG, _resolve_enc_opts(enc), _resolve_res_opts(res);
+                             return_encoding=return_encoding)
+injective_resolution_Rn(FG; enc=nothing, res=nothing, return_encoding::Bool=false) =
+    injective_resolution_Rn(FG, _resolve_enc_opts(enc), _resolve_res_opts(res);
+                            return_encoding=return_encoding)
 
 
 

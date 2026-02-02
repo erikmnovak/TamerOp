@@ -39,10 +39,11 @@ import Base.Threads
 using ..CoreModules: QQ, ResolutionOptions, _append_scaled_triplets!
 using ..ExactQQ: rankQQ, solve_fullcolumnQQ
 using ..FiniteFringe
-using ..FiniteFringe: FinitePoset, cover_edges
+using ..FiniteFringe: AbstractPoset, FinitePoset, cover_edges, nvertices, upset_indices
 using ..Modules: PModule, PMorphism, id_morphism,
                  zero_pmodule, zero_morphism,
-                 direct_sum, direct_sum_with_maps
+                 direct_sum, direct_sum_with_maps,
+                 map_leq
 
 import ..IndicatorResolutions
 import ..AbelianCategories
@@ -180,7 +181,7 @@ end
     mapsM = storeM.maps_to_succ
     mapsN = storeN.maps_to_succ
 
-    @inbounds for u in 1:M.Q.n
+    @inbounds for u in 1:nvertices(M.Q)
         Mu = mapsM[u]
         Nu = mapsN[u]
         for j in eachindex(succs[u])
@@ -233,7 +234,7 @@ function ModuleCochainComplex(
         end
 
         # Check d^(t+1) * d^t = 0 fiberwise.
-        Qn = Q.n
+        Qn = nvertices(Q)
         for i in 1:(length(diffs) - 1)
             t = tmin + (i - 1)
             d1 = diffs[i]
@@ -382,7 +383,7 @@ function ModuleCochainMap(
             ftp = (t + 1 > tmax) ? zero_morphism(_term(C, t+1), _term(D, t+1)) :
                                   comps[t + 1 - tmin + 1]
 
-            for u in 1:Q.n
+            for u in 1:nvertices(Q)
                 lhs = dD.comps[u] * ft.comps[u]
                 rhs = ftp.comps[u] * dC.comps[u]
                 if lhs != rhs
@@ -393,6 +394,12 @@ function ModuleCochainMap(
     end
 
     return ModuleCochainMap{K}(C, D, tmin, tmax, comps)
+end
+
+# Identity cochain map on a module complex.
+function idmap(C::ModuleCochainComplex{K}) where {K}
+    comps = [id_morphism(_term(C, t)) for t in C.tmin:C.tmax]
+    return ModuleCochainMap(C, C, comps; tmin=C.tmin, tmax=C.tmax, check=true)
 end
 
 
@@ -453,7 +460,7 @@ function is_cochain_homotopy(H::ModuleCochainHomotopy{K}) where {K}
         ht   = _hcomp(H, t)
         htp1 = _hcomp(H, t+1)
 
-        for u in 1:Q.n
+        for u in 1:nvertices(Q)
             left  = ft.comps[u] - gt.comps[u]
             right = dD_prev.comps[u] * ht.comps[u] + htp1.comps[u] * dC_t.comps[u]
             if left != right
@@ -634,8 +641,8 @@ function cohomology_module_data(C::ModuleCochainComplex{QQ}, t::Int)
 
     # j: B -> Z such that iZ circ j = iB
     Q = poset(C)
-    jcomps = Vector{Matrix{QQ}}(undef, Q.n)
-    for u in 1:Q.n
+    jcomps = Vector{Matrix{QQ}}(undef, nvertices(Q))
+    for u in 1:nvertices(Q)
         if B.dims[u] == 0
             jcomps[u] = zeros(QQ, Z.dims[u], 0)
         elseif Z.dims[u] == 0
@@ -664,8 +671,8 @@ function induced_map_on_cohomology_modules(f::ModuleCochainMap{QQ}, t::Int)
 
     # land in ZD by solving iZD * X = (ft*iZC)
     Q = poset(f.C)
-    ZC_to_ZD = Vector{Matrix{QQ}}(undef, Q.n)
-    for u in 1:Q.n
+    ZC_to_ZD = Vector{Matrix{QQ}}(undef, nvertices(Q))
+    for u in 1:nvertices(Q)
         if Dd.Z.dims[u] == 0
             ZC_to_ZD[u] = zeros(QQ, 0, Cd.Z.dims[u])
         else
@@ -675,8 +682,8 @@ function induced_map_on_cohomology_modules(f::ModuleCochainMap{QQ}, t::Int)
     hZ = PMorphism{QQ}(Cd.Z, Dd.Z, ZC_to_ZD)
 
     # Want H map: HD circ qC = qD circ hZ
-    compsH = Vector{Matrix{QQ}}(undef, Q.n)
-    for u in 1:Q.n
+    compsH = Vector{Matrix{QQ}}(undef, nvertices(Q))
+    for u in 1:nvertices(Q)
         RHS = Dd.q.comps[u] * hZ.comps[u]
         qC = Cd.q.comps[u]
         if size(qC,1) == 0
@@ -695,7 +702,7 @@ end
 # quasi-isomorphism check
 function is_isomorphism(f::PMorphism{QQ})
     Q = f.dom.Q
-    for u in 1:Q.n
+    for u in 1:nvertices(Q)
         if f.dom.dims[u] != f.cod.dims[u]
             return false
         end
@@ -1048,8 +1055,8 @@ end
 # Active indices at vertex i for a downset direct sum determined by bases.
 # A generator based at u is active at i iff i <= u in the poset.
 # Returned lists are in increasing global generator index order.
-function _active_indices_from_bases(Q::FinitePoset, bases::Vector{Int})
-    n = Q.n
+function _active_indices_from_bases(Q::AbstractPoset, bases::Vector{Int})
+    n = nvertices(Q)
     by_base = [Int[] for _ in 1:n]
     for (j, b) in enumerate(bases)
         push!(by_base[b], j)
@@ -1057,10 +1064,9 @@ function _active_indices_from_bases(Q::FinitePoset, bases::Vector{Int})
     active = Vector{Vector{Int}}(undef, n)
     for i in 1:n
         idx = Int[]
-        for b in 1:n
-            if Q.leq[i, b] && !isempty(by_base[b])
-                append!(idx, by_base[b])
-            end
+        for b in upset_indices(Q, i)
+            isempty(by_base[b]) && continue
+            append!(idx, by_base[b])
         end
         active[i] = idx
     end
@@ -1076,8 +1082,8 @@ function _pmorphism_from_downset_coeff(
     act_cod::Vector{Vector{Int}},
     C::Matrix{QQ}
 )
-    comps = Vector{Matrix{QQ}}(undef, E.Q.n)
-    for i in 1:E.Q.n
+    comps = Vector{Matrix{QQ}}(undef, nvertices(E.Q))
+    for i in 1:nvertices(E.Q)
         comps[i] = C[act_cod[i], act_dom[i]]
     end
     return PMorphism{QQ}(E, Ep, comps)
@@ -1768,7 +1774,8 @@ function derived_tensor_map_first(
     Tdom.C === Tcod.C || error("derived_tensor_map_first: complexes must be identical objects for strict functoriality")
 
     # Lift module map to a chain map between projective resolutions (coeff matrices per degree).
-    coeffs = _lift_pmodule_map_to_projective_resolution_chainmap_coeff(f, Tdom.resR, Tcod.resR)
+    upto = min(length(Tdom.resR.Pmods), length(Tcod.resR.Pmods)) - 1
+    coeffs = _lift_pmodule_map_to_projective_resolution_chainmap_coeff(Tdom.resR, Tcod.resR, f; upto=upto)
 
     # Optional validation of chain map relation: d_cod[a]*F_a == F_{a-1}*d_dom[a]
     if check
@@ -1808,7 +1815,7 @@ function derived_tensor_map_first(
             offs_cod = _offs_for_gens(Mp, cod_gens)
 
             block = _tensor_map_on_tor_chains_from_projective_coeff(
-                Mp, dom_gens, cod_gens, coeffs[a+1], offs_dom, offs_cod
+                Mp, dom_gens, cod_gens, offs_dom, offs_cod, coeffs[a+1]
             )
 
             ii, jj, vv = findnz(block)
@@ -1850,8 +1857,8 @@ function derived_tensor_map_second(
     Ttgt::DerivedTensorComplex{QQ};
     check::Bool = true
 )
-    g.dom === Tsrc.C || error("derived_tensor_map_second: g.dom must equal Tsrc.C")
-    g.cod === Ttgt.C || error("derived_tensor_map_second: g.cod must equal Ttgt.C")
+    g.C === Tsrc.C || error("derived_tensor_map_second: g.C must equal Tsrc.C")
+    g.D === Ttgt.C || error("derived_tensor_map_second: g.D must equal Ttgt.C")
     Tsrc.Rop === Ttgt.Rop || error("derived_tensor_map_second: right modules must match")
     Tsrc.resR.gens == Ttgt.resR.gens || error("derived_tensor_map_second: resolutions must have identical gens ordering")
 

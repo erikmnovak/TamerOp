@@ -1,12 +1,106 @@
 module FiniteFringe
 
 using SparseArrays, LinearAlgebra
-using ..CoreModules: QQ
+using ..CoreModules: QQ, FiniteFringeOptions
 import ..ExactQQ: rankQQ
 
+@inline _resolve_ff_opts(opts::Union{FiniteFringeOptions,Nothing}) =
+    opts === nothing ? FiniteFringeOptions() : opts
+
 # =========================================
-# Finite poset and indicator sets
+# Poset interface + finite poset and indicator sets
 # =========================================
+
+abstract type AbstractPoset end
+
+"""
+    nvertices(P) -> Int
+
+Return the number of vertices in the finite poset `P`.
+"""
+nvertices(::AbstractPoset) = error("nvertices(P) is not implemented for $(typeof(P)).")
+
+"""
+    leq(P, i, j) -> Bool
+
+Return `true` iff `i <= j` in the poset `P`.
+"""
+leq(::AbstractPoset, ::Int, ::Int) =
+    error("leq(P, i, j) is not implemented for $(typeof(P)).")
+
+"""
+    leq_matrix(P) -> BitMatrix
+
+Materialize the order matrix for `P`. This is a fallback and should be avoided
+for large structured posets.
+"""
+function leq_matrix(P::AbstractPoset)
+    n = nvertices(P)
+    L = falses(n, n)
+    @inbounds for i in 1:n, j in 1:n
+        L[i, j] = leq(P, i, j)
+    end
+    return L
+end
+
+"""
+    upset_indices(P, i) -> Vector{Int}
+    downset_indices(P, i) -> Vector{Int}
+
+Return the indices in the principal upset/downset of `i`.
+Fallback implementations scan the whole poset.
+"""
+function upset_indices(P::AbstractPoset, i::Int)
+    n = nvertices(P)
+    out = Int[]
+    @inbounds for j in 1:n
+        if leq(P, i, j)
+            push!(out, j)
+        end
+    end
+    return out
+end
+
+function downset_indices(P::AbstractPoset, i::Int)
+    n = nvertices(P)
+    out = Int[]
+    @inbounds for j in 1:n
+        if leq(P, j, i)
+            push!(out, j)
+        end
+    end
+    return out
+end
+
+"""
+    leq_row(P, i)
+    leq_col(P, j)
+
+Return indices in the i-th row / j-th column of the order relation.
+Defaults to upset/downset indices.
+"""
+leq_row(P::AbstractPoset, i::Int) = upset_indices(P, i)
+leq_col(P::AbstractPoset, j::Int) = downset_indices(P, j)
+
+"""
+    poset_equal(P, Q) -> Bool
+
+Structural equality of finite posets, defaulting to order-matrix comparison.
+"""
+function poset_equal(P::AbstractPoset, Q::AbstractPoset)
+    nvertices(P) == nvertices(Q) || return false
+    return leq_matrix(P) == leq_matrix(Q)
+end
+
+"""
+    poset_equal_opposite(P, Q) -> Bool
+
+Return true iff `P` equals the opposite of `Q`.
+"""
+function poset_equal_opposite(P::AbstractPoset, Q::AbstractPoset)
+    nvertices(P) == nvertices(Q) || return false
+    return leq_matrix(P) == transpose(leq_matrix(Q))
+end
 
 """
     FinitePoset(leq; check=true)
@@ -30,10 +124,16 @@ chains, ...), you can set `check=false` to skip validation.
 This is a performance feature; if you pass `check=false` and `leq` is not a
 partial order, downstream computations may give nonsense.
 """
-struct FinitePoset
+struct FinitePoset <: AbstractPoset
     n::Int
-    leq::BitMatrix           # leq[i,j] = true  iff i <= j
-    function FinitePoset(leq::AbstractMatrix{Bool}; check::Bool=true)
+    _leq::BitMatrix           # _leq[i,j] = true  iff i <= j
+    function FinitePoset(leq::AbstractMatrix{Bool};
+                         check::Bool=true,
+                         opts::Union{FiniteFringeOptions,Nothing}=nothing)
+        if opts !== nothing
+            check == true || error("FinitePoset: pass either check or opts, not both.")
+            check = opts.check
+        end
         n1, n2 = size(leq)
         @assert n1 == n2 "leq must be square"
 
@@ -50,12 +150,233 @@ end
 
 # Convenience constructor when you already know n.
 # (This is also useful as a search/replace target in performance hot paths.)
-FinitePoset(n::Int, leq::AbstractMatrix{Bool}; check::Bool=true) = begin
+FinitePoset(n::Int, leq::AbstractMatrix{Bool};
+            check::Bool=true,
+            opts::Union{FiniteFringeOptions,Nothing}=nothing) = begin
     @assert size(leq, 1) == n && size(leq, 2) == n "leq must be an n x n Boolean matrix"
-    FinitePoset(leq; check=check)
+    FinitePoset(leq; check=check, opts=opts)
 end
 
-leq(P::FinitePoset, i::Int, j::Int) = P.leq[i,j]
+nvertices(P::FinitePoset) = P.n
+leq(P::FinitePoset, i::Int, j::Int) = P._leq[i,j]
+leq_matrix(P::FinitePoset) = P._leq
+
+function upset_indices(P::FinitePoset, i::Int)
+    row = P._leq[i, :]
+    out = Int[]
+    j = findnext(row, 1)
+    while j !== nothing
+        push!(out, j)
+        j = findnext(row, j + 1)
+    end
+    return out
+end
+
+function downset_indices(P::FinitePoset, i::Int)
+    col = P._leq[:, i]
+    out = Int[]
+    j = findnext(col, 1)
+    while j !== nothing
+        push!(out, j)
+        j = findnext(col, j + 1)
+    end
+    return out
+end
+
+leq_row(P::FinitePoset, i::Int) = P._leq[i, :]
+leq_col(P::FinitePoset, j::Int) = P._leq[:, j]
+
+"""
+    ProductOfChainsPoset(sizes)
+
+Poset on a product of chains with sizes given by `sizes`.
+Vertex indices use mixed radix ordering with the first axis varying fastest.
+"""
+struct ProductOfChainsPoset{N} <: AbstractPoset
+    sizes::NTuple{N,Int}
+    strides::NTuple{N,Int}
+end
+
+function _poset_strides(sizes::NTuple{N,Int}) where {N}
+    strides = Vector{Int}(undef, N)
+    strides[1] = 1
+    for i in 2:N
+        strides[i] = strides[i-1] * sizes[i-1]
+    end
+    return ntuple(i -> strides[i], N)
+end
+
+ProductOfChainsPoset(sizes::NTuple{N,Int}) where {N} =
+    ProductOfChainsPoset{N}(sizes, _poset_strides(sizes))
+
+ProductOfChainsPoset(sizes::AbstractVector{<:Integer}) =
+    ProductOfChainsPoset(ntuple(i -> Int(sizes[i]), length(sizes)))
+
+function nvertices(P::ProductOfChainsPoset)
+    n = 1
+    @inbounds for s in P.sizes
+        n *= s
+    end
+    return n
+end
+
+@inline function _index_to_coords(idx::Int, sizes::NTuple{N,Int}, strides::NTuple{N,Int}) where {N}
+    coords = Vector{Int}(undef, N)
+    x = idx - 1
+    @inbounds for i in 1:N
+        coords[i] = div(x, strides[i]) % sizes[i] + 1
+    end
+    return coords
+end
+
+@inline function leq(P::ProductOfChainsPoset{N}, i::Int, j::Int) where {N}
+    ci = _index_to_coords(i, P.sizes, P.strides)
+    cj = _index_to_coords(j, P.sizes, P.strides)
+    @inbounds for k in 1:N
+        if ci[k] > cj[k]
+            return false
+        end
+    end
+    return true
+end
+
+function upset_indices(P::ProductOfChainsPoset{N}, i::Int) where {N}
+    ci = _index_to_coords(i, P.sizes, P.strides)
+    out = Int[]
+    ranges = NTuple{N,UnitRange{Int}}(ntuple(k -> ci[k]:P.sizes[k], N))
+    idxs = Vector{Int}(undef, N)
+    function rec(dim::Int)
+        if dim > N
+            lin = 1
+            @inbounds for k in 1:N
+                lin += (idxs[k] - 1) * P.strides[k]
+            end
+            push!(out, lin)
+            return
+        end
+        for v in ranges[dim]
+            idxs[dim] = v
+            rec(dim + 1)
+        end
+    end
+    rec(1)
+    return out
+end
+
+function downset_indices(P::ProductOfChainsPoset{N}, i::Int) where {N}
+    ci = _index_to_coords(i, P.sizes, P.strides)
+    out = Int[]
+    ranges = NTuple{N,UnitRange{Int}}(ntuple(k -> 1:ci[k], N))
+    idxs = Vector{Int}(undef, N)
+    function rec(dim::Int)
+        if dim > N
+            lin = 1
+            @inbounds for k in 1:N
+                lin += (idxs[k] - 1) * P.strides[k]
+            end
+            push!(out, lin)
+            return
+        end
+        for v in ranges[dim]
+            idxs[dim] = v
+            rec(dim + 1)
+        end
+    end
+    rec(1)
+    return out
+end
+
+"""
+    GridPoset(coords)
+
+Axis-aligned grid poset with coordinate vectors per axis. Indices follow the
+same mixed radix ordering as `ProductOfChainsPoset`.
+"""
+struct GridPoset{N,T} <: AbstractPoset
+    coords::NTuple{N,Vector{T}}
+    sizes::NTuple{N,Int}
+    strides::NTuple{N,Int}
+end
+
+function GridPoset(coords::NTuple{N,Vector{T}}) where {N,T}
+    for i in 1:N
+        axis = coords[i]
+        for j in 2:length(axis)
+            if axis[j] <= axis[j - 1]
+                error("GridPoset: coords[$i] must be strictly increasing (no duplicates).")
+            end
+        end
+    end
+    sizes = ntuple(i -> length(coords[i]), N)
+    return GridPoset{N,T}(coords, sizes, _poset_strides(sizes))
+end
+
+GridPoset(coords::AbstractVector{<:AbstractVector}) = GridPoset(ntuple(i -> Vector(coords[i]), length(coords)))
+
+nvertices(P::GridPoset) = nvertices(ProductOfChainsPoset(P.sizes))
+leq(P::GridPoset{N}, i::Int, j::Int) where {N} =
+    leq(ProductOfChainsPoset(P.sizes, P.strides), i, j)
+
+upset_indices(P::GridPoset{N}, i::Int) where {N} =
+    upset_indices(ProductOfChainsPoset(P.sizes, P.strides), i)
+downset_indices(P::GridPoset{N}, i::Int) where {N} =
+    downset_indices(ProductOfChainsPoset(P.sizes, P.strides), i)
+
+"""
+    ProductPoset(P1, P2)
+
+Product of two finite posets with the first factor varying fastest.
+"""
+struct ProductPoset{P1<:AbstractPoset,P2<:AbstractPoset} <: AbstractPoset
+    P1::P1
+    P2::P2
+end
+
+ProductPoset(P1::AbstractPoset, P2::AbstractPoset) = ProductPoset{typeof(P1),typeof(P2)}(P1, P2)
+
+nvertices(P::ProductPoset) = nvertices(P.P1) * nvertices(P.P2)
+
+@inline function _prod_indices(n1::Int, idx::Int)
+    i1 = ((idx - 1) % n1) + 1
+    i2 = div(idx - 1, n1) + 1
+    return i1, i2
+end
+
+@inline function leq(P::ProductPoset, i::Int, j::Int)
+    n1 = nvertices(P.P1)
+    i1, i2 = _prod_indices(n1, i)
+    j1, j2 = _prod_indices(n1, j)
+    return leq(P.P1, i1, j1) && leq(P.P2, i2, j2)
+end
+
+"""
+    RegionsPoset(Q, regions)
+
+Structured poset on regions of a finite poset `Q`, with order defined by:
+`A <= B` iff there exist `a in A`, `b in B` with `a <= b` in `Q` (Prop. 4.15).
+"""
+struct RegionsPoset{P<:AbstractPoset} <: AbstractPoset
+    Q::P
+    regions::Vector{Vector{Int}}
+    n::Int
+end
+
+function RegionsPoset(Q::AbstractPoset, regions::Vector{Vector{Int}})
+    return RegionsPoset{typeof(Q)}(Q, regions, length(regions))
+end
+
+nvertices(P::RegionsPoset) = P.n
+
+function leq(P::RegionsPoset, i::Int, j::Int)
+    @inbounds for a in P.regions[i]
+        for b in P.regions[j]
+            if leq(P.Q, a, b)
+                return true
+            end
+        end
+    end
+    return false
+end
 
 
 # ---- internal helpers ---------------------------------------------------------
@@ -196,18 +517,19 @@ Base.Matrix(C::CoverEdges) = Matrix(C.mat)
 # Convenience: findall(C) returns the list of cover edges.
 Base.findall(C::CoverEdges) = C.edges
 
-# Cache cover edges by the identity of the underlying order matrix `P.leq`.
+# Cache cover edges by the identity of the underlying order matrix `P._leq`.
 #
 # IMPORTANT:
 # - `FinitePoset` is an (immutable) struct, and `WeakKeyDict` requires *mutable*
 #   keys because it attaches a finalizer to the key object.
-# - `P.leq` is a `BitMatrix` (mutable) with stable identity and the same lifetime
+# - `P._leq` is a `BitMatrix` (mutable) with stable identity and the same lifetime
 #   as the poset data, so it is a safe weak-key "anchor".
 #
 # This preserves the intended behavior: compute cover edges once per poset,
 # reuse them on repeated queries, and do not leak memory across many temporary
 # posets.
 const _COVER_EDGES_CACHE = WeakKeyDict{BitMatrix, CoverEdges}()
+const _COVER_EDGES_OBJ_CACHE = IdDict{AbstractPoset, CoverEdges}()
 
 
 # BitVector helpers (chunk-level) for allocation-free set operations.
@@ -240,14 +562,14 @@ end
     return dest
 end
 
-function _compute_cover_edges_bitset(P::FinitePoset)::CoverEdges
-    n = P.n
+function _compute_cover_edges_bitset(L::BitMatrix)::CoverEdges
+    n = size(L, 1)
 
     # Copy the rows of the order matrix as BitVectors so we can do chunk-wise
     # OR/AND operations. This is the key speedup over scalar triple loops.
     rows = Vector{BitVector}(undef, n)
     @inbounds for i in 1:n
-        rows[i] = P.leq[i, :]
+        rows[i] = L[i, :]
     end
 
     mat = falses(n, n)
@@ -305,26 +627,151 @@ The return value is a `CoverEdges` object `C` supporting:
 For performance, the result is cached per `FinitePoset` instance by default.
 Pass `cached=false` to force recomputation.
 """
-function cover_edges(P::FinitePoset; cached::Bool=true)
+function cover_edges(P::FinitePoset;
+                     cached::Bool=true,
+                     opts::Union{FiniteFringeOptions,Nothing}=nothing)
+    if opts !== nothing
+        cached == true || error("cover_edges: pass either cached or opts, not both.")
+        cached = opts.cached
+    end
     # Use the order-matrix object identity as the cache key.
-    L = P.leq
+    L = P._leq
     if cached && haskey(_COVER_EDGES_CACHE, L)
         return _COVER_EDGES_CACHE[L]
     end
-    C = _compute_cover_edges_bitset(P)
+    C = _compute_cover_edges_bitset(L)
     if cached
         _COVER_EDGES_CACHE[L] = C
     end
     return C
 end
 
+function _cover_edges_from_edges(n::Int, edges::Vector{Tuple{Int,Int}})
+    mat = falses(n, n)
+    @inbounds for (i, j) in edges
+        mat[i, j] = true
+    end
+    return CoverEdges(mat, edges)
+end
+
+function cover_edges(P::AbstractPoset;
+                     cached::Bool=true,
+                     opts::Union{FiniteFringeOptions,Nothing}=nothing)
+    if opts !== nothing
+        cached == true || error("cover_edges: pass either cached or opts, not both.")
+        cached = opts.cached
+    end
+    if cached
+        C = get(_COVER_EDGES_OBJ_CACHE, P, nothing)
+        C === nothing || return C
+    end
+    L = leq_matrix(P)
+    L = L isa BitMatrix ? L : BitMatrix(L)
+    C = _compute_cover_edges_bitset(L)
+    if cached
+        _COVER_EDGES_OBJ_CACHE[P] = C
+    end
+    return C
+end
+
+function cover_edges(P::ProductOfChainsPoset{N};
+                     cached::Bool=true,
+                     opts::Union{FiniteFringeOptions,Nothing}=nothing) where {N}
+    if opts !== nothing
+        cached == true || error("cover_edges: pass either cached or opts, not both.")
+        cached = opts.cached
+    end
+    if cached
+        C = get(_COVER_EDGES_OBJ_CACHE, P, nothing)
+        C === nothing || return C
+    end
+    n = nvertices(P)
+    edges = Tuple{Int,Int}[]
+    coords = Vector{Int}(undef, N)
+    @inbounds for idx in 1:n
+        coords .= _index_to_coords(idx, P.sizes, P.strides)
+        for k in 1:N
+            if coords[k] < P.sizes[k]
+                coords[k] += 1
+                lin = 1
+                for t in 1:N
+                    lin += (coords[t] - 1) * P.strides[t]
+                end
+                push!(edges, (idx, lin))
+                coords[k] -= 1
+            end
+        end
+    end
+    C = _cover_edges_from_edges(n, edges)
+    if cached
+        _COVER_EDGES_OBJ_CACHE[P] = C
+    end
+    return C
+end
+
+function cover_edges(P::GridPoset{N};
+                     cached::Bool=true,
+                     opts::Union{FiniteFringeOptions,Nothing}=nothing) where {N}
+    if opts !== nothing
+        cached == true || error("cover_edges: pass either cached or opts, not both.")
+        cached = opts.cached
+    end
+    if cached
+        C = get(_COVER_EDGES_OBJ_CACHE, P, nothing)
+        C === nothing || return C
+    end
+    C = cover_edges(ProductOfChainsPoset(P.sizes, P.strides); cached=cached)
+    if cached
+        _COVER_EDGES_OBJ_CACHE[P] = C
+    end
+    return C
+end
+
+function cover_edges(P::ProductPoset;
+                     cached::Bool=true,
+                     opts::Union{FiniteFringeOptions,Nothing}=nothing)
+    if opts !== nothing
+        cached == true || error("cover_edges: pass either cached or opts, not both.")
+        cached = opts.cached
+    end
+    if cached
+        C = get(_COVER_EDGES_OBJ_CACHE, P, nothing)
+        C === nothing || return C
+    end
+    n1 = nvertices(P.P1)
+    n2 = nvertices(P.P2)
+    n = n1 * n2
+    edges = Tuple{Int,Int}[]
+    C1 = cover_edges(P.P1; cached=cached)
+    C2 = cover_edges(P.P2; cached=cached)
+    @inbounds for (i1, j1) in C1
+        for i2 in 1:n2
+            src = i1 + (i2 - 1) * n1
+            dst = j1 + (i2 - 1) * n1
+            push!(edges, (src, dst))
+        end
+    end
+    @inbounds for (i2, j2) in C2
+        for i1 in 1:n1
+            src = i1 + (i2 - 1) * n1
+            dst = i1 + (j2 - 1) * n1
+            push!(edges, (src, dst))
+        end
+    end
+    C = _cover_edges_from_edges(n, edges)
+    if cached
+        _COVER_EDGES_OBJ_CACHE[P] = C
+    end
+    return C
+end
+
 
 struct Upset
-    P::FinitePoset
+    P::AbstractPoset
     mask::BitVector
 end
 struct Downset
-    P::FinitePoset
+    P::AbstractPoset
     mask::BitVector
 end
 
@@ -408,29 +855,52 @@ is_subset(D1::Downset, D2::Downset) = is_subset(D1.mask, D2.mask)
 intersects(U::Upset, D::Downset) = intersects(U.mask, D.mask)
 
 # Upset/downset closures and principal sets (used in resolutions)
-function upset_closure(P::FinitePoset, S::BitVector)
+function upset_closure(P::AbstractPoset, S::BitVector)
     U = copy(S)
-    for i in 1:P.n, j in 1:P.n
-        if U[i] && leq(P,i,j); U[j] = true; end
+    n = nvertices(P)
+    for i in 1:n
+        U[i] || continue
+        for j in upset_indices(P, i)
+            U[j] = true
+        end
     end
     Upset(P, U)
 end
-function downset_closure(P::FinitePoset, S::BitVector)
+function downset_closure(P::AbstractPoset, S::BitVector)
     D = copy(S)
-    for j in 1:P.n, i in 1:P.n
-        if D[j] && leq(P,i,j); D[i] = true; end
+    n = nvertices(P)
+    for j in 1:n
+        D[j] || continue
+        for i in downset_indices(P, j)
+            D[i] = true
+        end
     end
     Downset(P, D)
 end
 
-upset_from_generators(P::FinitePoset, gens::Vector{Int}) =
-    upset_closure(P, BitVector([i in gens for i in 1:P.n]))
-downset_from_generators(P::FinitePoset, gens::Vector{Int}) =
-    downset_closure(P, BitVector([i in gens for i in 1:P.n]))
+upset_from_generators(P::AbstractPoset, gens::Vector{Int}) =
+    upset_closure(P, BitVector([i in gens for i in 1:nvertices(P)]))
+downset_from_generators(P::AbstractPoset, gens::Vector{Int}) =
+    downset_closure(P, BitVector([i in gens for i in 1:nvertices(P)]))
 
 # Principal upset \uparrow p and principal downset \downarrow p (representables/corepresentables).
-principal_upset(P::FinitePoset, p::Int) = Upset(P, BitVector([leq(P, p, q) for q in 1:P.n]))
-principal_downset(P::FinitePoset, p::Int) = Downset(P, BitVector([leq(P, q, p) for q in 1:P.n]))
+function principal_upset(P::AbstractPoset, p::Int)
+    n = nvertices(P)
+    mask = falses(n)
+    for q in upset_indices(P, p)
+        mask[q] = true
+    end
+    return Upset(P, BitVector(mask))
+end
+
+function principal_downset(P::AbstractPoset, p::Int)
+    n = nvertices(P)
+    mask = falses(n)
+    for q in downset_indices(P, p)
+        mask[q] = true
+    end
+    return Downset(P, BitVector(mask))
+end
 
 #############################
 # Structural equality + hashing
@@ -444,11 +914,11 @@ import Base: ==, isequal, hash
 #   n::Int
 #   leq::AbstractMatrix{Bool}   (or BitMatrix / Matrix{Bool})
 ==(P::FinitePoset, Q::FinitePoset) =
-    (P.n == Q.n) && (P.leq == Q.leq)
+    (P.n == Q.n) && (P._leq == Q._leq)
 
 isequal(P::FinitePoset, Q::FinitePoset) = (P == Q)
 
-hash(P::FinitePoset, h::UInt) = hash(P.n, hash(P.leq, h))
+hash(P::FinitePoset, h::UInt) = hash(P.n, hash(P._leq, h))
 
 
 # ---- Upset ----
@@ -479,12 +949,12 @@ hash(D::Downset, h::UInt) = hash(D.P, hash(D.mask, h))
 # =========================================
 
 struct FringeModule{K, MAT<:AbstractMatrix{K}}
-    P::FinitePoset
+    P::AbstractPoset
     U::Vector{Upset}                  # birth upsets (columns)
     D::Vector{Downset}                # death downsets (rows)
     phi::MAT                          # size |D| x |U|
 
-    function FringeModule{K,MAT}(P::FinitePoset,
+    function FringeModule{K,MAT}(P::AbstractPoset,
                                  U::Vector{Upset},
                                  D::Vector{Downset},
                                  phi::MAT) where {K, MAT<:AbstractMatrix{K}}
@@ -497,7 +967,7 @@ struct FringeModule{K, MAT<:AbstractMatrix{K}}
 end
 
 # Allow calls like FringeModule{K}(P, U, D, phi) by inferring MAT from phi.
-function FringeModule{K}(P::FinitePoset,
+function FringeModule{K}(P::AbstractPoset,
                          U::Vector{Upset},
                          D::Vector{Downset},
                          phi::AbstractMatrix{K}) where {K}
@@ -505,10 +975,16 @@ function FringeModule{K}(P::FinitePoset,
 end
 
 # Convenience constructor (default dense; set store_sparse=true to store CSC).
-function FringeModule(P::FinitePoset,
+function FringeModule(P::AbstractPoset,
                       U::Vector{Upset},
                       D::Vector{Downset},
-                      phi::AbstractMatrix{K}; store_sparse::Bool=false) where {K}
+                      phi::AbstractMatrix{K};
+                      store_sparse::Bool=false,
+                      opts::Union{FiniteFringeOptions,Nothing}=nothing) where {K}
+    if opts !== nothing
+        store_sparse == false || error("FringeModule: pass either store_sparse or opts, not both.")
+        store_sparse = opts.store_sparse
+    end
     phimat = store_sparse ? SparseArrays.sparse(phi) : Matrix{K}(phi)
     return FringeModule{K, typeof(phimat)}(P, U, D, phimat)
 end
@@ -532,19 +1008,24 @@ Notes:
 - In addition to `U::Upset` / `D::Downset`, you may also pass membership masks
   `U_mask::AbstractVector{Bool}` and `D_mask::AbstractVector{Bool}`.
 """
-function one_by_one_fringe(P::FinitePoset, U::Upset, D::Downset, scalar::K) where {K}
+function one_by_one_fringe(P::AbstractPoset, U::Upset, D::Downset, scalar::K) where {K}
     phi = spzeros(K, 1, 1)
     phi[1, 1] = scalar
     return FringeModule{K}(P, [U], [D], phi)
 end
 
 # Default scalar (the project's base field QQ).
-one_by_one_fringe(P::FinitePoset, U::Upset, D::Downset) =
+one_by_one_fringe(P::AbstractPoset, U::Upset, D::Downset) =
     one_by_one_fringe(P, U, D, QQ(1))
 
 # Keyword-friendly wrapper.
-one_by_one_fringe(P::FinitePoset, U::Upset, D::Downset; scalar=QQ(1)) =
-    one_by_one_fringe(P, U, D, scalar)
+one_by_one_fringe(P::AbstractPoset, U::Upset, D::Downset;
+                  scalar=QQ(1),
+                  opts::Union{FiniteFringeOptions,Nothing}=nothing) =
+    opts === nothing ? one_by_one_fringe(P, U, D, scalar) : begin
+        scalar == QQ(1) || error("one_by_one_fringe: pass either scalar or opts, not both.")
+        one_by_one_fringe(P, U, D, opts.scalar)
+    end
 
 # ------------------ mask-based convenience overloads ------------------
 
@@ -572,8 +1053,13 @@ one_by_one_fringe(P::FinitePoset,
 
 one_by_one_fringe(P::FinitePoset,
                   U_mask::AbstractVector{Bool},
-                  D_mask::AbstractVector{Bool}; scalar=QQ(1)) =
-    one_by_one_fringe(P, U_mask, D_mask, scalar)
+                  D_mask::AbstractVector{Bool};
+                  scalar=QQ(1),
+                  opts::Union{FiniteFringeOptions,Nothing}=nothing) =
+    opts === nothing ? one_by_one_fringe(P, U_mask, D_mask, scalar) : begin
+        scalar == QQ(1) || error("one_by_one_fringe: pass either scalar or opts, not both.")
+        one_by_one_fringe(P, U_mask, D_mask, opts.scalar)
+    end
 
 
 # ------------------ mask-based convenience overloads ------------------
@@ -606,8 +1092,13 @@ one_by_one_fringe(P::FinitePoset,
 # Keyword form for parity with the Upset/Downset signature.
 one_by_one_fringe(P::FinitePoset,
                   U_mask::AbstractVector{Bool},
-                  D_mask::AbstractVector{Bool}; scalar=QQ(1)) =
-    one_by_one_fringe(P, U_mask, D_mask, scalar)
+                  D_mask::AbstractVector{Bool};
+                  scalar=QQ(1),
+                  opts::Union{FiniteFringeOptions,Nothing}=nothing) =
+    opts === nothing ? one_by_one_fringe(P, U_mask, D_mask, scalar) : begin
+        scalar == QQ(1) || error("one_by_one_fringe: pass either scalar or opts, not both.")
+        one_by_one_fringe(P, U_mask, D_mask, opts.scalar)
+    end
 
 
 
@@ -868,8 +1359,13 @@ end
 
 dense_to_sparse_K(A::AbstractMatrix{T}) where {T} = dense_to_sparse_K(A, T)
 
-export FinitePoset, CoverEdges, Upset, Downset, principal_upset, principal_downset,
-       upset_from_generators, downset_from_generators, cover_edges,
+export FiniteFringeOptions,
+       AbstractPoset, FinitePoset, ProductOfChainsPoset, GridPoset, ProductPoset,
+       RegionsPoset,
+       nvertices, leq, leq_matrix, upset_indices, downset_indices, leq_row, leq_col,
+       poset_equal, poset_equal_opposite,
+       CoverEdges, Upset, Downset, principal_upset, principal_downset,
+       upset_from_generators, downset_from_generators, upset_closure, downset_closure, cover_edges,
        FringeModule, one_by_one_fringe, fiber_dimension, hom_dimension, dense_to_sparse_K
 
 end # module
@@ -945,6 +1441,7 @@ module Encoding
 
 using SparseArrays
 using ..FiniteFringe
+import ..FiniteFringe: nvertices, leq
 
 # This submodule defines methods on CoreModules.AbstractPLikeEncodingMap and
 # calls CoreModules.locate/dimension/etc., so we must import the sibling module
@@ -961,11 +1458,11 @@ A finite encoding `pi : Q to P`, where `Q` and `P` are finite posets.
 Fields
 - `Q` : source poset
 - `P` : target poset (the uptight poset)
-- `pi_of_q` : a vector of length `Q.n` with `pi_of_q[q] in 1:P.n`
+- `pi_of_q` : a vector of length `nvertices(Q)` with `pi_of_q[q] in 1:nvertices(P)`
 """
-struct EncodingMap
-    Q::FiniteFringe.FinitePoset
-    P::FiniteFringe.FinitePoset
+struct EncodingMap{Q<:AbstractPoset,P<:AbstractPoset}
+    Q::Q
+    P::P
     pi_of_q::Vector{Int}
 end
 
@@ -1001,7 +1498,7 @@ struct PostcomposedEncodingMap{PI<:CoreModules.AbstractPLikeEncodingMap} <: Core
 end
 
 @inline PostcomposedEncodingMap(pi0::CoreModules.AbstractPLikeEncodingMap, pi::EncodingMap) =
-    PostcomposedEncodingMap(pi0, pi.pi_of_q, pi.P.n, Ref{Any}(nothing))
+    PostcomposedEncodingMap(pi0, pi.pi_of_q, nvertices(pi.P), Ref{Any}(nothing))
 
 @inline function CoreModules.locate(pi::PostcomposedEncodingMap, x::AbstractVector)
     q = CoreModules.locate(pi.pi0, x)
@@ -1053,10 +1550,10 @@ end
 # ----------------------- Uptight regions from a family Y ---------------------
 
 # Partition Q into uptight regions: a ~ b iff they lie in exactly the same members of Y.
-function _uptight_regions(Q::FiniteFringe.FinitePoset, Y::Vector{FiniteFringe.Upset})
+function _uptight_regions(Q::FiniteFringe.AbstractPoset, Y::Vector{FiniteFringe.Upset})
     # Use tuples of Bool so Dict compares and hashes by contents.
     sigs = Dict{Tuple{Vararg{Bool}}, Vector{Int}}()
-    for q in 1:Q.n
+    for q in 1:nvertices(Q)
         key = ntuple(i -> Y[i].mask[q], length(Y))  # immutable, content-hashable
         push!(get!(sigs, key, Int[]), q)
     end
@@ -1065,32 +1562,39 @@ end
 
 # Build the partial order on regions: A <= B if exists a \in A, b \in B with a <= b in Q (Prop. 4.15),
 # then take transitive closure (Def. 4.17).
-function _uptight_poset(Q::FiniteFringe.FinitePoset, regions::Vector{Vector{Int}})
+function _uptight_poset(Q::FiniteFringe.AbstractPoset, regions::Vector{Vector{Int}};
+                        poset_kind::Symbol = :regions)
     r = length(regions)
-    rel = falses(r, r)
-    for A in 1:r, B in 1:r
-        if A == B
-            rel[A,B] = true
-            continue
+    if poset_kind == :regions
+        return RegionsPoset(Q, regions)
+    elseif poset_kind == :dense
+        rel = falses(r, r)
+        for A in 1:r, B in 1:r
+            if A == B
+                rel[A,B] = true
+                continue
+            end
+            found = false
+            for a in regions[A], b in regions[B]
+                if FiniteFringe.leq(Q, a, b); found = true; break; end
+            end
+            rel[A,B] = found
         end
-        found = false
-        for a in regions[A], b in regions[B]
-            if FiniteFringe.leq(Q, a, b); found = true; break; end
+        # Transitive closure (Floyd-Warshall boolean)
+        for k in 1:r, i in 1:r, j in 1:r
+            rel[i,j] = rel[i,j] || (rel[i,k] && rel[k,j])
         end
-        rel[A,B] = found
+        return FiniteFringe.FinitePoset(rel; check=false)
+    else
+        error("_uptight_poset: poset_kind must be :regions or :dense")
     end
-    # Transitive closure (Floyd-Warshall boolean)
-    for k in 1:r, i in 1:r, j in 1:r
-        rel[i,j] = rel[i,j] || (rel[i,k] && rel[k,j])
-    end
-    FiniteFringe.FinitePoset(rel; check=false)
 end
 
 # Build the encoding map pi : Q \to P_Y
-function _encoding_map(Q::FiniteFringe.FinitePoset,
-                       P::FiniteFringe.FinitePoset,
+function _encoding_map(Q::FiniteFringe.AbstractPoset,
+                       P::FiniteFringe.AbstractPoset,
                        regions::Vector{Vector{Int}})
-    pi_of_q = zeros(Int, Q.n)
+    pi_of_q = zeros(Int, nvertices(Q))
     for (idx, R) in enumerate(regions)
         for q in R
             pi_of_q[q] = idx
@@ -1103,8 +1607,8 @@ end
 
 "Image of a Q-upset under `pi` as a P-upset (Def. 4.12 / Remark 4.13)."
 function image_upset(pi::EncodingMap, U::FiniteFringe.Upset)
-    maskP = falses(pi.P.n)
-    for q in 1:pi.Q.n
+    maskP = falses(nvertices(pi.P))
+    for q in 1:nvertices(pi.Q)
         if U.mask[q]; maskP[pi.pi_of_q[q]] = true; end
     end
     FiniteFringe.upset_closure(pi.P, maskP)
@@ -1112,8 +1616,8 @@ end
 
 "Image of a Q-downset under `pi` as a P-downset."
 function image_downset(pi::EncodingMap, D::FiniteFringe.Downset)
-    maskP = falses(pi.P.n)
-    for q in 1:pi.Q.n
+    maskP = falses(nvertices(pi.P))
+    for q in 1:nvertices(pi.Q)
         if D.mask[q]; maskP[pi.pi_of_q[q]] = true; end
     end
     FiniteFringe.downset_closure(pi.P, maskP)
@@ -1121,8 +1625,8 @@ end
 
 "Preimage of a P-upset under `pi` as a Q-upset."
 function preimage_upset(pi::EncodingMap, Uhat::FiniteFringe.Upset)
-    maskQ = falses(pi.Q.n)
-    for q in 1:pi.Q.n
+    maskQ = falses(nvertices(pi.Q))
+    for q in 1:nvertices(pi.Q)
         if Uhat.mask[pi.pi_of_q[q]]; maskQ[q] = true; end
     end
     FiniteFringe.upset_closure(pi.Q, maskQ)
@@ -1130,8 +1634,8 @@ end
 
 "Preimage of a P-downset under `pi` as a Q-downset."
 function preimage_downset(pi::EncodingMap, Dhat::FiniteFringe.Downset)
-    maskQ = falses(pi.Q.n)
-    for q in 1:pi.Q.n
+    maskQ = falses(nvertices(pi.Q))
+    for q in 1:nvertices(pi.Q)
         if Dhat.mask[pi.pi_of_q[q]]; maskQ[q] = true; end
     end
     FiniteFringe.downset_closure(pi.Q, maskQ)
@@ -1140,13 +1644,20 @@ end
 # ---------------------------- Public constructors ----------------------------
 
 """
-    build_uptight_encoding_from_fringe(M::FringeModule) -> UptightEncoding
+    build_uptight_encoding_from_fringe(M::FringeModule; poset_kind=:regions) -> UptightEncoding
 
 Given a fringe presentation on `Q` with upsets `U_i` (births) and downsets `D_j` (deaths),
 form the finite family `Y = { U_i } cup { complement(D_j) }` of constant upsets (Def. 4.18),
 build the uptight regions (Defs. 4.12 - 4.17), and return the finite encoding `pi: Q -> P_Y`.
+`poset_kind=:regions` returns a structured `RegionsPoset`, `:dense` materializes a `FinitePoset`.
 """
-function build_uptight_encoding_from_fringe(M::FiniteFringe.FringeModule)
+function build_uptight_encoding_from_fringe(M::FiniteFringe.FringeModule;
+                                            poset_kind::Symbol = :regions,
+                                            opts::Union{FiniteFringeOptions,Nothing}=nothing)
+    if opts !== nothing
+        poset_kind == :regions || error("build_uptight_encoding_from_fringe: pass either poset_kind or opts, not both.")
+        poset_kind = opts.poset_kind
+    end
     Q = M.P
     Y = FiniteFringe.Upset[]
     append!(Y, M.U)
@@ -1155,7 +1666,7 @@ function build_uptight_encoding_from_fringe(M::FiniteFringe.FringeModule)
         push!(Y, FiniteFringe.upset_closure(Q, comp))
     end
     regions = _uptight_regions(Q, Y)
-    P = _uptight_poset(Q, regions)
+    P = _uptight_poset(Q, regions; poset_kind = poset_kind)
     pi = _encoding_map(Q, P, regions)
     UptightEncoding(pi, Y)
 end
@@ -1167,7 +1678,9 @@ Prop. 4.11 (used in the proof of Thm. 6.12): pull back a monomial matrix for a m
 by replacing row labels `D_hat_j` with `pi^{-1}(D_hat_j)` and column labels `U_hat_i` with `pi^{-1}(U_hat_i)`.
 The scalar matrix is unchanged.
 """
-function pullback_fringe_along_encoding(Hhat::FiniteFringe.FringeModule, pi::EncodingMap)
+function pullback_fringe_along_encoding(Hhat::FiniteFringe.FringeModule, pi::EncodingMap;
+                                        opts::Union{FiniteFringeOptions,Nothing}=nothing)
+    opts === nothing || nothing
     UQ = [preimage_upset(pi, Uhat) for Uhat in Hhat.U]
     DQ = [preimage_downset(pi, Dhat) for Dhat in Hhat.D]
     FiniteFringe.FringeModule{eltype(Hhat.phi)}(pi.Q, UQ, DQ, Hhat.phi)
@@ -1182,7 +1695,9 @@ This sends each upset generator `U_i` of `H` to `image_upset(pi, U_i)` and each
 downset generator `D_j` to `image_downset(pi, D_j)`, while keeping the scalar matrix
 `phi` unchanged.
 """
-function pushforward_fringe_along_encoding(H::FiniteFringe.FringeModule, pi::EncodingMap)
+function pushforward_fringe_along_encoding(H::FiniteFringe.FringeModule, pi::EncodingMap;
+                                           opts::Union{FiniteFringeOptions,Nothing}=nothing)
+    opts === nothing || nothing
     Uhat = [image_upset(pi, U) for U in H.U]
     Dhat = [image_downset(pi, D) for D in H.D]
     FiniteFringe.FringeModule{eltype(H.phi)}(pi.P, Uhat, Dhat, H.phi)

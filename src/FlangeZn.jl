@@ -386,6 +386,11 @@ function Flange{K}(n::Int, flats::Vector{IndFlat}, injectives::Vector{IndInj}, p
     return Flange{K}(n, flats, injectives, Matrix{K}(phi))
 end
 
+function Flange{K}(n::Int, flats::Vector{IndFlat}, injectives::Vector{IndInj}, phi::AbstractVector) where {K}
+    Phi = reshape(collect(phi), length(injectives), length(flats))
+    return Flange{K}(n, flats, injectives, Phi)
+end
+
 function Flange(n::Int, flats::Vector{IndFlat}, injectives::Vector{IndInj}, phi::AbstractMatrix{K}) where {K}
     return Flange{K}(n, flats, injectives, phi)
 end

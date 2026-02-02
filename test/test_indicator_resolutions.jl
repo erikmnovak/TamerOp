@@ -294,10 +294,10 @@ end
     # -------------------------------------------------------------------------
 
     function strict_interval(P::FF.FinitePoset, x::Int, y::Int)
-        if x == y || !P.leq[x, y]
+        if x == y || !FF.leq(P, x, y)
             return Int[]
         end
-        return [z for z in 1:P.n if z != x && z != y && P.leq[x, z] && P.leq[z, y]]
+        return [z for z in 1:P.n if z != x && z != y && FF.leq(P, x, z) && FF.leq(P, z, y)]
     end
 
     # Count connected components in the induced Hasse graph on 'verts' (undirected).
@@ -345,7 +345,7 @@ end
         if x == y
             return (ext0 = 1, ext1 = 0, ext2 = 0)
         end
-        if !P.leq[x, y]
+        if !FF.leq(P, x, y)
             return (ext0 = 0, ext1 = 0, ext2 = 0)
         end
 

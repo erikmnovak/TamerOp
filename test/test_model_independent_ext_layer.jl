@@ -65,7 +65,7 @@ The interval module supported on {q : a <= q <= b}, built via a 1x1 fringe.
 Requires a <= b in the poset.
 """
 function interval_pmodule(P::FF.FinitePoset, a::Int, b::Int)
-    @assert P.leq[a, b]
+    @assert FF.leq(P, a, b)
     Hab = one_by_one_fringe(P, FF.principal_upset(P, a), FF.principal_downset(P, b))
     return IR.pmodule_from_fringe(Hab)
 end

@@ -20,6 +20,7 @@
 # =============================================================================
 
 using LinearAlgebra  # UniformScaling I / transpose
+using SparseArrays
 
 # Keep this file self-contained: import the handful of names it mentions
 # in type annotations or uses unqualified.
@@ -33,6 +34,34 @@ using .PLBackend: BoxUpset, BoxDownset, encode_fringe_boxes
 using .Encoding: build_uptight_encoding_from_fringe,
                  pushforward_fringe_along_encoding,
                  PostcomposedEncodingMap
+using .DataPipeline: PointCloud, ImageNd, GraphData, EmbeddedPlanarGraph2D, GradedComplex,
+                     FiltrationSpec, GridEncodingMap, poset_from_axes, grid_index
+using .Modules: PModule, PMorphism, cover_edges, dim_at
+using .ModuleComplexes: ModuleCochainComplex, cohomology_module
+
+@inline _resolve_encoding_opts(opts::Union{EncodingOptions,Nothing}) =
+    opts === nothing ? EncodingOptions() : opts
+@inline function _resolve_encoding_alias(enc::Union{EncodingOptions,Nothing},
+                                        opts::Union{EncodingOptions,Nothing})
+    if enc !== nothing && opts !== nothing
+        error("encode: pass either enc or opts, not both.")
+    end
+    return _resolve_encoding_opts(opts === nothing ? enc : opts)
+end
+@inline _resolve_resolution_opts(opts::Union{ResolutionOptions,Nothing}) =
+    opts === nothing ? ResolutionOptions() : opts
+@inline _resolve_df_opts(opts::Union{DerivedFunctorOptions,Nothing}) =
+    opts === nothing ? DerivedFunctorOptions() : opts
+@inline _resolve_invariant_opts(opts::Union{InvariantOptions,Nothing}) =
+    opts === nothing ? InvariantOptions() : opts
+using .IndicatorResolutions: projective_cover
+using .FiniteFringe: AbstractPoset, FringeModule, Upset, Downset, principal_upset, principal_downset,
+                     leq, nvertices, poset_equal_opposite
+using .FlangeZn: Face, IndFlat, IndInj, Flange
+
+# Cache for cubical structures and posets to reuse across repeated grids.
+const _cubical_cache = Dict{Any,Any}()
+const _poset_cache = Dict{Any,AbstractPoset}()
 
 # -----------------------------------------------------------------------------
 # Backend selection for R^n encoding (PLBackend vs PLPolyhedra)
@@ -89,9 +118,9 @@ end
 # Internal: infer ambient dimension from box generators.
 function _infer_box_dim(Ups::Vector{BoxUpset}, Downs::Vector{BoxDownset})
     if !isempty(Ups)
-        return length(Ups[1].lo)
+        return length(Ups[1].ell)
     elseif !isempty(Downs)
-        return length(Downs[1].lo)
+        return length(Downs[1].u)
     else
         error("Cannot infer dimension: both Ups and Downs are empty.")
     end
@@ -105,22 +134,20 @@ This checks:
 - axis-aligned boxes with finite coordinates,
 - region count does not exceed opts.max_regions if set.
 """
-function supports_pl_backend(Ups::Vector{BoxUpset}, Downs::Vector{BoxDownset}; opts::EncodingOptions=EncodingOptions())::Bool
+function supports_pl_backend(Ups::Vector{BoxUpset}, Downs::Vector{BoxDownset};
+                             opts::Union{EncodingOptions,Nothing}=nothing)::Bool
+    opts = _resolve_encoding_opts(opts)
     max_regions = opts.max_regions
     # PLBackend can only handle finite, axis-aligned boxes (encoded as BoxUpset/BoxDownset).
     # If any generator has +/-Inf bounds, or other invalid bounds, reject here.
     for U in Ups
-        for (a,b) in zip(U.lo, U.hi)
-            if !(isfinite(a) && isfinite(b))
-                return false
-            end
+        for a in U.ell
+            isfinite(a) || return false
         end
     end
     for D in Downs
-        for (a,b) in zip(D.lo, D.hi)
-            if !(isfinite(a) && isfinite(b))
-                return false
-            end
+        for b in D.u
+            isfinite(b) || return false
         end
     end
 
@@ -131,14 +158,12 @@ function supports_pl_backend(Ups::Vector{BoxUpset}, Downs::Vector{BoxDownset}; o
         coords = [QQ[] for _ in 1:n]
         for U in Ups
             for i in 1:n
-                push!(coords[i], U.lo[i])
-                push!(coords[i], U.hi[i])
+                push!(coords[i], U.ell[i])
             end
         end
         for D in Downs
             for i in 1:n
-                push!(coords[i], D.lo[i])
-                push!(coords[i], D.hi[i])
+                push!(coords[i], D.u[i])
             end
         end
         # unique, sorted
@@ -169,7 +194,8 @@ end
 Return true iff the PLFringe can be converted to a box presentation and encoded by PLBackend
 under the given options.
 """
-function supports_pl_backend(F::PLPolyhedra.PLFringe; opts::EncodingOptions=EncodingOptions())::Bool
+function supports_pl_backend(F::PLPolyhedra.PLFringe; opts::Union{EncodingOptions,Nothing}=nothing)::Bool
+    opts = _resolve_encoding_opts(opts)
     try
         Ups, Downs = boxes_from_pl_fringe(F)
         return supports_pl_backend(Ups, Downs; opts=opts)
@@ -232,19 +258,17 @@ function pl_fringe_from_boxes(Ups::Vector{BoxUpset}, Downs::Vector{BoxDownset})
 
     PUps = Vector{PLPolyhedra.PLUpset}(undef, length(Ups))
     for i in eachindex(Ups)
-        lo = Ups[i].lo
-        hi = Ups[i].hi
-        A = vcat(Matrix{QQ}(I, n, n), -Matrix{QQ}(I, n, n))
-        b = vcat(lo, -hi)
+        ell = Ups[i].ell
+        A = -Matrix{QQ}(I, n, n)
+        b = -ell
         PUps[i] = PLPolyhedra.PLUpset(A, b)
     end
 
     PDowns = Vector{PLPolyhedra.PLDownset}(undef, length(Downs))
     for i in eachindex(Downs)
-        lo = Downs[i].lo
-        hi = Downs[i].hi
-        A = vcat(Matrix{QQ}(I, n, n), -Matrix{QQ}(I, n, n))
-        b = vcat(lo, -hi)
+        u = Downs[i].u
+        A = Matrix{QQ}(I, n, n)
+        b = u
         PDowns[i] = PLPolyhedra.PLDownset(A, b)
     end
 
@@ -265,7 +289,9 @@ Rules:
 - If opts.backend=:auto, prefer :pl_backend when supported; otherwise fall back to :pl.
 - If :pl is requested but Polyhedra backend is unavailable, throw.
 """
-function choose_pl_backend(Ups::Vector{BoxUpset}, Downs::Vector{BoxDownset}; opts::EncodingOptions=EncodingOptions())::Symbol
+function choose_pl_backend(Ups::Vector{BoxUpset}, Downs::Vector{BoxDownset};
+                           opts::Union{EncodingOptions,Nothing}=nothing)::Symbol
+    opts = _resolve_encoding_opts(opts)
     b = _normalize_pl_backend(opts.backend)
     if b == :pl_backend
         supports_pl_backend(Ups, Downs; opts=opts) || error("PLBackend requested, but this input is not supported by PLBackend.")
@@ -285,7 +311,8 @@ function choose_pl_backend(Ups::Vector{BoxUpset}, Downs::Vector{BoxDownset}; opt
     end
 end
 
-function choose_pl_backend(F::PLPolyhedra.PLFringe; opts::EncodingOptions=EncodingOptions())::Symbol
+function choose_pl_backend(F::PLPolyhedra.PLFringe; opts::Union{EncodingOptions,Nothing}=nothing)::Symbol
+    opts = _resolve_encoding_opts(opts)
     b = _normalize_pl_backend(opts.backend)
     if b == :pl_backend
         supports_pl_backend(F; opts=opts) || error("PLBackend requested, but this PLFringe is not supported by PLBackend.")
@@ -313,24 +340,26 @@ Unified R^n encoder:
 - If :pl is chosen, uses PLPolyhedra.encode_from_PL_fringe(...)
 """
 function encode_from_fringe(Ups::Vector{BoxUpset}, Downs::Vector{BoxDownset}, Phi::AbstractMatrix{QQ},
-                            opts::EncodingOptions=EncodingOptions())
+                            opts::Union{EncodingOptions,Nothing}=nothing)
+    opts = _resolve_encoding_opts(opts)
     b = choose_pl_backend(Ups, Downs; opts=opts)
     if b == :pl_backend
-        return encode_fringe_boxes(Ups, Downs, Phi; opts=opts)
+        return encode_fringe_boxes(Ups, Downs, Phi, opts; poset_kind=opts.poset_kind)
     else
         F = pl_fringe_from_boxes(Ups, Downs)
-        return PLPolyhedra.encode_from_PL_fringe(F, opts)
+        return PLPolyhedra.encode_from_PL_fringe(F, opts; poset_kind=opts.poset_kind)
     end
 end
 
-function encode_from_fringe(F::PLPolyhedra.PLFringe, opts::EncodingOptions=EncodingOptions())
+function encode_from_fringe(F::PLPolyhedra.PLFringe, opts::Union{EncodingOptions,Nothing}=nothing)
+    opts = _resolve_encoding_opts(opts)
     b = choose_pl_backend(F; opts=opts)
     if b == :pl_backend
         Ups, Downs = boxes_from_pl_fringe(F)
         Phi = reshape(ones(QQ, length(Downs) * length(Ups)), length(Downs), length(Ups))
-        return encode_fringe_boxes(Ups, Downs, Phi; opts=opts)
+        return encode_fringe_boxes(Ups, Downs, Phi, opts; poset_kind=opts.poset_kind)
     else
-        return PLPolyhedra.encode_from_PL_fringe(F, opts)
+        return PLPolyhedra.encode_from_PL_fringe(F, opts; poset_kind=opts.poset_kind)
     end
 end
 
@@ -340,21 +369,39 @@ end
 Return (M, pi) where M is the finite-poset PModule obtained from the encoded fringe module.
 """
 function encode_pmodule_from_fringe(Ups::Vector{BoxUpset}, Downs::Vector{BoxDownset}, Phi::AbstractMatrix{QQ},
-                                    opts::EncodingOptions=EncodingOptions())
+                                    opts::Union{EncodingOptions,Nothing}=nothing)
+    opts = _resolve_encoding_opts(opts)
     P, H, pi = encode_from_fringe(Ups, Downs, Phi, opts)
     return pmodule_from_fringe(H), pi
 end
 
-function encode_pmodule_from_fringe(F::PLPolyhedra.PLFringe, opts::EncodingOptions=EncodingOptions())
+function encode_pmodule_from_fringe(F::PLPolyhedra.PLFringe, opts::Union{EncodingOptions,Nothing}=nothing)
+    opts = _resolve_encoding_opts(opts)
     P, H, pi = encode_from_fringe(F, opts)
     return pmodule_from_fringe(H), pi
 end
+
+encode_from_fringe(Ups::Vector{BoxUpset}, Downs::Vector{BoxDownset}, Phi::AbstractMatrix{QQ};
+                   opts::Union{EncodingOptions,Nothing}=nothing) =
+    encode_from_fringe(Ups, Downs, Phi, _resolve_encoding_opts(opts))
+
+encode_from_fringe(F::PLPolyhedra.PLFringe;
+                   opts::Union{EncodingOptions,Nothing}=nothing) =
+    encode_from_fringe(F, _resolve_encoding_opts(opts))
+
+encode_pmodule_from_fringe(Ups::Vector{BoxUpset}, Downs::Vector{BoxDownset}, Phi::AbstractMatrix{QQ};
+                           opts::Union{EncodingOptions,Nothing}=nothing) =
+    encode_pmodule_from_fringe(Ups, Downs, Phi, _resolve_encoding_opts(opts))
+
+encode_pmodule_from_fringe(F::PLPolyhedra.PLFringe;
+                           opts::Union{EncodingOptions,Nothing}=nothing) =
+    encode_pmodule_from_fringe(F, _resolve_encoding_opts(opts))
 
 # -----------------------------------------------------------------------------
 # Workflow entrypoints (narrative API)
 
 """
-    encode(x; backend=:auto, max_regions=nothing, strict_eps=nothing) -> EncodingResult
+    encode(x; backend=:auto, max_regions=nothing, strict_eps=nothing, poset_kind=:signature) -> EncodingResult
     encode(x1, x2, ...; backend=:auto, ...) -> Vector{EncodingResult}
 
 High-level entrypoint that turns a presentation object into a finite encoding poset model.
@@ -376,8 +423,8 @@ Notes
 * For multiple PL fringes, only the PLPolyhedra backend currently supports common-encoding.
   If you need common-encoding and you asked for PLBackend explicitly, we throw an error.
 """
-function encode(x; backend::Symbol=:auto, max_regions=nothing, strict_eps=nothing)
-    enc = EncodingOptions(; backend=backend, max_regions=max_regions, strict_eps=strict_eps)
+function encode(x; backend::Symbol=:auto, max_regions=nothing, strict_eps=nothing, poset_kind::Symbol=:signature)
+    enc = EncodingOptions(; backend=backend, max_regions=max_regions, strict_eps=strict_eps, poset_kind=poset_kind)
     return encode(x, enc)
 end
 
@@ -391,6 +438,23 @@ function encode(FG::Flange{QQ}, enc::EncodingOptions)
     P, H, pi = ZnEncoding.encode_from_flange(FG, enc)
     M = pmodule_from_fringe(H)
     return EncodingResult(P, M, pi; H=H, presentation=FG, opts=enc, backend=:zn, meta=(;))
+end
+
+function encode(FG::Flange{QQ};
+                enc=nothing,
+                opts=nothing,
+                backend::Symbol=:auto,
+                max_regions=nothing,
+                strict_eps=nothing,
+                poset_kind::Symbol=:signature)
+    if enc !== nothing || opts !== nothing
+        if backend != :auto || max_regions !== nothing || strict_eps !== nothing || poset_kind != :signature
+            error("encode(Flange): pass either enc/opts or backend/max_regions/strict_eps/poset_kind, not both.")
+        end
+        return encode(FG, _resolve_encoding_alias(enc, opts))
+    end
+    enc2 = EncodingOptions(; backend=backend, max_regions=max_regions, strict_eps=strict_eps, poset_kind=poset_kind)
+    return encode(FG, enc2)
 end
 
 function encode(FGs::AbstractVector{<:Flange{QQ}}, enc::EncodingOptions)
@@ -407,6 +471,23 @@ function encode(FGs::AbstractVector{<:Flange{QQ}}, enc::EncodingOptions)
     return out
 end
 
+function encode(FGs::AbstractVector{<:Flange{QQ}};
+                enc=nothing,
+                opts=nothing,
+                backend::Symbol=:auto,
+                max_regions=nothing,
+                strict_eps=nothing,
+                poset_kind::Symbol=:signature)
+    if enc !== nothing || opts !== nothing
+        if backend != :auto || max_regions !== nothing || strict_eps !== nothing || poset_kind != :signature
+            error("encode(Vector{Flange}): pass either enc/opts or backend/max_regions/strict_eps/poset_kind, not both.")
+        end
+        return encode(FGs, _resolve_encoding_alias(enc, opts))
+    end
+    enc2 = EncodingOptions(; backend=backend, max_regions=max_regions, strict_eps=strict_eps, poset_kind=poset_kind)
+    return encode(FGs, enc2)
+end
+
 encode(FG1::Flange{QQ}, FG2::Flange{QQ}; kwargs...) =
     encode(Flange{QQ}[FG1, FG2]; kwargs...)
 
@@ -416,7 +497,8 @@ encode(FG1::Flange{QQ}, FG2::Flange{QQ}, FG3::Flange{QQ}; kwargs...) =
 # -----------------------
 # R^n presentations
 
-function encode(F::PLPolyhedra.PLFringe, enc::EncodingOptions=EncodingOptions())
+function encode(F::PLPolyhedra.PLFringe, enc::Union{EncodingOptions,Nothing}=nothing)
+    enc = _resolve_encoding_opts(enc)
     P, H, pi = encode_from_fringe(F, enc)
     M = pmodule_from_fringe(H)
     b = choose_pl_backend(F; opts=enc)
@@ -424,7 +506,8 @@ function encode(F::PLPolyhedra.PLFringe, enc::EncodingOptions=EncodingOptions())
 end
 
 function encode(Ups::Vector{BoxUpset}, Downs::Vector{BoxDownset}, Phi::AbstractMatrix{QQ},
-                enc::EncodingOptions=EncodingOptions())
+                enc::Union{EncodingOptions,Nothing}=nothing)
+    enc = _resolve_encoding_opts(enc)
     P, H, pi = encode_from_fringe(Ups, Downs, Phi, enc)
     M = pmodule_from_fringe(H)
     b = choose_pl_backend(Ups, Downs; opts=enc)
@@ -434,11 +517,20 @@ function encode(Ups::Vector{BoxUpset}, Downs::Vector{BoxDownset}, Phi::AbstractM
 end
 
 # Convenience overloads for common BoxFringe encodings
-encode(Ups::Vector{BoxUpset}, Downs::Vector{BoxDownset}, enc::EncodingOptions=EncodingOptions()) =
-    encode(Ups, Downs, reshape(ones(QQ, length(Downs) * length(Ups)), length(Downs), length(Ups)), enc)
+encode(Ups::Vector{BoxUpset}, Downs::Vector{BoxDownset}, enc::Union{EncodingOptions,Nothing}=nothing) =
+    encode(Ups, Downs,
+           reshape(ones(QQ, length(Downs) * length(Ups)), length(Downs), length(Ups)),
+           _resolve_encoding_opts(enc))
+
+function encode(Ups::Vector{BoxUpset}, Downs::Vector{BoxDownset};
+                backend::Symbol=:auto, max_regions=nothing, strict_eps=nothing, poset_kind::Symbol=:signature)
+    enc = EncodingOptions(; backend=backend, max_regions=max_regions, strict_eps=strict_eps, poset_kind=poset_kind)
+    return encode(Ups, Downs, enc)
+end
 
 function encode(Ups::Vector{BoxUpset}, Downs::Vector{BoxDownset}, Phi_vec::AbstractVector{QQ},
-                enc::EncodingOptions=EncodingOptions())
+                enc::Union{EncodingOptions,Nothing}=nothing)
+    enc = _resolve_encoding_opts(enc)
     Phi = reshape(Phi_vec, length(Downs), length(Ups))
     return encode(Ups, Downs, Phi, enc)
 end
@@ -451,7 +543,7 @@ function encode(Fs::AbstractVector{<:PLPolyhedra.PLFringe}, enc::EncodingOptions
     if enc.backend != :auto && enc.backend != :pl
         error("encode(Vector{PLFringe}): EncodingOptions.backend must be :auto or :pl (got $(enc.backend))")
     end
-    P, Hs, pi = PLPolyhedra.encode_from_PL_fringes(Fs, enc)
+    P, Hs, pi = PLPolyhedra.encode_from_PL_fringes(Fs, enc; poset_kind=enc.poset_kind)
     out = Vector{EncodingResult}(undef, length(Fs))
     for i in eachindex(Fs)
         H = Hs[i]
@@ -461,11 +553,1053 @@ function encode(Fs::AbstractVector{<:PLPolyhedra.PLFringe}, enc::EncodingOptions
     return out
 end
 
+encode(Fs::AbstractVector{<:PLPolyhedra.PLFringe}; enc=nothing, opts=nothing) =
+    encode(Fs, _resolve_encoding_alias(enc, opts))
+
 encode(F1::PLPolyhedra.PLFringe, F2::PLPolyhedra.PLFringe; kwargs...) =
     encode(PLPolyhedra.PLFringe[F1, F2]; kwargs...)
 
 encode(F1::PLPolyhedra.PLFringe, F2::PLPolyhedra.PLFringe, F3::PLPolyhedra.PLFringe; kwargs...) =
     encode(PLPolyhedra.PLFringe[F1, F2, F3]; kwargs...)
+
+# -----------------------------------------------------------------------------
+# Data ingestion pipeline (datasets -> graded complex -> cohomology -> fringe)
+
+@inline function _tuple_leq(a::NTuple{N,Int}, b::NTuple{N,Int},
+                            orientation::NTuple{N,Int}) where {N}
+    @inbounds for i in 1:N
+        if orientation[i] == 1
+            if a[i] > b[i]
+                return false
+            end
+        else
+            if a[i] < b[i]
+                return false
+            end
+        end
+    end
+    return true
+end
+
+function _grid_tuples(sizes::NTuple{N,Int}) where {N}
+    total = 1
+    for i in 1:N
+        total *= sizes[i]
+    end
+    out = Vector{NTuple{N,Int}}(undef, total)
+    cur = ones(Int, N)
+    for lin in 1:total
+        out[lin] = ntuple(i -> cur[i], N)
+        for i in 1:N
+            cur[i] += 1
+            if cur[i] <= sizes[i]
+                break
+            else
+                cur[i] = 1
+            end
+        end
+    end
+    return out
+end
+
+function _axes_from_grades(grades::Vector{<:NTuple{N,T}}, n::Int) where {N,T}
+    axes = [T[] for _ in 1:n]
+    for g in grades
+        length(g) == n || error("grade has length $(length(g)) but expected $n")
+        for i in 1:n
+            push!(axes[i], g[i])
+        end
+    end
+    for i in 1:n
+        axes[i] = sort!(unique!(axes[i]))
+    end
+    return ntuple(i -> axes[i], n)
+end
+
+function _validate_axes_sorted(axes)
+    for (i, ax) in enumerate(axes)
+        if !issorted(ax)
+            error("encode_from_data: axis $i must be sorted ascending.")
+        end
+    end
+    return nothing
+end
+
+function _validate_axes_kind(axes; axis_kind=nothing)
+    # axis_kind may be :zn / :rn to force integer vs real axes.
+    is_int_typed_axis(ax) = all(x -> x isa Integer, ax)
+    is_int_valued_axis(ax) = all(x -> (x isa Integer) || (x isa Real && isinteger(x)), ax)
+
+    if axis_kind === nothing
+        return nothing
+    end
+
+    axis_kind in (:zn, :rn) || error("encode_from_data: axis_kind must be :zn or :rn.")
+    if axis_kind == :zn
+        for (i, ax) in enumerate(axes)
+            if !is_int_typed_axis(ax)
+                error("encode_from_data: axis $i must be integer-typed for axis_kind=:zn.")
+            end
+        end
+    else
+        for (i, ax) in enumerate(axes)
+            if is_int_typed_axis(ax)
+                error("encode_from_data: axis $i is integer-typed but axis_kind=:rn.")
+            end
+        end
+    end
+    return nothing
+end
+
+function _axes_key(axes)
+    return tuple((Tuple(ax) for ax in axes)...)
+end
+
+function _coarsen_axis(ax::Vector{T}, max_len::Int) where {T}
+    n = length(ax)
+    n <= max_len && return ax
+    idxs = round.(Int, range(1, n; length=max_len))
+    return ax[idxs]
+end
+
+function _coarsen_axes(axes::NTuple{N,Vector{T}}, max_len::Int) where {N,T}
+    return ntuple(i -> _coarsen_axis(axes[i], max_len), N)
+end
+
+function _quantize_grades(G::GradedComplex, eps)
+    N = length(G.grades[1])
+    eps_vec = if eps isa Number
+        ntuple(_ -> Float64(eps), N)
+    elseif eps isa Tuple
+        length(eps) == N || error("encode_from_data: eps length mismatch.")
+        ntuple(i -> Float64(eps[i]), N)
+    else
+        error("encode_from_data: eps must be a number or tuple.")
+    end
+    grades = Vector{NTuple{N,Float64}}(undef, length(G.grades))
+    for i in eachindex(G.grades)
+        g = G.grades[i]
+        grades[i] = ntuple(j -> round(Float64(g[j]) / eps_vec[j]) * eps_vec[j], N)
+    end
+    return GradedComplex(G.cells_by_dim, G.boundaries, [collect(grades[i]) for i in eachindex(grades)]; cell_dims=G.cell_dims)
+end
+
+function _poset_from_axes_cached(axes, orientation)
+    key = (_axes_key(axes), orientation)
+    P = get(_poset_cache, key, nothing)
+    if P === nothing
+        P = poset_from_axes(axes; orientation=orientation, kind=:grid)
+        _poset_cache[key] = P
+    end
+    return P
+end
+
+function _poset_vertex_coords(axes::NTuple{N,Vector{T}}) where {N,T}
+    sizes = ntuple(i -> length(axes[i]), N)
+    idxs = _grid_tuples(sizes)
+    coords = Vector{Vector{Int}}(undef, length(idxs))
+    for i in eachindex(idxs)
+        coords[i] = [Int(axes[j][idxs[i][j]]) for j in 1:N]
+    end
+    return coords
+end
+
+function _grades_by_dim(G::GradedComplex)
+    counts = [length(c) for c in G.cells_by_dim]
+    total = sum(counts)
+    length(G.grades) == total ||
+        error("GradedComplex.grades length $(length(G.grades)) does not match total cells $(total).")
+    out = Vector{Vector{typeof(G.grades[1])}}(undef, length(counts))
+    idx = 1
+    for d in 1:length(counts)
+        out[d] = Vector{typeof(G.grades[1])}(undef, counts[d])
+        for j in 1:counts[d]
+            out[d][j] = G.grades[idx]
+            idx += 1
+        end
+    end
+    return out
+end
+
+function _birth_indices(grades::Vector{<:NTuple{N,<:Real}},
+                        axes::NTuple{N,Vector{<:Real}},
+                        orientation::NTuple{N,Int}) where {N}
+    births = Vector{NTuple{N,Int}}(undef, length(grades))
+    for i in eachindex(grades)
+        g = grades[i]
+        length(g) == N || error("grade length $(length(g)) does not match N=$(N)")
+        births[i] = ntuple(k -> begin
+            val = orientation[k] == 1 ? g[k] : -g[k]
+            idx = searchsortedlast(axes[k], val)
+            idx >= 1 || error("grade component $(g[k]) falls below axis minimum for axis $k")
+            idx
+        end, N)
+    end
+    return births
+end
+
+function _active_lists(births::Vector{NTuple{N,Int}},
+                       vertex_idxs::Vector{NTuple{N,Int}},
+                       orientation::NTuple{N,Int}) where {N}
+    active = Vector{Vector{Int}}(undef, length(vertex_idxs))
+    for i in eachindex(vertex_idxs)
+        lst = Int[]
+        vi = vertex_idxs[i]
+        for c in eachindex(births)
+            if _tuple_leq(births[c], vi, orientation)
+                push!(lst, c)
+            end
+        end
+        active[i] = lst
+    end
+    return active
+end
+
+function _pos_maps(active::Vector{Vector{Int}})
+    maps = Vector{Dict{Int,Int}}(undef, length(active))
+    for i in eachindex(active)
+        d = Dict{Int,Int}()
+        for (j, c) in enumerate(active[i])
+            d[c] = j
+        end
+        maps[i] = d
+    end
+    return maps
+end
+
+function _pmodule_from_active_lists(P::AbstractPoset,
+                                    active::Vector{Vector{Int}})
+    dims = [length(lst) for lst in active]
+    edge_maps = Dict{Tuple{Int,Int}, Matrix{QQ}}()
+    for (u, v) in cover_edges(P)
+        Mu = active[u]
+        Mv = active[v]
+        pos_v = Dict{Int,Int}()
+        for (i, c) in enumerate(Mv)
+            pos_v[c] = i
+        end
+        A = zeros(QQ, length(Mv), length(Mu))
+        for (j, c) in enumerate(Mu)
+            i = get(pos_v, c, 0)
+            if i != 0
+                A[i, j] = 1//1
+            end
+        end
+        edge_maps[(u, v)] = A
+    end
+    return PModule{QQ}(P, dims, edge_maps)
+end
+
+function cochain_complex_from_graded_complex(G::GradedComplex,
+                                             P::AbstractPoset,
+                                             axes::NTuple{N,Vector{T}};
+                                             orientation::NTuple{N,Int}=ntuple(_ -> 1, N)) where {N,T}
+    sizes = ntuple(i -> length(axes[i]), N)
+    vertex_idxs = _grid_tuples(sizes)
+
+    grades_by_dim = _grades_by_dim(G)
+    births_by_dim = Vector{Vector{NTuple{N,Int}}}(undef, length(grades_by_dim))
+    active_by_dim = Vector{Vector{Vector{Int}}}(undef, length(grades_by_dim))
+    pos_by_dim = Vector{Vector{Dict{Int,Int}}}(undef, length(grades_by_dim))
+    for d in 1:length(grades_by_dim)
+        births_by_dim[d] = _birth_indices(grades_by_dim[d], axes, orientation)
+        active_by_dim[d] = _active_lists(births_by_dim[d], vertex_idxs, orientation)
+        pos_by_dim[d] = _pos_maps(active_by_dim[d])
+    end
+
+    terms = Vector{PModule{QQ}}(undef, length(grades_by_dim))
+    for d in 1:length(grades_by_dim)
+        terms[d] = _pmodule_from_active_lists(P, active_by_dim[d])
+    end
+
+    diffs = PMorphism{QQ}[]
+    expected = length(grades_by_dim) - 1
+    boundaries = G.boundaries
+    if length(boundaries) < expected
+        for k in (length(boundaries) + 1):expected
+            rows = length(grades_by_dim[k])
+            cols = length(grades_by_dim[k + 1])
+            push!(boundaries, spzeros(Int, rows, cols))
+        end
+    elseif length(boundaries) > expected
+        error("GradedComplex.boundaries length mismatch (expected $(expected)).")
+    end
+
+    for k in 1:length(boundaries)
+        B = boundaries[k]  # boundary C_{k+1} -> C_k
+        comps = Vector{Matrix{QQ}}(undef, nvertices(P))
+        for i in 1:nvertices(P)
+            Lk = active_by_dim[k][i]
+            Lk1 = active_by_dim[k+1][i]
+            rowmap = pos_by_dim[k][i]
+            colmap = pos_by_dim[k+1][i]
+            M = spzeros(QQ, length(Lk1), length(Lk))
+            Ii, Jj, Vv = findnz(B)
+            @inbounds for t in eachindex(Ii)
+                r = get(rowmap, Ii[t], 0)
+                c = get(colmap, Jj[t], 0)
+                if r != 0 && c != 0
+                    M[c, r] = QQ(Vv[t])
+                end
+            end
+            comps[i] = Matrix{QQ}(M)
+        end
+        push!(diffs, PMorphism{QQ}(terms[k], terms[k+1], comps))
+    end
+
+    return ModuleCochainComplex(terms, diffs; tmin=0, check=true)
+end
+
+"""
+    fringe_presentation(M::PModule{QQ}) -> FringeModule{QQ}
+
+Construct a canonical fringe presentation whose image recovers `M`.
+"""
+function fringe_presentation(M::PModule{QQ})
+    P = M.Q
+    F0, pi0, gens_at_F0 = projective_cover(M)
+    E0, iota0, gens_at_E0 = IndicatorResolutions._injective_hull(M)
+
+    # Map F0 -> E0 whose image is M.
+    comps = Vector{Matrix{QQ}}(undef, nvertices(P))
+    for i in 1:nvertices(P)
+        comps[i] = iota0.comps[i] * pi0.comps[i]
+    end
+    f = PMorphism{QQ}(F0, E0, comps)
+
+    U = IndicatorResolutions._principal_upsets_from_gens(P, gens_at_F0)
+    D = IndicatorResolutions._principal_downsets_from_gens(P, gens_at_E0)
+
+    L0 = IndicatorResolutions._local_index_list_up(P, gens_at_F0)
+    L1 = IndicatorResolutions._local_index_list_down(P, gens_at_E0)
+
+    globalU = Tuple{Int,Int}[]
+    for p in 1:nvertices(P)
+        append!(globalU, gens_at_F0[p])
+    end
+    globalD = Tuple{Int,Int}[]
+    for u in 1:nvertices(P)
+        append!(globalD, gens_at_E0[u])
+    end
+
+    function local_pos(L, g::Tuple{Int,Int}, i::Int)
+        for (j, gg) in enumerate(L[i])
+            if gg == g
+                return j
+            end
+        end
+        return 0
+    end
+
+    phi = spzeros(QQ, length(D), length(U))
+    for (lambda, (plambda, jlambda)) in enumerate(globalU)
+        for (theta, (ptheta, jtheta)) in enumerate(globalD)
+            if leq(P, plambda, ptheta)
+                i = plambda
+                col = local_pos(L0, (plambda, jlambda), i)
+                row = local_pos(L1, (ptheta, jtheta), i)
+                if col > 0 && row > 0
+                    val = f.comps[i][row, col]
+                    if val != 0
+                        phi[theta, lambda] = val
+                    end
+                end
+            end
+        end
+    end
+
+    return FringeModule{QQ}(P, U, D, phi)
+end
+
+"""
+    flange_presentation(M::PModule{QQ}, pi::GridEncodingMap) -> Flange{QQ}
+
+Construct a Z^n flange presentation for an integer-valued grid encoding.
+"""
+function flange_presentation(M::PModule{QQ}, pi::GridEncodingMap)
+    P = M.Q
+    n = length(pi.coords)
+    for ax in pi.coords
+        all(x -> x isa Integer || (x isa Real && isinteger(x)), ax) ||
+            error("flange_presentation: axes must be integer-valued.")
+    end
+    F0, pi0, gens_at_F0 = projective_cover(M)
+    E0, iota0, gens_at_E0 = IndicatorResolutions._injective_hull(M)
+
+    comps = Vector{Matrix{QQ}}(undef, nvertices(P))
+    for i in 1:nvertices(P)
+        comps[i] = iota0.comps[i] * pi0.comps[i]
+    end
+    f = PMorphism{QQ}(F0, E0, comps)
+
+    tau = Face(n, falses(n))
+    coords = _poset_vertex_coords(pi.coords)
+
+    flats = IndFlat[]
+    for p in 1:nvertices(P)
+        for _ in gens_at_F0[p]
+            push!(flats, IndFlat(tau, coords[p]; id=:F))
+        end
+    end
+
+    injectives = IndInj[]
+    for u in 1:nvertices(P)
+        for _ in gens_at_E0[u]
+            push!(injectives, IndInj(tau, coords[u]; id=:E))
+        end
+    end
+
+    L0 = IndicatorResolutions._local_index_list_up(P, gens_at_F0)
+    L1 = IndicatorResolutions._local_index_list_down(P, gens_at_E0)
+
+    globalU = Tuple{Int,Int}[]
+    for p in 1:nvertices(P)
+        append!(globalU, gens_at_F0[p])
+    end
+    globalD = Tuple{Int,Int}[]
+    for u in 1:nvertices(P)
+        append!(globalD, gens_at_E0[u])
+    end
+
+    function local_pos(L, g::Tuple{Int,Int}, i::Int)
+        for (j, gg) in enumerate(L[i])
+            if gg == g
+                return j
+            end
+        end
+        return 0
+    end
+
+    Phi = spzeros(QQ, length(injectives), length(flats))
+    for (lambda, (plambda, jlambda)) in enumerate(globalU)
+        for (theta, (ptheta, jtheta)) in enumerate(globalD)
+            if leq(P, plambda, ptheta)
+                i = plambda
+                col = local_pos(L0, (plambda, jlambda), i)
+                row = local_pos(L1, (ptheta, jtheta), i)
+                if col > 0 && row > 0
+                    val = f.comps[i][row, col]
+                    if val != 0
+                        Phi[theta, lambda] = val
+                    end
+                end
+            end
+        end
+    end
+
+    return Flange{QQ}(n, flats, injectives, Matrix{QQ}(Phi))
+end
+
+function _simplicial_boundary(simplices::Vector{Vector{Int}}, faces::Vector{Vector{Int}})
+    K = isempty(simplices) ? length(faces[1]) + 1 : length(simplices[1])
+    face_index = Dict{Tuple{Vararg{Int}},Int}()
+    for (i, f) in enumerate(faces)
+        face_index[Tuple(f)] = i
+    end
+    I = Int[]
+    J = Int[]
+    V = Int[]
+    for (j, s) in enumerate(simplices)
+        for i in 1:K
+            f = [s[t] for t in 1:K if t != i]
+            row = face_index[Tuple(f)]
+            push!(I, row)
+            push!(J, j)
+            push!(V, isodd(i) ? 1 : -1)
+        end
+    end
+    return sparse(I, J, V, length(faces), length(simplices))
+end
+
+function _combinations(n::Int, k::Int)
+    if k == 0
+        return [Int[]]
+    end
+    out = Vector{Vector{Int}}()
+    function rec(start::Int, acc::Vector{Int})
+        if length(acc) == k
+            push!(out, copy(acc))
+            return
+        end
+        for i in start:(n - (k - length(acc)) + 1)
+            push!(acc, i)
+            rec(i + 1, acc)
+            pop!(acc)
+        end
+    end
+    rec(1, Int[])
+    return out
+end
+
+function _filter_params(params::NamedTuple, drop::Vector{Symbol})
+    return (; (k => v for (k, v) in pairs(params) if !(k in drop))...)
+end
+
+function _knn_distances(points::Vector{Vector{Float64}}, k::Int)
+    n = length(points)
+    dists = Vector{Float64}(undef, n)
+    for i in 1:n
+        ds = Float64[]
+        for j in 1:n
+            if i == j
+                continue
+            end
+            push!(ds, norm(points[i] .- points[j]))
+        end
+        sort!(ds)
+        k <= length(ds) || error("kNN k=$k exceeds number of neighbors.")
+        dists[i] = ds[k]
+    end
+    return dists
+end
+
+function _graded_complex_from_point_cloud(data::PointCloud, spec::FiltrationSpec)
+    max_dim = get(spec.params, :max_dim, 1)
+    kind = spec.kind
+    points = data.points
+    n = length(points)
+    if n == 0
+        error("PointCloud has no points.")
+    end
+    # pairwise distances
+    dist = zeros(Float64, n, n)
+    for i in 1:n
+        for j in (i+1):n
+            d = norm(points[i] .- points[j])
+            dist[i, j] = d
+            dist[j, i] = d
+        end
+    end
+    # simplices by dimension
+    simplices = Vector{Vector{Vector{Int}}}(undef, max_dim + 1)
+    simplices[1] = [ [i] for i in 1:n ]
+    total = length(simplices[1])
+    max_simplices = get(spec.params, :max_simplices, nothing)
+
+    if get(spec.params, :sparse_rips, false)
+        radius = get(spec.params, :radius, nothing)
+        radius === nothing && error("sparse_rips requires radius.")
+        # 1-skeleton only in sparse mode for speed.
+        sims = Vector{Vector{Int}}()
+        for i in 1:n, j in i+1:n
+            if dist[i, j] <= radius
+                push!(sims, [i, j])
+            end
+        end
+        simplices = [simplices[1], sims]
+        max_dim = 1
+        total += length(sims)
+        if max_simplices !== nothing && total > max_simplices
+            error("PointCloud Rips: exceeded max_simplices=$(max_simplices).")
+        end
+    elseif get(spec.params, :approx_rips, false)
+        radius = get(spec.params, :radius, nothing)
+        radius === nothing && error("approx_rips requires radius.")
+        max_edges = get(spec.params, :max_edges, nothing)
+        max_degree = get(spec.params, :max_degree, nothing)
+        sample_frac = get(spec.params, :sample_frac, nothing)
+        sims = Vector{Vector{Int}}()
+        deg = zeros(Int, n)
+        for i in 1:n
+            for j in i+1:n
+                if dist[i, j] <= radius
+                    if max_degree !== nothing && (deg[i] >= max_degree || deg[j] >= max_degree)
+                        continue
+                    end
+                    if sample_frac !== nothing && rand() > sample_frac
+                        continue
+                    end
+                    push!(sims, [i, j])
+                    deg[i] += 1
+                    deg[j] += 1
+                    if max_edges !== nothing && length(sims) >= max_edges
+                        break
+                    end
+                end
+            end
+            if max_edges !== nothing && length(sims) >= max_edges
+                break
+            end
+        end
+        simplices = [simplices[1], sims]
+        max_dim = 1
+        total += length(sims)
+        if max_simplices !== nothing && total > max_simplices
+            error("PointCloud Rips: exceeded max_simplices=$(max_simplices).")
+        end
+    else
+        for k in 2:max_dim+1
+            sims = Vector{Vector{Int}}()
+            for comb in _combinations(n, k)
+                push!(sims, comb)
+            end
+            simplices[k] = sims
+            total += length(sims)
+            if max_simplices !== nothing && total > max_simplices
+                error("PointCloud Rips: exceeded max_simplices=$(max_simplices).")
+            end
+        end
+    end
+
+    if kind == :rips
+        grades = Vector{NTuple{1,Float64}}()
+        for s in simplices[1]
+            push!(grades, (0.0,))
+        end
+        for k in 2:max_dim+1
+            for s in simplices[k]
+                maxd = 0.0
+                for i in 1:length(s)
+                    for j in (i+1):length(s)
+                        d = dist[s[i], s[j]]
+                        if d > maxd
+                            maxd = d
+                        end
+                    end
+                end
+                push!(grades, (maxd,))
+            end
+        end
+    elseif kind == :rips_density || kind == :rips_knn
+        knn_k = get(spec.params, :density_k, 2)
+        dens = _knn_distances([Vector{Float64}(p) for p in points], knn_k)
+        grades = Vector{NTuple{2,Float64}}()
+        for s in simplices[1]
+            v = s[1]
+            push!(grades, (0.0, dens[v]))
+        end
+        for k in 2:max_dim+1
+            for s in simplices[k]
+                maxd = 0.0
+                maxden = 0.0
+                for i in 1:length(s)
+                    vi = s[i]
+                    if dens[vi] > maxden
+                        maxden = dens[vi]
+                    end
+                    for j in (i+1):length(s)
+                        d = dist[s[i], s[j]]
+                        if d > maxd
+                            maxd = d
+                        end
+                    end
+                end
+                push!(grades, (maxd, maxden))
+            end
+        end
+    elseif kind == :witness
+        landmarks = get(spec.params, :landmarks, nothing)
+        landmarks === nothing && error("witness requires landmarks.")
+        length(landmarks) > 0 || error("witness: landmarks cannot be empty.")
+        pts = [points[i] for i in landmarks]
+        params2 = _filter_params(spec.params, [:landmarks, :sparse_rips, :radius])
+        params2 = merge(params2, (max_dim = max_dim,))
+        return _graded_complex_from_point_cloud(PointCloud(pts), FiltrationSpec(; kind=:rips, params2...))
+    else
+        error("Unsupported point cloud filtration kind: $(kind).")
+    end
+
+    boundaries = SparseMatrixCSC{Int,Int}[]
+    for k in 2:max_dim+1
+        Bk = _simplicial_boundary(simplices[k], simplices[k-1])
+        push!(boundaries, Bk)
+    end
+
+    cells = [collect(1:length(simplices[k])) for k in 1:length(simplices)]
+    G = GradedComplex(cells, boundaries, grades)
+    axes = get(spec.params, :axes, _axes_from_grades(grades, length(grades[1])))
+    orientation = get(spec.params, :orientation, ntuple(_ -> 1, length(axes)))
+    return G, axes, orientation
+end
+
+function _graded_complex_from_graph(data::GraphData, spec::FiltrationSpec)
+    kind = spec.kind
+    n = data.n
+    edges = data.edges
+    if kind == :graph_lower_star || kind == :clique_lower_star
+        vertex_grades = get(spec.params, :vertex_grades, nothing)
+        vertex_grades === nothing && error("graph filtration requires vertex_grades.")
+        length(vertex_grades) == n || error("vertex_grades length mismatch.")
+        N = length(vertex_grades[1])
+        grades = Vector{NTuple{N,eltype(vertex_grades[1])}}()
+        for g in vertex_grades
+            length(g) == N || error("vertex_grades entries must have length N=$N")
+            push!(grades, ntuple(i -> g[i], N))
+        end
+
+        if kind == :graph_lower_star
+            simplices0 = [ [i] for i in 1:n ]
+            simplices1 = [ [u, v] for (u, v) in edges ]
+            for (u, v) in edges
+                gu = vertex_grades[u]
+                gv = vertex_grades[v]
+                push!(grades, ntuple(i -> max(gu[i], gv[i]), N))
+            end
+            B1 = _simplicial_boundary(simplices1, simplices0)
+            G = GradedComplex([collect(1:n), collect(1:length(edges))], [B1], grades)
+            axes = get(spec.params, :axes, _axes_from_grades(grades, N))
+            orientation = get(spec.params, :orientation, ntuple(_ -> 1, N))
+            return G, axes, orientation
+        else
+            max_dim = get(spec.params, :max_dim, 2)
+            adj = falses(n, n)
+            for (u, v) in edges
+                adj[u, v] = true
+                adj[v, u] = true
+            end
+            simplices = Vector{Vector{Vector{Int}}}(undef, max_dim + 1)
+            simplices[1] = [ [i] for i in 1:n ]
+            for k in 2:max_dim+1
+                sims = Vector{Vector{Int}}()
+                for comb in _combinations(n, k)
+                    ok = true
+                    for i in 1:k
+                        for j in (i+1):k
+                            if !adj[comb[i], comb[j]]
+                                ok = false
+                                break
+                            end
+                        end
+                        if !ok
+                            break
+                        end
+                    end
+                    if ok
+                        push!(sims, comb)
+                    end
+                end
+                simplices[k] = sims
+            end
+            for k in 2:max_dim+1
+                for s in simplices[k]
+                    push!(grades, ntuple(i -> maximum(vertex_grades[v][i] for v in s), N))
+                end
+            end
+            boundaries = SparseMatrixCSC{Int,Int}[]
+            for k in 2:max_dim+1
+                push!(boundaries, _simplicial_boundary(simplices[k], simplices[k-1]))
+            end
+            cells = [collect(1:length(simplices[k])) for k in 1:length(simplices)]
+            G = GradedComplex(cells, boundaries, grades)
+            axes = get(spec.params, :axes, _axes_from_grades(grades, N))
+            orientation = get(spec.params, :orientation, ntuple(_ -> 1, N))
+            return G, axes, orientation
+        end
+    elseif kind == :edge_weighted
+        weights = get(spec.params, :edge_weights, nothing)
+        weights === nothing && error("edge_weighted requires edge_weights.")
+        length(weights) == length(edges) || error("edge_weights length mismatch.")
+        grades = Vector{NTuple{1,Float64}}()
+        for _ in 1:n
+            push!(grades, (0.0,))
+        end
+        for w in weights
+            push!(grades, (Float64(w),))
+        end
+        simplices0 = [ [i] for i in 1:n ]
+        simplices1 = [ [u, v] for (u, v) in edges ]
+        B1 = _simplicial_boundary(simplices1, simplices0)
+        G = GradedComplex([collect(1:n), collect(1:length(edges))], [B1], grades)
+        axes = get(spec.params, :axes, _axes_from_grades(grades, 1))
+        orientation = get(spec.params, :orientation, (1,))
+        return G, axes, orientation
+    else
+        error("Unsupported graph filtration kind: $(kind).")
+    end
+end
+
+function _distance_transform(mask::AbstractArray{Bool})
+    dims = size(mask)
+    N = length(dims)
+    coords = collect(CartesianIndices(mask))
+    true_pts = [c for c in coords if mask[c]]
+    out = zeros(Float64, dims)
+    for c in coords
+        if mask[c]
+            out[c] = 0.0
+            continue
+        end
+        best = Inf
+        for t in true_pts
+            s = 0.0
+            for i in 1:N
+                d = (c[i] - t[i])
+                s += d * d
+            end
+            if s < best
+                best = s
+            end
+        end
+        out[c] = sqrt(best)
+    end
+    return out
+end
+
+function _cubical_structure(dims::NTuple{N,Int}) where {N}
+    key = Tuple(dims)
+    cached = get(_cubical_cache, key, nothing)
+    if cached !== nothing
+        return cached
+    end
+    cells_by_dim = Vector{Vector{Tuple{NTuple{N,Int},NTuple{N,Int}}}}(undef, N + 1)
+    cell_index = Vector{Dict{Tuple{NTuple{N,Int},NTuple{N,Int}},Int}}(undef, N + 1)
+    for k in 0:N
+        cells_by_dim[k+1] = Tuple{NTuple{N,Int},NTuple{N,Int}}[]
+        cell_index[k+1] = Dict{Tuple{NTuple{N,Int},NTuple{N,Int}},Int}()
+    end
+
+    for mask_vec in _combinations(N, 0)
+        mask = ntuple(i -> 0, N)
+        for coords in CartesianIndices(Tuple(dims))
+            origin = ntuple(i -> coords[i], N)
+            key2 = (origin, mask)
+            push!(cells_by_dim[1], key2)
+        end
+    end
+    for k in 1:N
+        for mask_idxs in _combinations(N, k)
+            mask = ntuple(i -> (i in mask_idxs ? 1 : 0), N)
+            ranges = Vector{UnitRange{Int}}(undef, N)
+            for i in 1:N
+                ranges[i] = 1:(dims[i] - mask[i])
+            end
+            for coords in CartesianIndices(Tuple(ranges))
+                origin = ntuple(i -> coords[i], N)
+                key2 = (origin, mask)
+                push!(cells_by_dim[k+1], key2)
+            end
+        end
+    end
+
+    for k in 0:N
+        for (i, key2) in enumerate(cells_by_dim[k+1])
+            cell_index[k+1][key2] = i
+        end
+    end
+
+    boundaries = SparseMatrixCSC{Int,Int}[]
+    for k in 1:N
+        I = Int[]
+        J = Int[]
+        V = Int[]
+        for (j, (origin, mask)) in enumerate(cells_by_dim[k+1])
+            axes = [i for i in 1:N if mask[i] == 1]
+            for (pos, axis) in enumerate(axes)
+                mask_face = ntuple(i -> (i == axis ? 0 : mask[i]), N)
+                origin_low = origin
+                origin_high = ntuple(i -> (i == axis ? origin[i] + 1 : origin[i]), N)
+                low_key = (origin_low, mask_face)
+                high_key = (origin_high, mask_face)
+                row_low = cell_index[k][low_key]
+                row_high = cell_index[k][high_key]
+                sign_low = isodd(pos) ? 1 : -1
+                sign_high = -sign_low
+                push!(I, row_low); push!(J, j); push!(V, sign_low)
+                push!(I, row_high); push!(J, j); push!(V, sign_high)
+            end
+        end
+        push!(boundaries, sparse(I, J, V, length(cells_by_dim[k]), length(cells_by_dim[k+1])))
+    end
+
+    cached = (cells_by_dim=cells_by_dim, cell_index=cell_index, boundaries=boundaries)
+    _cubical_cache[key] = cached
+    return cached
+end
+
+function _graded_complex_from_image_channels(channels::Vector{<:AbstractArray}, spec::FiltrationSpec)
+    img = channels[1]
+    dims = size(img)
+    for c in channels
+        size(c) == dims || error("All channels must have the same size.")
+    end
+    N = length(dims)
+    C = length(channels)
+
+    cached = _cubical_structure(dims)
+    cells_by_dim = cached.cells_by_dim
+    cell_index = cached.cell_index
+
+    grades = Vector{NTuple{C,Float64}}()
+    for k in 0:N
+        for (origin, mask) in cells_by_dim[k+1]
+            maxv = fill(-Inf, C)
+            ranges = Vector{UnitRange{Int}}(undef, N)
+            for i in 1:N
+                ranges[i] = origin[i]:(origin[i] + mask[i])
+            end
+            for coords in CartesianIndices(Tuple(ranges))
+                for ch in 1:C
+                    v = Float64(channels[ch][coords])
+                    if v > maxv[ch]
+                        maxv[ch] = v
+                    end
+                end
+            end
+            push!(grades, ntuple(i -> maxv[i], C))
+        end
+    end
+
+    cells = [collect(1:length(cells_by_dim[k+1])) for k in 0:N]
+    G = GradedComplex(cells, cached.boundaries, grades)
+    axes = get(spec.params, :axes, _axes_from_grades(grades, C))
+    orientation = get(spec.params, :orientation, ntuple(_ -> 1, C))
+    return G, axes, orientation
+end
+
+function _graded_complex_from_image(data::ImageNd, spec::FiltrationSpec)
+    if haskey(spec.params, :channels)
+        chans = spec.params[:channels]
+        return _graded_complex_from_image_channels(chans, spec)
+    elseif spec.kind == :image_distance_bifiltration
+        mask = get(spec.params, :mask, nothing)
+        mask === nothing && error("image_distance_bifiltration requires mask.")
+        dist = _distance_transform(mask)
+        chans = [data.data, dist]
+        return _graded_complex_from_image_channels(chans, spec)
+    else
+        return _graded_complex_from_image_channels([data.data], spec)
+    end
+end
+
+function _graded_complex_from_data(data, spec::FiltrationSpec)
+    if data isa GradedComplex
+        N = length(data.grades[1])
+        axes = get(spec.params, :axes, _axes_from_grades(data.grades, N))
+        orientation = get(spec.params, :orientation, ntuple(_ -> 1, N))
+        return data, axes, orientation
+    elseif data isa PointCloud
+        return _graded_complex_from_point_cloud(data, spec)
+    elseif data isa ImageNd
+        return _graded_complex_from_image(data, spec)
+    elseif data isa GraphData
+        return _graded_complex_from_graph(data, spec)
+    elseif data isa EmbeddedPlanarGraph2D
+        if spec.kind == :wing_vein_bifiltration
+            grid = get(spec.params, :grid, (32, 32))
+            bbox = get(spec.params, :bbox, data.bbox)
+            bbox === nothing && error("wing_vein_bifiltration requires bbox.")
+            xmin, xmax, ymin, ymax = bbox
+            nx, ny = grid
+            xs = range(xmin, xmax; length=nx)
+            ys = range(ymin, ymax; length=ny)
+            distV = zeros(Float64, nx, ny)
+            distE = zeros(Float64, nx, ny)
+            verts = data.vertices
+            segments = Vector{Tuple{Vector{Float64},Vector{Float64}}}()
+            if data.polylines === nothing
+                for (u, v) in data.edges
+                    push!(segments, (verts[u], verts[v]))
+                end
+            else
+                for poly in data.polylines
+                    for i in 1:(length(poly)-1)
+                        push!(segments, (poly[i], poly[i+1]))
+                    end
+                end
+            end
+            for i in 1:nx, j in 1:ny
+                x = xs[i]; y = ys[j]
+                dv = Inf
+                for v in verts
+                    d = hypot(x - v[1], y - v[2])
+                    if d < dv
+                        dv = d
+                    end
+                end
+                distV[i, j] = dv
+                de = Inf
+                for (a, b) in segments
+                    ax, ay = a[1], a[2]
+                    bx, by = b[1], b[2]
+                    vx = bx - ax
+                    vy = by - ay
+                    wx = x - ax
+                    wy = y - ay
+                    t = (vx*wx + vy*wy) / (vx*vx + vy*vy)
+                    if t < 0
+                        px, py = ax, ay
+                    elseif t > 1
+                        px, py = bx, by
+                    else
+                        px, py = ax + t*vx, ay + t*vy
+                    end
+                    d = hypot(x - px, y - py)
+                    if d < de
+                        de = d
+                    end
+                end
+                distE[i, j] = de
+            end
+            chans = [-distV, distE]
+            img = ImageNd(chans[1])
+            spec2 = FiltrationSpec(; kind=:image_distance_bifiltration, channels=chans,
+                                    orientation=get(spec.params, :orientation, (-1, 1)))
+            return _graded_complex_from_image(img, spec2)
+        else
+            # Treat as a graph with externally supplied vertex grades
+            gspec = FiltrationSpec(; kind=spec.kind, spec.params...)
+            gdata = GraphData(length(data.vertices), data.edges;
+                              coords=data.vertices, weights=nothing, T=eltype(data.vertices[1]))
+            return _graded_complex_from_graph(gdata, gspec)
+        end
+    else
+        error("Unsupported dataset type for encode_from_data.")
+    end
+end
+
+"""
+    encode_from_data(data, spec; degree=0) -> EncodingResult
+
+Ingest a dataset + filtration spec into a persistence module and return
+an EncodingResult with a fringe presentation.
+"""
+function encode_from_data(data, spec::FiltrationSpec;
+                          degree::Int=0,
+                          return_tuple::Bool=false,
+                          emit::Symbol=:fringe)
+    G, axes, orientation = _graded_complex_from_data(data, spec)
+    if haskey(spec.params, :eps)
+        G = _quantize_grades(G, spec.params[:eps])
+        axes = _axes_from_grades(G.grades, length(G.grades[1]))
+    end
+    axes_policy = get(spec.params, :axes_policy, :encoding)
+    if axes_policy == :as_given
+        haskey(spec.params, :axes) || error("encode_from_data: axes_policy=:as_given requires axes.")
+        axes = spec.params[:axes]
+    elseif axes_policy == :coarsen
+        max_len = get(spec.params, :max_axis_len, nothing)
+        max_len === nothing && error("encode_from_data: axes_policy=:coarsen requires max_axis_len.")
+        axes = _coarsen_axes(axes, Int(max_len))
+    elseif axes_policy != :encoding
+        error("encode_from_data: unknown axes_policy $(axes_policy).")
+    end
+    _validate_axes_sorted(axes)
+    _validate_axes_kind(axes; axis_kind=get(spec.params, :axis_kind, nothing))
+    if emit == :flange && get(spec.params, :axis_kind, nothing) != :zn
+        error("encode_from_data: emit=:flange requires axis_kind=:zn (integer axes).")
+    end
+    P = _poset_from_axes_cached(axes, orientation)
+    pi = GridEncodingMap(P, axes; orientation=orientation)
+    C = cochain_complex_from_graded_complex(G, P, axes; orientation=orientation)
+    M = cohomology_module(C, degree)
+    H = fringe_presentation(M)
+    if emit == :flange
+        FG = flange_presentation(M, pi)
+        return EncodingResult(P, M, pi; H=H, presentation=(data=data, spec=spec),
+                              opts=EncodingOptions(; backend=:data), backend=:data,
+                              meta=(; flange=FG))
+    elseif emit != :fringe
+        error("encode_from_data: emit must be :fringe or :flange.")
+    end
+    if return_tuple
+        return (P, H, pi)
+    end
+    return EncodingResult(P, M, pi; H=H, presentation=(data=data, spec=spec),
+                          opts=EncodingOptions(; backend=:data), backend=:data, meta=(;))
+end
+
+ingest(data, spec::FiltrationSpec; degree::Int=0) =
+    encode_from_data(data, spec; degree=degree, return_tuple=true)
 
 # -----------------------------------------------------------------------------
 # Coarsening / compression of finite encodings
@@ -503,17 +1637,17 @@ function coarsen(enc::EncodingResult; method::Symbol = :uptight)
     meta2 = if enc.meta isa AbstractDict
         d = copy(enc.meta)
         d[:coarsen_method] = method
-        d[:coarsen_n_before] = enc.P.n
-        d[:coarsen_n_after] = pi.P.n
+        d[:coarsen_n_before] = nvertices(enc.P)
+        d[:coarsen_n_after] = nvertices(pi.P)
         d
     elseif enc.meta isa NamedTuple
-        merge(enc.meta, (coarsen_method = method, coarsen_n_before = enc.P.n, coarsen_n_after = pi.P.n))
+        merge(enc.meta, (coarsen_method = method, coarsen_n_before = nvertices(enc.P), coarsen_n_after = nvertices(pi.P)))
     else
         Dict{Symbol,Any}(
             :orig_meta => enc.meta,
             :coarsen_method => method,
-            :coarsen_n_before => enc.P.n,
-            :coarsen_n_after => pi.P.n,
+            :coarsen_n_before => nvertices(enc.P),
+            :coarsen_n_after => nvertices(pi.P),
         )
     end
 
@@ -604,7 +1738,7 @@ minimality_report(res::DerivedFunctors.Resolutions.InjectiveResolution{QQ};
 
 Return whether the resolution stored in `res` was proven minimal by the chosen backend.
 """
-is_minimal(res::ResolutionResult) = res.minimal
+is_minimal(res::ResolutionResult) = res.minimality !== nothing
 
 is_minimal(res::DerivedFunctors.Resolutions.ProjectiveResolution{QQ};
            check_cover::Bool=true) =
@@ -659,18 +1793,18 @@ Compute Tor_t(Rop, L), where `Rop` is a right-module represented as a module on
 the opposite poset P^op, and `L` is a left-module on P.
 
 For EncodingResult inputs, the underlying posets must be opposite:
-    L.P.leq == transpose(Rop.P.leq)
+    poset_equal_opposite(L.P, Rop.P)
 """
 function tor(Rop::EncodingResult, L::EncodingResult;
              maxdeg::Int=3, model::Symbol=:auto)
-    (L.P.leq == transpose(Rop.P.leq)) || error("tor: expected first argument on opposite poset of the second.")
+    poset_equal_opposite(L.P, Rop.P) || error("tor: expected first argument on opposite poset of the second.")
     df = DerivedFunctorOptions(; maxdeg=maxdeg, model=model, canon=:none)
     return DerivedFunctors.Tor(Rop.M, L.M, df)
 end
 
 function tor(Rop::Modules.PModule{QQ}, L::Modules.PModule{QQ};
              maxdeg::Int=3, model::Symbol=:auto)
-    (L.Q.leq == transpose(Rop.Q.leq)) || error("tor: expected first argument on opposite poset of the second.")
+    poset_equal_opposite(L.Q, Rop.Q) || error("tor: expected first argument on opposite poset of the second.")
     df = DerivedFunctorOptions(; maxdeg=maxdeg, model=model, canon=:none)
     return DerivedFunctors.Tor(Rop, L, df)
 end
@@ -725,9 +1859,10 @@ Minimality checks can be expensive; enable with `minimality=true`.
 """
 function resolve(enc::EncodingResult;
                  kind::Symbol=:projective,
-                 opts::ResolutionOptions=ResolutionOptions(),
+                 opts::Union{ResolutionOptions,Nothing}=nothing,
                  minimality::Bool=false,
                  check_hull::Bool=true)
+    opts = _resolve_resolution_opts(opts)
     kind_norm = kind in (:proj, :projective) ? :projective :
                 kind in (:inj, :injective)   ? :injective  :
                 error("resolve: kind must be :projective or :injective (got $(kind))")
@@ -850,8 +1985,9 @@ Compute a single invariant from the `Invariants` submodule and wrap it in an `In
 """
 function invariant(enc::EncodingResult;
                    which=:rank_invariant,
-                   opts::InvariantOptions=InvariantOptions(),
+                   opts::Union{InvariantOptions,Nothing}=nothing,
                    kwargs...)
+    opts = _resolve_invariant_opts(opts)
     f = which isa Symbol ? getfield(Invariants, which) : which
     val = _call_invariant(f, enc, opts; kwargs...)
     return InvariantResult(enc, which, val; opts=opts, meta=NamedTuple())
@@ -869,8 +2005,9 @@ Batch convenience wrapper around `invariant`.
 """
 function invariants(enc::EncodingResult;
                     which=[:rank_invariant],
-                    opts::InvariantOptions=InvariantOptions(),
+                    opts::Union{InvariantOptions,Nothing}=nothing,
                     kwargs...)
+    opts = _resolve_invariant_opts(opts)
     if which isa AbstractVector
         return [invariant(enc; which=w, opts=opts, kwargs...) for w in which]
     else
@@ -883,31 +2020,89 @@ end
 # Curated invariant entrypoints (stable value-returning wrappers)
 # -----------------------------------------------------------------------------
 
-rank_invariant(enc::EncodingResult; opts::InvariantOptions=InvariantOptions(), kwargs...) =
+rank_invariant(M::PModule{QQ}, opts::Union{InvariantOptions,Nothing}=nothing; kwargs...) =
+    Invariants.rank_invariant(M, _resolve_invariant_opts(opts); kwargs...)
+
+rank_map(M::PModule{QQ}, pi, x, y, opts::Union{InvariantOptions,Nothing}=nothing; kwargs...) =
+    Invariants.rank_map(M, pi, x, y, _resolve_invariant_opts(opts); kwargs...)
+rank_map(M::PModule{QQ}, a::Int, b::Int; kwargs...) = Invariants.rank_map(M, a, b; kwargs...)
+
+restricted_hilbert(M::PModule{QQ}) = Invariants.restricted_hilbert(M)
+
+restricted_hilbert(M::PModule{QQ}, pi, x, opts::Union{InvariantOptions,Nothing}=nothing; kwargs...) =
+    Invariants.restricted_hilbert(M, pi, x, _resolve_invariant_opts(opts); kwargs...)
+
+function euler_surface(M::PModule{QQ}, pi, opts::Union{InvariantOptions,Nothing}=nothing; kwargs...)
+    opts = _resolve_invariant_opts(opts)
+    if any(haskey(kwargs, k) for k in (:axes, :axes_policy, :max_axis_len, :box, :threads, :strict))
+        opts = InvariantOptions(
+            axes = get(kwargs, :axes, opts.axes),
+            axes_policy = get(kwargs, :axes_policy, opts.axes_policy),
+            max_axis_len = get(kwargs, :max_axis_len, opts.max_axis_len),
+            box = get(kwargs, :box, opts.box),
+            threads = get(kwargs, :threads, opts.threads),
+            strict = get(kwargs, :strict, opts.strict),
+        )
+        kw_nt = NamedTuple(kwargs)
+        kwargs = Base.structdiff(kw_nt, (; axes=nothing, axes_policy=nothing, max_axis_len=nothing, box=nothing, threads=nothing, strict=nothing))
+    end
+    return Invariants.euler_surface(M, pi, opts; kwargs...)
+end
+
+euler_surface(C::ModuleCochainComplex{QQ}, pi, opts::Union{InvariantOptions,Nothing}=nothing; kwargs...) =
+    Invariants.euler_surface(C, pi, _resolve_invariant_opts(opts); kwargs...)
+
+slice_barcode(M::PModule{QQ}, chain::AbstractVector{Int}, opts::Union{InvariantOptions,Nothing}=nothing; kwargs...) =
+    Invariants.slice_barcode(M, chain; kwargs...)
+
+slice_barcodes(M::PModule{QQ}, chains::AbstractVector, opts::Union{InvariantOptions,Nothing}=nothing; kwargs...) =
+    Invariants.slice_barcodes(M, chains; kwargs...)
+
+rank_invariant(enc::EncodingResult; opts::Union{InvariantOptions,Nothing}=nothing, kwargs...) =
     invariant(enc; which=:rank_invariant, opts=opts, kwargs...).value
 
-restricted_hilbert(enc::EncodingResult; opts::InvariantOptions=InvariantOptions(), kwargs...) =
+restricted_hilbert(enc::EncodingResult; opts::Union{InvariantOptions,Nothing}=nothing, kwargs...) =
     invariant(enc; which=:restricted_hilbert, opts=opts, kwargs...).value
 
-euler_surface(enc::EncodingResult; opts::InvariantOptions=InvariantOptions(), kwargs...) =
+euler_surface(enc::EncodingResult; opts::Union{InvariantOptions,Nothing}=nothing, kwargs...) =
     invariant(enc; which=:euler_surface, opts=opts, kwargs...).value
 
-ecc(enc::EncodingResult; opts::InvariantOptions=InvariantOptions(), kwargs...) =
+ecc(enc::EncodingResult; opts::Union{InvariantOptions,Nothing}=nothing, kwargs...) =
     invariant(enc; which=:ecc, opts=opts, kwargs...).value
 
-slice_barcode(enc::EncodingResult; opts::InvariantOptions=InvariantOptions(), kwargs...) =
+slice_barcode(enc::EncodingResult; opts::Union{InvariantOptions,Nothing}=nothing, kwargs...) =
     invariant(enc; which=:slice_barcode, opts=opts, kwargs...).value
 
-slice_barcodes(enc::EncodingResult; opts::InvariantOptions=InvariantOptions(), kwargs...) =
+slice_barcodes(enc::EncodingResult; opts::Union{InvariantOptions,Nothing}=nothing, kwargs...) =
     invariant(enc; which=:slice_barcodes, opts=opts, kwargs...).value
 
-mp_landscape(enc::EncodingResult; opts::InvariantOptions=InvariantOptions(), kwargs...) =
+mp_landscape(enc::EncodingResult; opts::Union{InvariantOptions,Nothing}=nothing, kwargs...) =
     invariant(enc; which=:mp_landscape, opts=opts, kwargs...).value
+mp_landscape(M::PModule{QQ}, slices::AbstractVector; kwargs...) =
+    Invariants.mp_landscape(M, slices; kwargs...)
+function mp_landscape(M::PModule{QQ}, pi; kwargs...)
+    opt_keys = (:box, :strict, :threads, :axes, :axes_policy, :max_axis_len)
+    if any(k -> haskey(kwargs, k), opt_keys)
+        base = InvariantOptions()
+        opts = InvariantOptions(
+            box = get(kwargs, :box, base.box),
+            strict = get(kwargs, :strict, base.strict),
+            threads = get(kwargs, :threads, base.threads),
+            axes = get(kwargs, :axes, base.axes),
+            axes_policy = get(kwargs, :axes_policy, base.axes_policy),
+            max_axis_len = get(kwargs, :max_axis_len, base.max_axis_len),
+        )
+        kwargs_nt = NamedTuple(kwargs)
+        kwargs2 = (; (k => v for (k, v) in pairs(kwargs_nt) if !(k in opt_keys))...)
+        return Invariants.mp_landscape(M, pi, opts; kwargs2...)
+    end
+    return Invariants.mp_landscape(M, pi; kwargs...)
+end
 
-mpp_decomposition(enc::EncodingResult; opts::InvariantOptions=InvariantOptions(), kwargs...) =
+mpp_decomposition(enc::EncodingResult; opts::Union{InvariantOptions,Nothing}=nothing, kwargs...) =
     invariant(enc; which=:mpp_decomposition, opts=opts, kwargs...).value
 
-mpp_image(enc::EncodingResult; opts::InvariantOptions=InvariantOptions(), kwargs...) =
+mpp_image(enc::EncodingResult; opts::Union{InvariantOptions,Nothing}=nothing, kwargs...) =
     invariant(enc; which=:mpp_image, opts=opts, kwargs...).value
 
 
@@ -923,8 +2118,9 @@ Distance between two encoded modules, assuming a common encoding map `pi` (as pr
 """
 function matching_distance(encA::EncodingResult, encB::EncodingResult;
                            method::Symbol=:auto,
-                           opts::InvariantOptions=InvariantOptions(),
+                           opts::Union{InvariantOptions,Nothing}=nothing,
                            kwargs...)
+    opts = _resolve_invariant_opts(opts)
     (encA.P === encB.P) || error("matching_distance: encodings are on different posets; common-encode first.")
     (encA.pi === encB.pi) || error("matching_distance: encodings do not share a common classifier map pi; common-encode first.")
 

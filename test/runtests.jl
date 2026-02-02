@@ -46,7 +46,7 @@ const EX  = PM.ExactQQ
 const CC  = PM.ChainComplexes
 const QQ  = PM.CoreModules.QQ
 const CM  = PM.CoreModules
-const MD  = PM.Modules
+const Inv = PM.Invariants
 
 using SparseArrays
 
@@ -165,11 +165,11 @@ function boolean_lattice_B3_poset()
 end
 
 "Convenience: 1x1 fringe module with scalar on the unique entry."
-one_by_one_fringe(P::FF.FinitePoset, U::FF.Upset, D::FF.Downset; scalar=QQ(1)) =
+one_by_one_fringe(P::FF.AbstractPoset, U::FF.Upset, D::FF.Downset; scalar=QQ(1)) =
     FF.one_by_one_fringe(P, U, D; scalar=scalar)
 
 "Convenience: 1x1 fringe module with a specified scalar (positional)."
-one_by_one_fringe(P::FF.FinitePoset, U::FF.Upset, D::FF.Downset, scalar) =
+one_by_one_fringe(P::FF.AbstractPoset, U::FF.Upset, D::FF.Downset, scalar) =
     FF.one_by_one_fringe(P, U, D, scalar)
 
 "Simple modules on the chain 1 < 2: S1 supported at 1, S2 supported at 2."
@@ -250,6 +250,15 @@ end
     @test isdefined(PM, :load_mpp_decomposition_json)
     @test isdefined(PM, :save_mpp_image_json)
     @test isdefined(PM, :load_mpp_image_json)
+    @test isdefined(PM, :save_dataset_json)
+    @test isdefined(PM, :load_dataset_json)
+    @test isdefined(PM, :save_pipeline_json)
+    @test isdefined(PM, :load_pipeline_json)
+
+    # Data ingestion entrypoints
+    @test isdefined(PM, :encode_from_data)
+    @test isdefined(PM, :ingest)
+    @test isdefined(PM, :fringe_presentation)
 
     # Resolution tables
     @test isdefined(PM, :betti_table)
@@ -258,18 +267,22 @@ end
 
 # ---------------- Run test files ---------------------------------------------
 
-#include("test_finite_fringe.jl")
-#include("test_encoding.jl")
+include("test_finite_fringe.jl")
+include("test_encoding.jl")
+include("test_poset_interface.jl")
 
 # Backends + geometry
-#include("test_pl_backend.jl")
-#include("test_zn_backend.jl")
-#include("test_geometry.jl")
+include("test_pl_backend.jl")
+include("test_zn_backend.jl")
+include("test_geometry.jl")
 
-# Homological algebra
-#include("test_indicator_resolutions.jl")
-#include("test_derived_functors.jl")
-#include("test_model_independent_ext_layer.jl")
+# Data pipeline
+include("test_data_pipeline.jl")
+
+# Algebra
+include("test_indicator_resolutions.jl")
+include("test_derived_functors.jl")
+include("test_model_independent_ext_layer.jl")
 include("test_chain_complexes_homology.jl")
 include("test_functoriality_ext_tor_maps.jl")
 

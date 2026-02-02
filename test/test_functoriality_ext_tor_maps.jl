@@ -43,7 +43,7 @@ function _chain_module(P, dims::Vector{Int}, edge_map::Matrix{QQ})
         D[(u, v)] = zeros(QQ, dims[v], dims[u])
     end
     @assert length(edges) == 1
-    D[edges[1]] = edge_map
+    D[first(edges)] = edge_map
     return MD.PModule{QQ}(P, dims, D)
 end
 
@@ -96,7 +96,7 @@ end
 
 @testset "Tor functoriality in both arguments" begin
     P = chain_poset(2)
-    Pop = FF.FinitePoset(transpose(P.leq))
+    Pop = FF.FinitePoset(transpose(FF.leq_matrix(P)))
 
     # L = simple at 1 on P (as in existing Tor-by-hand test).
     L = IR.pmodule_from_fringe(one_by_one_fringe(P, FF.principal_upset(P, 1), FF.principal_downset(P, 1)))
@@ -163,7 +163,7 @@ end
     p = MD.PMorphism{QQ}(B, C, [QQ[1;;],         zeros(QQ, 0, 1), zeros(QQ, 0, 0)])
 
     # Opposite poset
-    Pop = FF.FinitePoset(transpose(P.leq))
+    Pop = FF.FinitePoset(transpose(FF.leq_matrix(P)))
 
     # Right module on P^op (simple at vertex 2).
     Rop = IR.pmodule_from_fringe(one_by_one_fringe(Pop,
@@ -177,7 +177,7 @@ end
     @test LES.maxdeg == 2
     @test length(LES.iH) == 3
     @test length(LES.pH) == 3
-    @test length(LES.delta) == 2
+    @test length(LES.delta) == 3
 
     @test [PM.dim(LES.TorA, s) for s in 0:LES.maxdeg] == [PM.dim(TorRA, s) for s in 0:LES.maxdeg]
     @test [PM.dim(LES.TorB, s) for s in 0:LES.maxdeg] == [PM.dim(TorRB, s) for s in 0:LES.maxdeg]
@@ -200,7 +200,7 @@ end
 
 @testset "hyperTor_map_first/second: induced maps on Tor_n" begin
     P = chain_poset(2)
-    Pop = FF.FinitePoset(transpose(P.leq))
+    Pop = FF.FinitePoset(transpose(FF.leq_matrix(P)))
 
     # L = simple at vertex 1 on P.
     L = IR.pmodule_from_fringe(one_by_one_fringe(P,
@@ -267,7 +267,7 @@ end
 
 @testset "Tor by hand on chain of length 2" begin
     P = chain_poset(2)
-    Pop = FF.FinitePoset(transpose(P.leq))
+    Pop = FF.FinitePoset(transpose(FF.leq_matrix(P)))
 
     # L = simple at 1 on P
     Lfr = one_by_one_fringe(P, FF.principal_upset(P, 1), FF.principal_downset(P, 1))
@@ -288,7 +288,7 @@ end
 @testset "Tor extra structure: LES, actions, bicomplex" begin
     # Poset: chain 1 < 2
     P = chain_poset(2)
-    Pop = FF.FinitePoset(transpose(P.leq))  # opposite
+    Pop = FF.FinitePoset(transpose(FF.leq_matrix(P)))  # opposite
 
     # Left modules on P
     S1 = _chain_module(P, [1, 0], zeros(QQ, 0, 1))

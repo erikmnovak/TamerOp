@@ -1,4 +1,9 @@
-using PosetModules
+try
+    using PosetModules
+catch
+    include(joinpath(@__DIR__, "..", "src", "PosetModules.jl"))
+    using .PosetModules
+end
 const PM = PosetModules
 const FZ = PM.FlangeZn
 
@@ -18,14 +23,14 @@ const FZ = PM.FlangeZn
 
 tau = FZ.face(2, [])  # "vertex face": no free coordinates
 
-F_M = FZ.flat([0, 0], tau; id=:F_M)
-E_M = FZ.inj([2, 2], tau; id=:E_M)
-Phi_M = [PM.QQ(1)]
+F_M = FZ.IndFlat(tau, [0, 0]; id=:F_M)
+E_M = FZ.IndInj(tau, [2, 2]; id=:E_M)
+Phi_M = reshape([PM.QQ(1)], 1, 1)
 FM = FZ.Flange(2, [F_M], [E_M], Phi_M)
 
-F_N = FZ.flat([1, 1], tau; id=:F_N)
-E_N = FZ.inj([3, 3], tau; id=:E_N)
-Phi_N = [PM.QQ(1)]
+F_N = FZ.IndFlat(tau, [1, 1]; id=:F_N)
+E_N = FZ.IndInj(tau, [3, 3]; id=:E_N)
+Phi_N = reshape([PM.QQ(1)], 1, 1)
 FN = FZ.Flange(2, [F_N], [E_N], Phi_N)
 
 # Sanity check directly on the flange presentation (before encoding).
@@ -39,7 +44,8 @@ FN = FZ.Flange(2, [F_N], [E_N], Phi_N)
 # returns two EncodingResults sharing the same P and classifier pi.
 # -----------------------------------------------------------------------------
 
-encM, encN = PM.encode(FM, FN; backend=:zn, max_regions=50_000)
+enc_opts = PM.EncodingOptions(backend=:zn, max_regions=50_000, poset_kind=:signature)
+encM, encN = PM.encode(FM, FN; opts=enc_opts)
 
 P  = PM.poset(encM)
 pi = PM.classifier(encM)   # shared classifier (encM.pi === encN.pi)
@@ -68,7 +74,7 @@ encM_small = PM.coarsen(encM; method=:uptight)
 
 ri_M = PM.rank_invariant(encM_small)     # rank invariant object (dictionary-like)
 surf_M = PM.euler_surface(encM_small)    # Euler characteristic surface as an array
-img_M = PM.mpp_image(encM_small; sigma=0.35, npix=(32, 32))
+img_M = PM.mpp_image(encM_small; sigma=0.35, resolution=32)
 
 println("Euler surface array size: ", size(surf_M))
 println("MPP image pixel grid: ", size(img_M.img))

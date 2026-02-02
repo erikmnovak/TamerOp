@@ -40,25 +40,30 @@ include("IndicatorResolutions.jl")
 # 6) Zn flange data structure
 include("FlangeZn.jl")
 
-# 7) JSON IO layer (internal formats + external adapters) and 2D visualization
-include("Serialization.jl")
-include("Viz2D.jl")
+# 7) ZnEncoding (needs FlangeZn + FiniteFringe)
+include("ZnEncoding.jl")
 
-# 8) PL backends for R^n (general polyhedra + axis-aligned boxes)
+# 8) Data ingestion layer (datasets, filtration specs, grid encodings)
+include("DataPipeline.jl")
+
+# 9) PL backends for R^n (general polyhedra + axis-aligned boxes)
 include("PLPolyhedra.jl")
 include("PLBackend.jl")
 
-# 9) Derived-functor and complexes layer
+# 10) JSON IO layer (internal formats + external adapters) and 2D visualization
+include("Serialization.jl")
+include("Viz2D.jl")
+
+# 11) Derived-functor and complexes layer
 include("ChainComplexes.jl")
-include("ZnEncoding.jl")
 include("DerivedFunctors.jl")
 include("ModuleComplexes.jl")
 include("ChangeOfPosets.jl")
 
-# 11) Invariants and summaries
+# 12) Invariants and summaries
 include("Invariants.jl")
 
-# 12) High-level workflow wrappers (encode/resolve/ext/tor/invariant, etc.)
+# 13) High-level workflow wrappers (encode/resolve/ext/tor/invariant, etc.)
 include("Workflow.jl")
 
 # =============================================================================
@@ -82,9 +87,13 @@ include("Workflow.jl")
 
 using .CoreModules: QQ,
                     EncodingOptions, ResolutionOptions, DerivedFunctorOptions, InvariantOptions,
-                    EncodingResult, ResolutionResult, InvariantResult
+                    EncodingResult, ResolutionResult, InvariantResult,
+                    axes_from_encoding,
+                    dimension,
+                    representatives,
+                    locate
 
-using .FlangeZn: Flange
+using .FlangeZn: Flange, face
 using .PLPolyhedra: PLFringe
 using .PLBackend: BoxUpset, BoxDownset
 
@@ -92,12 +101,14 @@ using .PLBackend: BoxUpset, BoxDownset
 # Finite-poset primitives (a small algebra of objects)
 # These are foundational and enable custom examples without running the full
 # Zn/PL encoding pipeline.
-using .FiniteFringe: FinitePoset,
+using .FiniteFringe: FiniteFringeOptions,
+                     AbstractPoset, FinitePoset, ProductOfChainsPoset, GridPoset, ProductPoset,
                      Upset, Downset,
                      principal_upset, principal_downset,
-                     upset_from_generators, downset_from_generators,
+                     upset_from_generators, downset_from_generators, upset_closure, downset_closure,
                      FringeModule, one_by_one_fringe,
-                     cover_edges
+                     cover_edges, nvertices, leq, leq_matrix, upset_indices, downset_indices,
+                     leq_row, leq_col, poset_equal, poset_equal_opposite
 
 # Encoding-map layer (advanced but still friendly)
 # This is the explicit bridge between "just call encode" and
@@ -115,16 +126,39 @@ using .Serialization: save_flange_json, load_flange_json,
                       save_encoding_json, load_encoding_json,
                       parse_flange_json, flange_from_m2,
                       save_mpp_decomposition_json, load_mpp_decomposition_json,
-                      save_mpp_image_json, load_mpp_image_json
+                      save_mpp_image_json, load_mpp_image_json,
+                      save_dataset_json, load_dataset_json,
+                      save_pipeline_json, load_pipeline_json,
+                      load_gudhi_json, load_ripserer_json, load_eirene_json,
+                      load_gudhi_txt, load_ripserer_txt, load_eirene_txt,
+                      load_ripser_point_cloud, load_ripser_distance,
+                      load_ripser_lower_distance, load_ripser_upper_distance,
+                      load_ripser_sparse_triplet, load_ripser_binary_lower_distance,
+                      load_dipha_distance_matrix,
+                      load_boundary_complex_json, load_reduced_complex_json,
+                      load_pmodule_json,
+                      load_ripser_lower_distance_streaming
+
+using .DataPipeline: PointCloud, ImageNd, GraphData, EmbeddedPlanarGraph2D, GradedComplex,
+                     FiltrationSpec, GridEncodingMap, poset_from_axes, grid_index
 
 # Tables are often the default thing users want to see for resolutions.
 using .DerivedFunctors: betti_table, bass_table
 
-using .Modules: PModule, PMorphism
+using .Modules: PModule, PMorphism, ModuleOptions
 
 using .ModuleComplexes: ModuleCochainComplex
 
 using .DerivedFunctors.GradedSpaces: degree_range, dim, basis, coordinates, representative
+
+using .Invariants: slice_chain, slice_chain_exact_2d
+
+@inline _resolve_encoding_opts(opts::Union{EncodingOptions,Nothing}) =
+    opts === nothing ? EncodingOptions() : opts
+@inline _resolve_resolution_opts(opts::Union{ResolutionOptions,Nothing}) =
+    opts === nothing ? ResolutionOptions() : opts
+@inline _resolve_invariant_opts(opts::Union{InvariantOptions,Nothing}) =
+    opts === nothing ? InvariantOptions() : opts
 
 # -----------------------------------------------------------------------------
 # Stable public exports
@@ -138,7 +172,9 @@ export
        Flange, PLFringe, BoxUpset, BoxDownset,
 
        # Core algebraic data types
-       FinitePoset, PModule, PMorphism, ModuleCochainComplex,
+       AbstractPoset, FinitePoset, ProductOfChainsPoset, GridPoset, ProductPoset,
+       FiniteFringeOptions,
+       PModule, PMorphism, ModuleOptions, ModuleCochainComplex,
 
        # Results and options
        EncodingResult, ResolutionResult, InvariantResult,
@@ -146,13 +182,17 @@ export
 
        # Narrative workflow entrypoints
        encode, coarsen, resolve, hom, ext, tor, ext_algebra, invariant, invariants,
+       slice_chain, slice_chain_exact_2d,
 
        # Accessors (EncodingResult)
        poset, pmodule, classifier, backend, presentation,
 
        # Core finite-poset data types + basic constructors
        Upset, Downset, FringeModule, principal_upset, principal_downset,
-       upset_from_generators, downset_from_generators, one_by_one_fringe, cover_edges,
+       upset_from_generators, downset_from_generators, upset_closure, downset_closure,
+       one_by_one_fringe, cover_edges,
+       nvertices, leq, leq_matrix, upset_indices, downset_indices, leq_row, leq_col,
+       poset_equal, poset_equal_opposite,
 
        # Encoding-map layer (controlled compression/refinement of encodings)
        EncodingMap, UptightEncoding, build_uptight_encoding_from_fringe,
@@ -161,6 +201,23 @@ export
        # JSON IO / caching helpers
        save_flange_json, load_flange_json, save_encoding_json, load_encoding_json, save_mpp_decomposition_json, 
        load_mpp_decomposition_json, save_mpp_image_json, load_mpp_image_json, parse_flange_json, flange_from_m2,
+       save_dataset_json, load_dataset_json, save_pipeline_json, load_pipeline_json,
+       load_gudhi_json, load_ripserer_json, load_eirene_json,
+       load_gudhi_txt, load_ripserer_txt, load_eirene_txt,
+       load_ripser_point_cloud, load_ripser_distance,
+       load_ripser_lower_distance, load_ripser_upper_distance,
+       load_ripser_sparse_triplet, load_ripser_binary_lower_distance,
+       load_dipha_distance_matrix,
+       load_boundary_complex_json, load_reduced_complex_json, load_pmodule_json,
+       load_ripser_lower_distance_streaming,
+
+       # Data ingestion layer (datasets + filtration specs)
+       PointCloud, ImageNd, GraphData, EmbeddedPlanarGraph2D, GradedComplex,
+       FiltrationSpec, GridEncodingMap, poset_from_axes, grid_index, axes_from_encoding,
+       encode_from_data, ingest, fringe_presentation, flange_presentation,
+
+       # Zn helpers
+       face,
 
        # Homological algebra helpers (ResolutionResult)
        resolution, betti, minimality_report, is_minimal,
@@ -255,7 +312,11 @@ export CoreModules, Stats, RegionGeometry, ExactQQ, FiniteFringe, IndicatorTypes
        PLPolyhedra, PLBackend, ChainComplexes, ZnEncoding, DerivedFunctors,
        Resolutions, ExtTorSpaces, Functoriality, Algebras, SpectralSequences, Backends,
        HomExtEngine, Utils,
-       ModuleComplexes, ChangeOfPosets, Invariants
+       ModuleComplexes, ChangeOfPosets, Invariants,
+       idmap
+
+# Convenience lift: identity cochain map for module complexes.
+const idmap = ModuleComplexes.idmap
 
 # -----------------------------------------------------------------------------
 # Helper predicates for lifting bindings safely.

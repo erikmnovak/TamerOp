@@ -14,9 +14,13 @@ using LinearAlgebra
 using SparseArrays
 
 import ..FiniteFringe
-using ..FiniteFringe: FinitePoset, cover_edges
+using ..FiniteFringe: AbstractPoset, FinitePoset, ProductPoset, cover_edges, leq, leq_matrix, nvertices, poset_equal,
+                      downset_indices, upset_indices
 using ..Encoding: EncodingMap
 using ..CoreModules: QQ, ResolutionOptions, DerivedFunctorOptions
+
+@inline _resolve_df_opts(opts::Union{DerivedFunctorOptions,Nothing}) =
+    opts === nothing ? DerivedFunctorOptions() : opts
 using ..ExactQQ: nullspaceQQ, solve_fullcolumnQQ
 
 import ..IndicatorResolutions
@@ -46,10 +50,8 @@ export restriction,
 # Utilities: compatibility, monotonicity, terminal/initial detection
 # -----------------------------------------------------------------------------
 
-# Compare posets structurally (FinitePoset has no == method).
-@inline function _same_poset(A::FinitePoset, B::FinitePoset)::Bool
-    return (A.n == B.n) && (A.leq == B.leq)
-end
+# Compare posets structurally.
+@inline _same_poset(A::AbstractPoset, B::AbstractPoset)::Bool = poset_equal(A, B)
 
 """
     _check_monotone(pi)
@@ -62,17 +64,17 @@ function _check_monotone(pi::EncodingMap)
     P = pi.P
     f = pi.pi_of_q
 
-    if length(f) != Q.n
-        error("EncodingMap.pi_of_q must have length Q.n")
+    if length(f) != nvertices(Q)
+        error("EncodingMap.pi_of_q must have length nvertices(Q)")
     end
-    for q in 1:Q.n
-        if f[q] < 1 || f[q] > P.n
-            error("EncodingMap.pi_of_q values must lie in 1..P.n")
+    for q in 1:nvertices(Q)
+        if f[q] < 1 || f[q] > nvertices(P)
+            error("EncodingMap.pi_of_q values must lie in 1..nvertices(P)")
         end
     end
 
-    for (u,v) in cover_edges(Q).edges
-        if !P.leq[f[u], f[v]]
+    for (u,v) in cover_edges(Q)
+        if !leq(P, f[u], f[v])
             error("EncodingMap is not monotone: $u <= $v in Q but pi($u) !<= pi($v) in P")
         end
     end
@@ -85,17 +87,17 @@ end
 Return the maximum element of `S` (viewed as a subset of poset `Q`)
 if it exists, otherwise return `nothing`.
 """
-function _maximum_element(Q::FinitePoset, S::Vector{Int})::Union{Int,Nothing}
+function _maximum_element(Q::AbstractPoset, S::Vector{Int})::Union{Int,Nothing}
     isempty(S) && return nothing
     cand = S[1]
     @inbounds for k in 2:length(S)
         s = S[k]
-        if Q.leq[cand, s] && !Q.leq[s, cand]
+        if leq(Q, cand, s) && !leq(Q, s, cand)
             cand = s
         end
     end
     @inbounds for s in S
-        if !Q.leq[s, cand]
+        if !leq(Q, s, cand)
             return nothing
         end
     end
@@ -107,17 +109,17 @@ end
 
 Return the minimum element of `S` if it exists, else `nothing`.
 """
-function _minimum_element(Q::FinitePoset, S::Vector{Int})::Union{Int,Nothing}
+function _minimum_element(Q::AbstractPoset, S::Vector{Int})::Union{Int,Nothing}
     isempty(S) && return nothing
     cand = S[1]
     @inbounds for k in 2:length(S)
         s = S[k]
-        if Q.leq[s, cand] && !Q.leq[cand, s]
+        if leq(Q, s, cand) && !leq(Q, cand, s)
             cand = s
         end
     end
     @inbounds for s in S
-        if !Q.leq[cand, s]
+        if !leq(Q, cand, s)
             return nothing
         end
     end
@@ -153,9 +155,10 @@ end
 #     P, Ms, pi1, pi2 = encode_pmodules_to_common_poset(M1, M2)
 #     H = Hom(Ms[1], Ms[2])
 
-# Cache product posets by identity of their leq matrices. We use nested IdDicts
-# so that "same poset object" hits the cache without any elementwise comparisons.
+# Cache product posets by identity of their leq matrices for dense posets.
+# For structured posets, use object identity directly.
 const _PRODUCT_POSET_CACHE = IdDict{BitMatrix, IdDict{BitMatrix, NamedTuple}}()
+const _PRODUCT_POSET_OBJ_CACHE = IdDict{AbstractPoset, IdDict{AbstractPoset, NamedTuple}}()
 
 # Pre-populate the FiniteFringe cover-edges cache for the cartesian product poset.
 # This avoids the expensive generic cover-edge computation on P1 x P2.
@@ -197,7 +200,7 @@ function _cache_product_cover_edges!(Pprod::FinitePoset, P1::FinitePoset, P2::Fi
     end
 
     # FiniteFringe caches cover data keyed by the leq BitMatrix identity.
-    FiniteFringe._COVER_EDGES_CACHE[Pprod.leq] = FiniteFringe.CoverEdges(mat, edges)
+    FiniteFringe._COVER_EDGES_CACHE[leq_matrix(Pprod)] = FiniteFringe.CoverEdges(mat, edges)
     return nothing
 end
 
@@ -229,11 +232,11 @@ function product_poset(
 )
     # Fast cache path (only for the common "production" settings).
     if use_cache && !check && cache_cover_edges
-        inner = get!(_PRODUCT_POSET_CACHE, P1.leq) do
+        inner = get!(_PRODUCT_POSET_CACHE, leq_matrix(P1)) do
             IdDict{BitMatrix, NamedTuple}()
         end
-        if haskey(inner, P2.leq)
-            return inner[P2.leq]
+        if haskey(inner, leq_matrix(P2))
+            return inner[leq_matrix(P2)]
         end
     end
 
@@ -241,16 +244,16 @@ function product_poset(
     n = n1 * n2
 
     # Build leq matrix as a block matrix:
-    #   block(i1,i2) = P2.leq if P1.leq[i1,i2] else 0.
+    #   block(i1,i2) = leq_matrix(P2) if leq(P1,i1,i2) else 0.
     L = falses(n, n)
 
     @views @inbounds for i1 in 1:n1
         rr = ((i1 - 1) * n2 + 1):(i1 * n2)
-        row1 = P1.leq[i1, :]
+        row1 = leq_matrix(P1)[i1, :]
         i2 = findnext(row1, 1)
         while i2 !== nothing
             cc = ((i2 - 1) * n2 + 1):(i2 * n2)
-            copyto!(L[rr, cc], P2.leq)
+            copyto!(L[rr, cc], leq_matrix(P2))
             i2 = findnext(row1, i2 + 1)
         end
     end
@@ -275,10 +278,54 @@ function product_poset(
     out = (P = P, pi1 = pi1, pi2 = pi2)
 
     if use_cache && !check && cache_cover_edges
-        inner = get!(_PRODUCT_POSET_CACHE, P1.leq) do
+        inner = get!(_PRODUCT_POSET_CACHE, leq_matrix(P1)) do
             IdDict{BitMatrix, NamedTuple}()
         end
-        inner[P2.leq] = out
+        inner[leq_matrix(P2)] = out
+    end
+
+    return out
+end
+
+function product_poset(
+    P1::AbstractPoset,
+    P2::AbstractPoset;
+    check::Bool = false,
+    cache_cover_edges::Bool = true,
+    use_cache::Bool = true,
+)
+    if use_cache
+        inner = get!(_PRODUCT_POSET_OBJ_CACHE, P1) do
+            IdDict{AbstractPoset, NamedTuple}()
+        end
+        if haskey(inner, P2)
+            return inner[P2]
+        end
+    end
+
+    n1, n2 = nvertices(P1), nvertices(P2)
+    n = n1 * n2
+
+    # Structured fallback: avoid materializing leq unless requested elsewhere.
+    P = ProductPoset(P1, P2)
+
+    # Projections P -> P1 and P -> P2 as EncodingMap objects.
+    pi1_of_q = Vector{Int}(undef, n)
+    pi2_of_q = Vector{Int}(undef, n)
+    @inbounds for k in 1:n
+        pi1_of_q[k] = ((k - 1) % n1) + 1
+        pi2_of_q[k] = div((k - 1), n1) + 1
+    end
+
+    pi1 = EncodingMap(P, P1, pi1_of_q)
+    pi2 = EncodingMap(P, P2, pi2_of_q)
+
+    out = (P = P, pi1 = pi1, pi2 = pi2)
+    if use_cache
+        inner = get!(_PRODUCT_POSET_OBJ_CACHE, P1) do
+            IdDict{AbstractPoset, NamedTuple}()
+        end
+        inner[P2] = out
     end
 
     return out
@@ -444,7 +491,7 @@ function encode_pmodules_to_common_poset(
 
     # Already on the same poset object: nothing to do.
     if P1 === P2
-        n = P1.n
+        n = nvertices(P1)
         id = collect(1:n)
         pi1 = EncodingMap(P1, P1, id)
         pi2 = EncodingMap(P1, P2, id)
@@ -452,8 +499,8 @@ function encode_pmodules_to_common_poset(
     end
 
     # Structural equality: same leq, different objects. Avoid P1 x P2 blowup.
-    if P1.n == P2.n && (P1.leq === P2.leq || P1.leq == P2.leq)
-        n = P1.n
+    if nvertices(P1) == nvertices(P2) && poset_equal(P1, P2)
+        n = nvertices(P1)
         id = collect(1:n)
         pi1 = EncodingMap(P1, P1, id)
         pi2 = EncodingMap(P1, P2, id)
@@ -472,11 +519,17 @@ function encode_pmodules_to_common_poset(
     pi1 = prod.pi1
     pi2 = prod.pi2
 
-    # Fast projection pullbacks (avoid map_leq allocations on the huge product).
-    C1 = cover_edges(P1)
-    C2 = cover_edges(P2)
-    M1p = _pullback_to_product_pr1(M1, P, P1, P2, C1, C2)
-    M2p = _pullback_to_product_pr2(M2, P, P1, P2, C1, C2)
+    if P1 isa FinitePoset && P2 isa FinitePoset && P isa FinitePoset
+        # Fast projection pullbacks (avoid map_leq allocations on the huge product).
+        C1 = cover_edges(P1)
+        C2 = cover_edges(P2)
+        M1p = _pullback_to_product_pr1(M1, P, P1, P2, C1, C2)
+        M2p = _pullback_to_product_pr2(M2, P, P1, P2, C1, C2)
+        return (P = P, Ms = [M1p, M2p], pi1 = pi1, pi2 = pi2)
+    end
+
+    M1p = pullback(pi1, M1; check = check_poset)
+    M2p = pullback(pi2, M2; check = check_poset)
 
     return (P = P, Ms = [M1p, M2p], pi1 = pi1, pi2 = pi2)
 end
@@ -498,8 +551,8 @@ end
     P = pi.P
     @assert M.Q === P
 
-    dims_out = Vector{Int}(undef, Q.n)
-    @inbounds for q in 1:Q.n
+    dims_out = Vector{Int}(undef, nvertices(Q))
+    @inbounds for q in 1:nvertices(Q)
         dims_out[q] = M.dims[pi.pi_of_q[q]]
     end
 
@@ -539,8 +592,8 @@ function pullback(
     cod_pb = _pullback_module_no_check(pi, f.cod, C)
 
     # Pull back components pointwise along pi: (f_pb)_q = f_{pi(q)}.
-    comps_pb = Vector{Matrix{QQ}}(undef, pi.Q.n)
-    @inbounds for q in 1:pi.Q.n
+    comps_pb = Vector{Matrix{QQ}}(undef, nvertices(pi.Q))
+    @inbounds for q in 1:nvertices(pi.Q)
         comps_pb[q] = f.comps[pi.pi_of_q[q]]
     end
 
@@ -597,13 +650,16 @@ function _index_sets_left(pi::EncodingMap)
     P = pi.P
     f = pi.pi_of_q
 
-    idxs = Vector{Vector{Int}}(undef, P.n)
-    for p in 1:P.n
+    by_base = [Int[] for _ in 1:nvertices(P)]
+    for q in 1:nvertices(Q)
+        push!(by_base[f[q]], q)
+    end
+
+    idxs = Vector{Vector{Int}}(undef, nvertices(P))
+    for p in 1:nvertices(P)
         lst = Int[]
-        for q in 1:Q.n
-            if P.leq[f[q], p]
-                push!(lst, q)
-            end
+        for v in downset_indices(P, p)
+            append!(lst, by_base[v])
         end
         idxs[p] = lst
     end
@@ -632,14 +688,14 @@ function _left_kan_data(pi::EncodingMap, M::PModule{QQ}; check::Bool=true)
 
     idxs = _index_sets_left(pi)
 
-    off = Vector{Dict{Int,Int}}(undef, P.n)
-    dimS = Vector{Int}(undef, P.n)
-    W = Vector{Matrix{QQ}}(undef, P.n)
-    L = Vector{Matrix{QQ}}(undef, P.n)
-    dimV = Vector{Int}(undef, P.n)
+    off = Vector{Dict{Int,Int}}(undef, nvertices(P))
+    dimS = Vector{Int}(undef, nvertices(P))
+    W = Vector{Matrix{QQ}}(undef, nvertices(P))
+    L = Vector{Matrix{QQ}}(undef, nvertices(P))
+    dimV = Vector{Int}(undef, nvertices(P))
 
     # Build each colimit space V_p as quotient of direct sum by relations.
-    for p in 1:P.n
+    for p in 1:nvertices(P)
         ip = idxs[p]
         offp, Sp = _offset_map(ip, d)
         off[p] = offp
@@ -694,14 +750,14 @@ function _left_kan_data(pi::EncodingMap, M::PModule{QQ}; check::Bool=true)
         end
 
         # General case: quotient by relations x_u - M(u<=v)(x_u) in v for cover edges u<v.
-        inS = falses(Q.n)
+        inS = falses(nvertices(Q))
         for q in ip
             inS[q] = true
         end
 
         # Count relation columns: each cover edge (u,v) in the fiber contributes dim(M(u)) columns.
         ncols = 0
-        @inbounds for u in 1:Q.n
+        @inbounds for u in 1:nvertices(Q)
             inS[u] || continue
             du = d[u]
             du == 0 && continue
@@ -718,7 +774,7 @@ function _left_kan_data(pi::EncodingMap, M::PModule{QQ}; check::Bool=true)
         Vvals = QQ[]
         col = 0
 
-        @inbounds for u in 1:Q.n
+        @inbounds for u in 1:nvertices(Q)
             inS[u] || continue
             du = d[u]
             du == 0 && continue
@@ -846,9 +902,9 @@ function pushforward_left(pi::EncodingMap, f::PMorphism{QQ}; check::Bool=true)::
     cod_out, data_cod = _left_kan_data(pi, f.cod; check=false)
 
     P = pi.P
-    comps = Vector{Matrix{QQ}}(undef, P.n)
+    comps = Vector{Matrix{QQ}}(undef, nvertices(P))
 
-    for p in 1:P.n
+    for p in 1:nvertices(P)
         Vd = data_dom.dimV[p]
         Vc = data_cod.dimV[p]
         if Vd == 0 || Vc == 0
@@ -897,13 +953,16 @@ function _index_sets_right(pi::EncodingMap)
     P = pi.P
     f = pi.pi_of_q
 
-    idxs = Vector{Vector{Int}}(undef, P.n)
-    for p in 1:P.n
+    by_base = [Int[] for _ in 1:nvertices(P)]
+    for q in 1:nvertices(Q)
+        push!(by_base[f[q]], q)
+    end
+
+    idxs = Vector{Vector{Int}}(undef, nvertices(P))
+    for p in 1:nvertices(P)
         lst = Int[]
-        for q in 1:Q.n
-            if P.leq[p, f[q]]
-                push!(lst, q)
-            end
+        for v in upset_indices(P, p)
+            append!(lst, by_base[v])
         end
         idxs[p] = lst
     end
@@ -932,13 +991,13 @@ function _right_kan_data(pi::EncodingMap, M::PModule{QQ}; check::Bool=true)
 
     idxs = _index_sets_right(pi)
 
-    off = Vector{Dict{Int,Int}}(undef, P.n)
-    dimS = Vector{Int}(undef, P.n)
-    K = Vector{Matrix{QQ}}(undef, P.n)
-    L = Vector{Matrix{QQ}}(undef, P.n)
-    dimV = Vector{Int}(undef, P.n)
+    off = Vector{Dict{Int,Int}}(undef, nvertices(P))
+    dimS = Vector{Int}(undef, nvertices(P))
+    K = Vector{Matrix{QQ}}(undef, nvertices(P))
+    L = Vector{Matrix{QQ}}(undef, nvertices(P))
+    dimV = Vector{Int}(undef, nvertices(P))
 
-    for p in 1:P.n
+    for p in 1:nvertices(P)
         jp = idxs[p]
         offp, Sp = _offset_map(jp, d)
         off[p] = offp
@@ -993,14 +1052,14 @@ function _right_kan_data(pi::EncodingMap, M::PModule{QQ}; check::Bool=true)
         end
 
         # General case: limit as kernel of compatibility constraints x_v = M(u<=v) x_u.
-        inS = falses(Q.n)
+        inS = falses(nvertices(Q))
         for q in jp
             inS[q] = true
         end
 
         # Each cover edge (u,v) contributes dim(M(v)) equations.
         nrows = 0
-        @inbounds for u in 1:Q.n
+        @inbounds for u in 1:nvertices(Q)
             inS[u] || continue
             su = succs[u]
             for v in su
@@ -1015,7 +1074,7 @@ function _right_kan_data(pi::EncodingMap, M::PModule{QQ}; check::Bool=true)
         Vvals = QQ[]
         row0 = 0
 
-        @inbounds for u in 1:Q.n
+        @inbounds for u in 1:nvertices(Q)
             inS[u] || continue
 
             ou = offp[u]
@@ -1143,9 +1202,9 @@ function pushforward_right(pi::EncodingMap, f::PMorphism{QQ}; check::Bool=true):
     cod_out, data_cod = _right_kan_data(pi, f.cod; check=false)
 
     P = pi.P
-    comps = Vector{Matrix{QQ}}(undef, P.n)
+    comps = Vector{Matrix{QQ}}(undef, nvertices(P))
 
-    for p in 1:P.n
+    for p in 1:nvertices(P)
         Vd = data_dom.dimV[p]
         Vc = data_cod.dimV[p]
         if Vd == 0 || Vc == 0
@@ -1219,6 +1278,12 @@ function pushforward_left_complex(pi::EncodingMap, M::PModule{QQ}, df::DerivedFu
     return ModuleCochainComplex(terms, diffs; tmin=-maxlen, check=check)
 end
 
+pushforward_left_complex(pi::EncodingMap, M::PModule{QQ};
+                         opts::Union{DerivedFunctorOptions,Nothing}=nothing,
+                         check::Bool=true,
+                         res=nothing) =
+    pushforward_left_complex(pi, M, _resolve_df_opts(opts); check=check, res=res)
+
 """
     Lpushforward_left(pi, M, df; check=true)
 
@@ -1237,9 +1302,19 @@ function Lpushforward_left(pi::EncodingMap, M::PModule{QQ}, df::DerivedFunctorOp
     return out
 end
 
+Lpushforward_left(pi::EncodingMap, M::PModule{QQ};
+                  opts::Union{DerivedFunctorOptions,Nothing}=nothing,
+                  check::Bool=true) =
+    Lpushforward_left(pi, M, _resolve_df_opts(opts); check=check)
+
 derived_pushforward_left(pi::EncodingMap, M::PModule{QQ}, df::DerivedFunctorOptions;
                          check::Bool=true) =
     Lpushforward_left(pi, M, df; check=check)
+
+derived_pushforward_left(pi::EncodingMap, M::PModule{QQ};
+                         opts::Union{DerivedFunctorOptions,Nothing}=nothing,
+                         check::Bool=true) =
+    derived_pushforward_left(pi, M, _resolve_df_opts(opts); check=check)
 
 """
     pushforward_left_complex(pi, f, df; check=true, res_dom=nothing, res_cod=nothing)
@@ -1299,6 +1374,14 @@ function pushforward_left_complex(pi::EncodingMap, f::PMorphism{QQ}, df::Derived
     return ModuleCochainMap(Cdom, Ccod, comps; check=check)
 end
 
+pushforward_left_complex(pi::EncodingMap, f::PMorphism{QQ};
+                         opts::Union{DerivedFunctorOptions,Nothing}=nothing,
+                         check::Bool=true,
+                         res_dom=nothing,
+                         res_cod=nothing) =
+    pushforward_left_complex(pi, f, _resolve_df_opts(opts);
+                             check=check, res_dom=res_dom, res_cod=res_cod)
+
 """
     Lpushforward_left(pi, f, df; check=true, res_dom=nothing, res_cod=nothing)
 
@@ -1323,9 +1406,22 @@ function Lpushforward_left(pi::EncodingMap, f::PMorphism{QQ}, df::DerivedFunctor
     return out
 end
 
+Lpushforward_left(pi::EncodingMap, f::PMorphism{QQ};
+                  opts::Union{DerivedFunctorOptions,Nothing}=nothing,
+                  check::Bool=true,
+                  res_dom=nothing,
+                  res_cod=nothing) =
+    Lpushforward_left(pi, f, _resolve_df_opts(opts);
+                      check=check, res_dom=res_dom, res_cod=res_cod)
+
 derived_pushforward_left(pi::EncodingMap, f::PMorphism{QQ}, df::DerivedFunctorOptions;
                          check::Bool=true) =
     Lpushforward_left(pi, f, df; check=check)
+
+derived_pushforward_left(pi::EncodingMap, f::PMorphism{QQ};
+                         opts::Union{DerivedFunctorOptions,Nothing}=nothing,
+                         check::Bool=true) =
+    derived_pushforward_left(pi, f, _resolve_df_opts(opts); check=check)
 
 
 """
@@ -1370,6 +1466,12 @@ function pushforward_right_complex(pi::EncodingMap, M::PModule{QQ}, df::DerivedF
     return ModuleCochainComplex(terms, diffs; tmin=0, check=check)
 end
 
+pushforward_right_complex(pi::EncodingMap, M::PModule{QQ};
+                          opts::Union{DerivedFunctorOptions,Nothing}=nothing,
+                          check::Bool=true,
+                          res=nothing) =
+    pushforward_right_complex(pi, M, _resolve_df_opts(opts); check=check, res=res)
+
 """
     Rpushforward_right(pi, M, df; check=true)
 
@@ -1388,9 +1490,19 @@ function Rpushforward_right(pi::EncodingMap, M::PModule{QQ}, df::DerivedFunctorO
     return out
 end
 
+Rpushforward_right(pi::EncodingMap, M::PModule{QQ};
+                   opts::Union{DerivedFunctorOptions,Nothing}=nothing,
+                   check::Bool=true) =
+    Rpushforward_right(pi, M, _resolve_df_opts(opts); check=check)
+
 derived_pushforward_right(pi::EncodingMap, M::PModule{QQ}, df::DerivedFunctorOptions;
                           check::Bool=true) =
     Rpushforward_right(pi, M, df; check=check)
+
+derived_pushforward_right(pi::EncodingMap, M::PModule{QQ};
+                          opts::Union{DerivedFunctorOptions,Nothing}=nothing,
+                          check::Bool=true) =
+    derived_pushforward_right(pi, M, _resolve_df_opts(opts); check=check)
     
 """
     pushforward_right_complex(pi, f, df; check=true, res_dom=nothing, res_cod=nothing)
@@ -1443,6 +1555,14 @@ function pushforward_right_complex(pi::EncodingMap, f::PMorphism{QQ}, df::Derive
     return ModuleCochainMap(Cdom, Ccod, comps; check=check)
 end
 
+pushforward_right_complex(pi::EncodingMap, f::PMorphism{QQ};
+                          opts::Union{DerivedFunctorOptions,Nothing}=nothing,
+                          check::Bool=true,
+                          res_dom=nothing,
+                          res_cod=nothing) =
+    pushforward_right_complex(pi, f, _resolve_df_opts(opts);
+                              check=check, res_dom=res_dom, res_cod=res_cod)
+
 
 """
     Rpushforward_right(pi, f, df; check=true, res_dom=nothing, res_cod=nothing)
@@ -1468,28 +1588,40 @@ function Rpushforward_right(pi::EncodingMap, f::PMorphism{QQ}, df::DerivedFuncto
     return out
 end
 
+Rpushforward_right(pi::EncodingMap, f::PMorphism{QQ};
+                   opts::Union{DerivedFunctorOptions,Nothing}=nothing,
+                   check::Bool=true,
+                   res_dom=nothing,
+                   res_cod=nothing) =
+    Rpushforward_right(pi, f, _resolve_df_opts(opts);
+                       check=check, res_dom=res_dom, res_cod=res_cod)
+
 derived_pushforward_right(pi::EncodingMap, f::PMorphism{QQ}, df::DerivedFunctorOptions;
                           check::Bool=true) =
     Rpushforward_right(pi, f, df; check=check)
+
+derived_pushforward_right(pi::EncodingMap, f::PMorphism{QQ};
+                          opts::Union{DerivedFunctorOptions,Nothing}=nothing,
+                          check::Bool=true) =
+    derived_pushforward_right(pi, f, _resolve_df_opts(opts); check=check)
 
 # -----------------------------------------------------------------------------
 # Helpers: morphisms between direct sums of principal upsets (projectives)
 # -----------------------------------------------------------------------------
 
 # Active summand indices at each vertex u, respecting the canonical ordering used in projective covers.
-function _active_upset_indices_from_bases(Q::FinitePoset, bases::Vector{Int})
-    by_base = [Int[] for _ in 1:Q.n]
+function _active_upset_indices_from_bases(Q::AbstractPoset, bases::Vector{Int})
+    n = nvertices(Q)
+    by_base = [Int[] for _ in 1:n]
     for (j, b) in enumerate(bases)
         push!(by_base[b], j)
     end
 
-    out = Vector{Vector{Int}}(undef, Q.n)
-    for u in 1:Q.n
+    out = Vector{Vector{Int}}(undef, n)
+    for u in 1:n
         idxs = Int[]
-        for b in 1:Q.n
-            if Q.leq[b, u]
-                append!(idxs, by_base[b])
-            end
+        for b in downset_indices(Q, u)
+            append!(idxs, by_base[b])
         end
         out[u] = idxs
     end
@@ -1514,8 +1646,8 @@ function _pmorphism_from_upset_coeff(dom::PModule{QQ}, cod::PModule{QQ},
     act_dom = _active_upset_indices_from_bases(Q, dom_bases)
     act_cod = _active_upset_indices_from_bases(Q, cod_bases)
 
-    comps = Vector{Matrix{QQ}}(undef, Q.n)
-    for u in 1:Q.n
+    comps = Vector{Matrix{QQ}}(undef, nvertices(Q))
+    for u in 1:nvertices(Q)
         rows = act_cod[u]
         cols = act_dom[u]
         if isempty(rows) || isempty(cols)

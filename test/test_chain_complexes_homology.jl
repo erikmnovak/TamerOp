@@ -452,7 +452,7 @@ end
     # --------------------------
     # 4) hyperTor agrees with Tor for degree-0 complex
     # --------------------------
-    Pop = FF.FinitePoset(transpose(P.leq))
+    Pop = FF.FinitePoset(transpose(FF.leq_matrix(P)))
 
     # Pop is the opposite poset of P.
     # The interval [1,3] in P corresponds to the interval [3,1] in Pop.

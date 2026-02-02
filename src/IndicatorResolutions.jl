@@ -28,7 +28,7 @@ import ..Modules: id_morphism
 import ..AbelianCategories
 using ..AbelianCategories: kernel_with_inclusion, _cokernel_module
 
-import ..FiniteFringe: FinitePoset, Upset, Downset, principal_upset, principal_downset, cover_edges
+import ..FiniteFringe: AbstractPoset, FinitePoset, Upset, Downset, principal_upset, principal_downset, cover_edges, nvertices
 
 # =============================================================================
 # Public exports
@@ -51,7 +51,7 @@ E_u to E_v followed by projection to M_v.
 """
 function pmodule_from_fringe(H::FiniteFringe.FringeModule{K}) where {K}
     Q = H.P
-    n = Q.n
+    n = nvertices(Q)
 
     # Basis for each fiber M_q as columns of a QQ matrix B[q] spanning im(phi_q).
     B = Vector{Matrix{QQ}}(undef, n)
@@ -151,7 +151,7 @@ pi0 : F0 \to M is the natural surjection, and `gens_at[v]` lists the generators 
 at vertex v (each item is a pair (p, local_index_in_Mp)).
 """
 function projective_cover(M::PModule{QQ}; cache::Union{Nothing,CoverCache}=nothing)
-    Q = M.Q; n = Q.n
+    Q = M.Q; n = nvertices(Q)
     cc = cache === nothing ? cover_cache(Q) : cache
 
     # number of generators at each vertex = dim(M_v) - rank(incoming_image)
@@ -187,17 +187,16 @@ function projective_cover(M::PModule{QQ}; cache::Union{Nothing,CoverCache}=nothi
     # We therefore build the cover-edge maps by matching generator labels (p,j)
     # across vertices. This agrees with the representable functor structure and is
     # independent of the arbitrary ordering of vertices.
-    F0_dims = [sum(gen_of_p[p] for p in 1:n if Q.leq[p,i]) for i in 1:n]
+    F0_dims = [sum(gen_of_p[p] for p in downset_indices(Q, i)) for i in 1:n]
 
     # Active generator lists (and positions) at each vertex i.
     active_at = Vector{Vector{Tuple{Int,Int}}}(undef, n)
     pos_at    = Vector{Dict{Tuple{Int,Int},Int}}(undef, n)
     for i in 1:n
         lst = Tuple{Int,Int}[]
-        for p in 1:n
-            if gen_of_p[p] > 0 && Q.leq[p,i]
-                append!(lst, gens_at[p])
-            end
+        for p in downset_indices(Q, i)
+            gen_of_p[p] > 0 || continue
+            append!(lst, gens_at[p])
         end
         active_at[i] = lst
         d = Dict{Tuple{Int,Int},Int}()
@@ -244,11 +243,9 @@ function projective_cover(M::PModule{QQ}; cache::Union{Nothing,CoverCache}=nothi
         Fi = F0_dims[i]
         cols = zeros(QQ, Mi, Fi)
         col = 1
-        for p in gen_vertices
+        for p in downset_indices(Q, i)
             k = gen_of_p[p]
-            if !Q.leq[p, i]
-                continue
-            end
+            k == 0 && continue
             A = map_leq(M, p, i; cache=cc)  # M_p -> M_i
             Jp = J_at[p]
             @inbounds for t in 1:k
@@ -319,7 +316,7 @@ end
 # E is a direct sum of principal downsets with multiplicities = socle dimensions.
 # Also return the generator labels as (u, j) with u the vertex and j the column.
 function _injective_hull(M::PModule{QQ}; cache::Union{Nothing,CoverCache}=nothing)
-    Q = M.Q; n = Q.n
+    Q = M.Q; n = nvertices(Q)
     cc = cache === nothing ? cover_cache(Q) : cache
 
     # socle bases at each vertex and their multiplicities
@@ -337,7 +334,7 @@ function _injective_hull(M::PModule{QQ}; cache::Union{Nothing,CoverCache}=nothin
     end
 
     # fiber dimensions of E
-    Edims = [sum(mult[u] for u in 1:n if Q.leq[i,u]) for i in 1:n]
+    Edims = [sum(mult[u] for u in upset_indices(Q, i)) for i in 1:n]
 
     # Active generator lists (and positions) at each vertex i.
     # This ordering matches the row-stacking order used in the inclusion iota below.
@@ -345,10 +342,9 @@ function _injective_hull(M::PModule{QQ}; cache::Union{Nothing,CoverCache}=nothin
     pos_at    = Vector{Dict{Tuple{Int,Int},Int}}(undef, n)
     for i in 1:n
         lst = Tuple{Int,Int}[]
-        for u in 1:n
-            if mult[u] > 0 && Q.leq[i,u]
-                append!(lst, gens_at[u])
-            end
+        for u in upset_indices(Q, i)
+            mult[u] > 0 || continue
+            append!(lst, gens_at[u])
         end
         active_at[i] = lst
         d = Dict{Tuple{Int,Int},Int}()
@@ -378,19 +374,16 @@ function _injective_hull(M::PModule{QQ}; cache::Union{Nothing,CoverCache}=nothin
     Linv = [ _left_inverse_full_column(Soc[u]) for u in 1:n ]
 
     # Only vertices with nontrivial socle contribute rows.
-    mult_vertices = [u for u in 1:n if mult[u] > 0]
-
     comps = Vector{Matrix{QQ}}(undef, n)
     for i in 1:n
         rows = zeros(QQ, Edims[i], M.dims[i])
         r = 1
-        for u in mult_vertices
-            if Q.leq[i, u]
-                Mi_to_Mu = map_leq(M, i, u; cache=cc)
-                m = mult[u]
-                @views mul!(rows[r:r+m-1, :], Linv[u], Mi_to_Mu)
-                r += m
-            end
+        for u in upset_indices(Q, i)
+            m = mult[u]
+            m == 0 && continue
+            Mi_to_Mu = map_leq(M, i, u; cache=cc)
+            @views mul!(rows[r:r+m-1, :], Linv[u], Mi_to_Mu)
+            r += m
         end
         @assert r == Edims[i] + 1
         comps[i] = rows
@@ -423,13 +416,13 @@ function upset_presentation_one_step(H::FiniteFringe.FringeModule)
     # U0: list of principal upsets, one per generator in gens_at_F0[p]
     P = M.Q
     U0 = Upset[]
-    for p in 1:P.n
+    for p in 1:nvertices(P)
         for _ in gens_at_F0[p]
             push!(U0, principal_upset(P, p))
         end
     end
     U1 = Upset[]
-    for p in 1:P.n
+    for p in 1:nvertices(P)
         for _ in gens_at_F1[p]
             push!(U1, principal_upset(P, p))
         end
@@ -443,13 +436,11 @@ function upset_presentation_one_step(H::FiniteFringe.FringeModule)
     # Build offsets to find local coordinates.
     function local_index_list(gens_at)
         # return vector of vectors L[i] listing global generator indices active at vertex i
-        L = Vector{Vector{Tuple{Int,Int}}}(undef, P.n)
-        for i in 1:P.n
+        L = Vector{Vector{Tuple{Int,Int}}}(undef, nvertices(P))
+        for i in 1:nvertices(P)
             L[i] = Tuple{Int,Int}[]
-            for p in 1:P.n
-                if P.leq[p,i]
-                    append!(L[i], gens_at[p])
-                end
+            for p in downset_indices(P, i)
+                append!(L[i], gens_at[p])
             end
         end
         L
@@ -459,9 +450,9 @@ function upset_presentation_one_step(H::FiniteFringe.FringeModule)
 
     # Build a map from "global generator number in U0/U1" to its vertex p and position j in M_p
     globalU0 = Tuple{Int,Int}[]  # (p,j)
-    for p in 1:P.n; append!(globalU0, gens_at_F0[p]); end
+    for p in 1:nvertices(P); append!(globalU0, gens_at_F0[p]); end
     globalU1 = Tuple{Int,Int}[]
-    for p in 1:P.n; append!(globalU1, gens_at_F1[p]); end
+    for p in 1:nvertices(P); append!(globalU1, gens_at_F1[p]); end
 
     # helper: find local column index of global generator g=(p,j) at vertex i
     function local_col_of(L, g::Tuple{Int,Int}, i::Int)
@@ -473,7 +464,7 @@ function upset_presentation_one_step(H::FiniteFringe.FringeModule)
 
     for (lambda, (plambda, jlambda)) in enumerate(globalU0)
         for (theta, (ptheta, jtheta)) in enumerate(globalU1)
-            if P.leq[plambda, ptheta]   # containment for principal upsets: Up(ptheta) subseteq Up(plambda)
+            if leq(P, plambda, ptheta)   # containment for principal upsets: Up(ptheta) subseteq Up(plambda)
                 i = ptheta              # read at the minimal vertex where the domain generator exists
                 col = local_col_of(L1, (ptheta, jtheta), i)
                 row = local_col_of(L0, (plambda, jlambda), i)
@@ -556,7 +547,7 @@ from the actual vertexwise maps, not just from the partial order.  Steps:
 function downset_copresentation_one_step(H::FiniteFringe.FringeModule)
     # Convert fringe to internal PModule over QQ
     M = pmodule_from_fringe(H)
-    Q = M.Q; n = Q.n
+    Q = M.Q; n = nvertices(Q)
     cc = _cover_cache(Q)
 
     # (1) Injective hull of M: E0 with inclusion iota0
@@ -588,10 +579,8 @@ function downset_copresentation_one_step(H::FiniteFringe.FringeModule)
         L = Vector{Vector{Tuple{Int,Int}}}(undef, n)
         for i in 1:n
             lst = Tuple{Int,Int}[]
-            for u in 1:n
-                if Q.leq[i,u]
-                    append!(lst, gens_at[u])
-                end
+            for u in upset_indices(Q, i)
+                append!(lst, gens_at[u])
             end
             L[i] = lst
         end
@@ -618,7 +607,7 @@ function downset_copresentation_one_step(H::FiniteFringe.FringeModule)
 
     for (lambda, (ulambda, jlambda)) in enumerate(globalD0)
         for (theta, (utheta, jtheta)) in enumerate(globalD1)
-            if Q.leq[utheta, ulambda] # D(utheta) subseteq D(ulambda)
+            if leq(Q, utheta, ulambda) # D(utheta) subseteq D(ulambda)
                 i   = utheta
                 col = _local_col_of(L0, (ulambda, jlambda), i)
                 row = _local_col_of(L1, (utheta, jtheta), i)
@@ -809,10 +798,10 @@ end
 # Build the list of principal upsets from per-vertex generator labels returned by
 # projective_cover: gens_at[v] is a vector of pairs (p, j).  Each pair contributes
 # one principal upset at vertex p.
-function _principal_upsets_from_gens(P::FinitePoset,
+function _principal_upsets_from_gens(P::AbstractPoset,
                                      gens_at::Vector{Vector{Tuple{Int,Int}}})
     U = Upset[]
-    for p in 1:P.n
+    for p in 1:nvertices(P)
         for _ in gens_at[p]
             push!(U, principal_upset(P, p))
         end
@@ -821,10 +810,10 @@ function _principal_upsets_from_gens(P::FinitePoset,
 end
 
 # Build the list of principal downsets from per-vertex labels returned by _injective_hull
-function _principal_downsets_from_gens(P::FinitePoset,
+function _principal_downsets_from_gens(P::AbstractPoset,
                                        gens_at::Vector{Vector{Tuple{Int,Int}}})
     D = Downset[]
-    for u in 1:P.n
+    for u in 1:nvertices(P)
         for _ in gens_at[u]
             push!(D, principal_downset(P, u))
         end
@@ -834,15 +823,13 @@ end
 
 # For upset side: at vertex i, which global generators are active (born at p <= i)?
 # Returns L[i] = vector of global generator labels (p,j) visible at i.
-function _local_index_list_up(P::FinitePoset,
+function _local_index_list_up(P::AbstractPoset,
                               gens_at::Vector{Vector{Tuple{Int,Int}}})
-    L = Vector{Vector{Tuple{Int,Int}}}(undef, P.n)
-    for i in 1:P.n
+    L = Vector{Vector{Tuple{Int,Int}}}(undef, nvertices(P))
+    for i in 1:nvertices(P)
         lst = Tuple{Int,Int}[]
-        for p in 1:P.n
-            if P.leq[p,i]
-                append!(lst, gens_at[p])
-            end
+        for p in downset_indices(P, i)
+            append!(lst, gens_at[p])
         end
         L[i] = lst
     end
@@ -851,15 +838,13 @@ end
 
 # For downset side: at vertex i, which global generators are active (born at u with i <= u)?
 # Returns L[i] = vector of global generator labels (u,j) visible at i.
-function _local_index_list_down(P::FinitePoset,
+function _local_index_list_down(P::AbstractPoset,
                                 gens_at::Vector{Vector{Tuple{Int,Int}}})
-    L = Vector{Vector{Tuple{Int,Int}}}(undef, P.n)
-    for i in 1:P.n
+    L = Vector{Vector{Tuple{Int,Int}}}(undef, nvertices(P))
+    for i in 1:nvertices(P)
         lst = Tuple{Int,Int}[]
-        for u in 1:P.n
-            if P.leq[i,u]
-                append!(lst, gens_at[u])
-            end
+        for u in upset_indices(P, i)
+            append!(lst, gens_at[u])
         end
         L[i] = lst
     end
@@ -935,8 +920,8 @@ function upset_resolution(M::PModule{QQ}; maxlen::Union{Int,Nothing}=nothing)
         Fnext, pinext, gens_at_next = projective_cover(K)
 
         # d = iota o pinext : Fnext -> curr_dom
-        comps = Vector{Matrix{QQ}}(undef, P.n)
-        for i in 1:P.n
+        comps = Vector{Matrix{QQ}}(undef, nvertices(P))
+        for i in 1:nvertices(P)
             comps[i] = iota.comps[i] * pinext.comps[i]
         end
         d = PMorphism{QQ}(Fnext, curr_dom, comps)
@@ -948,11 +933,11 @@ function upset_resolution(M::PModule{QQ}; maxlen::Union{Int,Nothing}=nothing)
 
         # Global enumerations of generators (record their birth vertices)
         global_prev = Tuple{Int,Int}[]
-        for p in 1:P.n
+        for p in 1:nvertices(P)
             append!(global_prev, curr_gens[p])
         end
         global_next = Tuple{Int,Int}[]
-        for p in 1:P.n
+        for p in 1:nvertices(P)
             append!(global_next, gens_at_next[p])
         end
 
@@ -961,7 +946,7 @@ function upset_resolution(M::PModule{QQ}; maxlen::Union{Int,Nothing}=nothing)
         for (lambda, (plambda, jlambda)) in enumerate(global_prev)
             for (theta, (ptheta, jtheta)) in enumerate(global_next)
                 # Containment for principal upsets: Up(ptheta) subseteq Up(plambda)
-                if P.leq[plambda, ptheta]
+                if leq(P, plambda, ptheta)
                     # Read at the minimal vertex where the domain generator exists
                     i = ptheta
                     col = _local_col_of(Lnext, (ptheta, jtheta), i)
@@ -1057,8 +1042,8 @@ function downset_resolution(M::PModule{QQ}; maxlen::Union{Int,Nothing}=nothing)
         E1, j, gens_at_E1 = _injective_hull(C)
 
         # rho_b = j o prev_q : prev_E -> E1
-        comps = Vector{Matrix{QQ}}(undef, P.n)
-        for i in 1:P.n
+        comps = Vector{Matrix{QQ}}(undef, nvertices(P))
+        for i in 1:nvertices(P)
             comps[i] = j.comps[i] * prev_q.comps[i]
         end
         rho = PMorphism{QQ}(prev_E, E1, comps)
@@ -1069,11 +1054,11 @@ function downset_resolution(M::PModule{QQ}; maxlen::Union{Int,Nothing}=nothing)
         L1     = _local_index_list_down(P, gens_at_E1)
 
         globalD0 = Tuple{Int,Int}[]
-        for u in 1:P.n
+        for u in 1:nvertices(P)
             append!(globalD0, prev_gens[u])
         end
         globalD1 = Tuple{Int,Int}[]
-        for u in 1:P.n
+        for u in 1:nvertices(P)
             append!(globalD1, gens_at_E1[u])
         end
 
@@ -1082,7 +1067,7 @@ function downset_resolution(M::PModule{QQ}; maxlen::Union{Int,Nothing}=nothing)
         for (lambda, (ulambda, jlambda)) in enumerate(globalD0)      # col in D0
             for (theta,  (utheta,  jtheta))  in enumerate(globalD1)  # row in D1
                 # Containment for principal downsets: D(utheta) subseteq D(ulambda)
-                if P.leq[utheta, ulambda]
+                if leq(P, utheta, ulambda)
                     i   = utheta
                     col = _local_col_of(L0, (ulambda, jlambda), i)
                     row = _local_col_of(L1, (utheta,  jtheta),  i)
@@ -1173,7 +1158,7 @@ function verify_upset_resolution(F::Vector{UpsetPresentation{QQ}},
     end
 
     U_by_a = [f.U0 for f in F]  # U_0,...,U_A
-    vs = (vertices === :all) ? (1:P.n) : vertices
+    vs = (vertices === :all) ? (1:nvertices(P)) : vertices
 
 
     # Connectedness / valid monomial support (principal-upset case):
@@ -1263,7 +1248,7 @@ function verify_downset_resolution(E::Vector{DownsetCopresentation{QQ}},
     end
 
     D_by_b = [e.D0 for e in E]  # D_0,...,D_B
-    vs = (vertices === :all) ? (1:P.n) : vertices
+    vs = (vertices === :all) ? (1:nvertices(P)) : vertices
 
 
     # Valid monomial support (principal-downset case):

@@ -1,12 +1,14 @@
 module Modules
 
 using SparseArrays, LinearAlgebra
-using ..CoreModules: QQ
-import ..FiniteFringe: FinitePoset, cover_edges
+using ..CoreModules: QQ, ModuleOptions
+import ..FiniteFringe
+import ..FiniteFringe: AbstractPoset, FinitePoset, cover_edges, leq, nvertices
 import Base.Threads
 
 
 export PModule, PMorphism,
+       ModuleOptions,
        zero_pmodule, zero_morphism, direct_sum, direct_sum_with_maps, map_leq
 
 """
@@ -24,8 +26,8 @@ Thread-safety:
 
 # In the existing struct CoverCache, add the nedges field at the end.
 struct CoverCache
-    Q::FinitePoset
-    C::BitMatrix
+    Q::AbstractPoset
+    C::Union{BitMatrix,Nothing}
     succs::Vector{Vector{Int}}
     preds::Vector{Vector{Int}}
 
@@ -38,12 +40,12 @@ struct CoverCache
 end
 
 
-const _COVER_CACHE_MEMO = IdDict{FinitePoset, CoverCache}()
+const _COVER_CACHE_MEMO = IdDict{AbstractPoset, CoverCache}()
 
 # Global memo table is shared across threads: must be protected.
 const _COVER_CACHE_LOCK = Base.ReentrantLock()
 
-function cover_cache(Q::FinitePoset)
+function cover_cache(Q::AbstractPoset)
     # Access to IdDict must be locked if there may be concurrent writers.
     Base.lock(_COVER_CACHE_LOCK)
     cc = get(_COVER_CACHE_MEMO, Q, nothing)
@@ -77,6 +79,7 @@ function clear_cover_cache!()
     Base.lock(_COVER_CACHE_LOCK)
     empty!(_COVER_CACHE_MEMO)
     Base.unlock(_COVER_CACHE_LOCK)
+    empty!(FiniteFringe._COVER_EDGES_OBJ_CACHE)
     return nothing
 end
 
@@ -86,20 +89,21 @@ end
     return (UInt64(u) << 32) | UInt64(v)
 end
 
-function _cover_cache(Q::FinitePoset)
+function _cover_cache(Q::AbstractPoset)
     # Cache enough to quickly traverse the cover graph and to build edge-indexed stores.
 
     # Cover edges in Q (stores both Ce.edges and Ce.mat).
     Ce = cover_edges(Q)
 
-    # BitMatrix adjacency for O(1) cover checks.
-    C = BitMatrix(Ce)
+    # BitMatrix adjacency for O(1) cover checks (only for FinitePoset).
+    C = Q isa FinitePoset ? BitMatrix(Ce) : nothing
 
     # Total number of cover edges (O(1) since CoverEdges stores Ce.edges).
     nedges = length(Ce)
 
-    outdeg = zeros(Int, Q.n)
-    indeg = zeros(Int, Q.n)
+    n = nvertices(Q)
+    outdeg = zeros(Int, n)
+    indeg = zeros(Int, n)
 
     # Count degrees.
     for (a, b) in Ce
@@ -107,17 +111,23 @@ function _cover_cache(Q::FinitePoset)
         indeg[b] += 1
     end
 
-    succs = [Vector{Int}(undef, outdeg[u]) for u in 1:Q.n]
-    preds = [Vector{Int}(undef, indeg[u]) for u in 1:Q.n]
+    succs = [Vector{Int}(undef, outdeg[u]) for u in 1:n]
+    preds = [Vector{Int}(undef, indeg[u]) for u in 1:n]
 
-    outk = ones(Int, Q.n)
-    ink = ones(Int, Q.n)
+    outk = ones(Int, n)
+    ink = ones(Int, n)
 
     for (a, b) in Ce
         succs[a][outk[a]] = b
         preds[b][ink[b]] = a
         outk[a] += 1
         ink[b] += 1
+    end
+
+    # Ensure sorted adjacency lists for binary-search helpers.
+    @inbounds for u in 1:n
+        sort!(succs[u])
+        sort!(preds[u])
     end
 
     # One dict per thread to make the hot-path memo thread-safe without locks.
@@ -140,7 +150,7 @@ function _chosen_predecessor(cc::CoverCache, a::Int, d::Int)
     b = get(chain_parent, k, 0)
 
     if b == 0
-        b = findfirst(x -> x != a && cc.Q.leq[a, x], cc.preds[d])
+        b = findfirst(x -> x != a && leq(cc.Q, a, x), cc.preds[d])
         b = (b === nothing) ? a : cc.preds[d][b]
         chain_parent[k] = b
     end
@@ -299,7 +309,7 @@ We keep this as an explicit dispatch point (Dict vs CoverEdgeMapStore) to avoid
 runtime "two-world" adapter helpers.
 """
 function CoverEdgeMapStore{K,MatT}(
-    Q::FinitePoset,
+    Q::AbstractPoset,
     dims::Vector{Int},
     edge_maps::AbstractDict{Tuple{Int,Int},<:Any};
     cache::Union{Nothing,CoverCache}=nothing,
@@ -309,7 +319,7 @@ function CoverEdgeMapStore{K,MatT}(
     cc = cache === nothing ? cover_cache(Q) : cache
     preds = cc.preds
     succs = cc.succs
-    n = Q.n
+    n = nvertices(Q)
 
     # Incoming storage (indexed by v, then by sorted preds[v]).
     maps_from_pred = [Vector{MatT}(undef, length(preds[v])) for v in 1:n]
@@ -354,7 +364,7 @@ function CoverEdgeMapStore{K,MatT}(
 end
 
 function CoverEdgeMapStore{K,MatT}(
-    Q::FinitePoset,
+    Q::AbstractPoset,
     dims::Vector{Int},
     edge_maps::CoverEdgeMapStore{K,MatT};
     cache::Union{Nothing,CoverCache}=nothing,
@@ -369,7 +379,7 @@ function CoverEdgeMapStore{K,MatT}(
         end
 
         preds = cc.preds
-        n = Q.n
+        n = nvertices(Q)
         if length(edge_maps.maps_from_pred) != n
             error("edge_maps store has wrong size (expected $n vertices)")
         end
@@ -408,7 +418,7 @@ For performance, cover-edge maps are stored in a `CoverEdgeMapStore`,
 aligned with the cover graph, rather than in a dictionary keyed by `(u,v)`.
 """
 struct PModule{K,MatT<:AbstractMatrix{K}}
-    Q::FinitePoset
+    Q::AbstractPoset
     dims::Vector{Int}
     edge_maps::CoverEdgeMapStore{K,MatT}
 end
@@ -428,14 +438,26 @@ end
 Construct a `PModule` over coefficient type `K`. `edge_maps` may be a dict or
 any mapping supporting `(u,v)` keys. Missing cover maps become zero maps.
 """
-function PModule{K}(Q::FinitePoset, dims::Vector{Int}, edge_maps; check_sizes::Bool=true) where {K}
+function PModule{K}(Q::AbstractPoset, dims::Vector{Int}, edge_maps;
+                    check_sizes::Bool=true,
+                    opts::Union{ModuleOptions,Nothing}=nothing) where {K}
+    if opts !== nothing
+        check_sizes == true || error("PModule: pass either check_sizes or opts, not both.")
+        check_sizes = opts.check_sizes
+    end
     MatT = _pmodule_mat_type(K, edge_maps)
     store = CoverEdgeMapStore{K,MatT}(Q, dims, edge_maps; check_sizes=check_sizes)
     return PModule{K,MatT}(Q, dims, store)
 end
 
 # rebase existing store to this poset (important for ChangeOfPosets)
-function PModule{K}(Q::FinitePoset, dims::Vector{Int}, store::CoverEdgeMapStore{K,MatT}; check_sizes::Bool=true) where {K,MatT<:AbstractMatrix{K}}
+function PModule{K}(Q::AbstractPoset, dims::Vector{Int}, store::CoverEdgeMapStore{K,MatT};
+                    check_sizes::Bool=true,
+                    opts::Union{ModuleOptions,Nothing}=nothing) where {K,MatT<:AbstractMatrix{K}}
+    if opts !== nothing
+        check_sizes == true || error("PModule: pass either check_sizes or opts, not both.")
+        check_sizes = opts.check_sizes
+    end
     cc = _cover_cache(Q)
     if store.preds === cc.preds && store.succs === cc.succs
         return PModule{K,MatT}(Q, dims, store)
@@ -445,7 +467,13 @@ function PModule{K}(Q::FinitePoset, dims::Vector{Int}, store::CoverEdgeMapStore{
 end
 
 # infer coefficient type from first map
-function PModule(Q::FinitePoset, dims::Vector{Int}, edge_maps; check_sizes::Bool=true)
+function PModule(Q::AbstractPoset, dims::Vector{Int}, edge_maps;
+                 check_sizes::Bool=true,
+                 opts::Union{ModuleOptions,Nothing}=nothing)
+    if opts !== nothing
+        check_sizes == true || error("PModule: pass either check_sizes or opts, not both.")
+        check_sizes = opts.check_sizes
+    end
     for (_, A) in edge_maps
         return PModule{eltype(A)}(Q, dims, edge_maps; check_sizes=check_sizes)
     end
@@ -485,7 +513,7 @@ id_morphism(M::PModule{K}) where {K} =
 
 
     
-function _predecessors(Q::FinitePoset)
+function _predecessors(Q::AbstractPoset)
     return _cover_cache(Q).preds
 end
 
@@ -495,16 +523,16 @@ end
 # ----------------------------
 
 """
-    zero_pmodule(Q::FinitePoset, ::Type{K}=QQ)
+    zero_pmodule(Q::AbstractPoset, ::Type{K}=QQ)
 
 The zero P-module on a finite poset Q (all stalks 0 and all structure maps 0).
 """
-function zero_pmodule(Q::FinitePoset, ::Type{K}=QQ) where {K}
+function zero_pmodule(Q::AbstractPoset, ::Type{K}=QQ) where {K}
     edge = Dict{Tuple{Int,Int}, Matrix{K}}()
     for (u,v) in cover_edges(Q)
         edge[(u,v)] = zeros(K, 0, 0)
     end
-    return PModule{K}(Q, zeros(Int, Q.n), edge)
+    return PModule{K}(Q, zeros(Int, nvertices(Q)), edge)
 end
 
 """
@@ -515,8 +543,9 @@ Zero morphism M -> N.
 function zero_morphism(M::PModule{K}, N::PModule{K}) where {K}
     Q = M.Q
     @assert N.Q === Q
-    comps = Vector{Matrix{K}}(undef, Q.n)
-    for i in 1:Q.n
+    n = nvertices(Q)
+    comps = Vector{Matrix{K}}(undef, n)
+    for i in 1:n
         comps[i] = zeros(K, N.dims[i], M.dims[i])
     end
     return PMorphism{K}(M, N, comps)
@@ -529,7 +558,7 @@ Binary direct sum A oplus B as a P-module.
 """
 function direct_sum(A::PModule{K}, B::PModule{K}) where {K}
     Q = A.Q
-    n = Q.n
+    n = nvertices(Q)
     @assert B.Q === Q
 
     dims = [A.dims[i] + B.dims[i] for i in 1:n]
@@ -606,7 +635,7 @@ Direct sum together with canonical injections/projections.
 function direct_sum_with_maps(A::PModule{K}, B::PModule{K}) where {K}
     S = direct_sum(A, B)
     Q = A.Q
-    n = Q.n
+    n = nvertices(Q)
     @assert B.Q === Q
 
     iA_comps = Vector{Matrix{K}}(undef, n)
@@ -651,7 +680,13 @@ end
 @inline function _map_leq_cover_chain(M::PModule{K}, u::Int, v::Int, cc::CoverCache) where {K}
     # Compute M(u<=v) by composing cover-edge maps along the chosen chain.
     # Assumes u < v and u <= v.
-    @inbounds if cc.C[u, v]
+    if u == v
+        return Matrix{K}(I, M.dims[v], M.dims[u])
+    end
+    @inbounds if cc.C !== nothing && cc.C[u, v]
+        return M.edge_maps[u, v]
+    end
+    if cc.C === nothing && haskey(M.edge_maps, u, v)
         return M.edge_maps[u, v]
     end
     w = _chosen_predecessor(cc, u, v)
@@ -679,13 +714,20 @@ Warning:
   The returned matrix may alias internal storage when `u < v` is a *cover edge*.
   Treat it as read-only.
 """
-function map_leq(M::PModule{K}, u::Int, v::Int; cache::Union{Nothing,CoverCache}=nothing) where {K}
+function map_leq(M::PModule{K}, u::Int, v::Int;
+                 cache::Union{Nothing,CoverCache}=nothing,
+                 opts::Union{ModuleOptions,Nothing}=nothing) where {K}
     Q = M.Q
-    (1 <= u <= Q.n && 1 <= v <= Q.n) || error("map_leq: indices out of range")
+    n = nvertices(Q)
+    (1 <= u <= n && 1 <= v <= n) || error("map_leq: indices out of range")
 
     u == v && return Matrix{K}(I, M.dims[v], M.dims[u])
-    Q.leq[u, v] || error("map_leq: need u <= v in the poset (got u=$u, v=$v)")
+    leq(Q, u, v) || error("map_leq: need u <= v in the poset (got u=$u, v=$v)")
 
+    if opts !== nothing
+        cache === nothing || error("map_leq: pass either cache or opts, not both.")
+        cache = opts.cache
+    end
     cc = cache === nothing ? cover_cache(Q) : cache
     return _map_leq_cover_chain(M, u, v, cc)
 end

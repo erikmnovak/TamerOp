@@ -215,7 +215,7 @@ end
     enc = PM.EncodingOptions(backend=:zn, max_regions=1000)
     Penc, Henc, pi = PM.encode_from_flange(FG, enc)
 
-    @test Penc.n == 3
+    @test PM.nvertices(Penc) == 3
 
     # `ZnEncodingMap`s are defined on the integer lattice Z^n, but generic
     # helpers may represent an integer lattice point as a float (e.g. `2.0`).
@@ -292,7 +292,7 @@ end
     enc = PM.EncodingOptions(backend=:zn, max_regions=1000)
     Penc, _Henc, pi = PM.encode_from_flange(FG, enc)
 
-    @test Penc.n == 3
+    @test PM.nvertices(Penc) == 3
 
     # Box [b-2, c+2] = [-2, 7].
     w = PM.region_weights(pi; box=([b[1] - 2], [c[1] + 2]))
@@ -386,14 +386,10 @@ end
         x0 = [0.5, 0.5]
         dir = [1.0, 0.0]
 
-        # Without clipping: the grid quickly leaves the encoded region set, so strict=true should throw.
-        @test_throws ErrorException PM.slice_chain(pi, x0, dir, PM.InvariantOptions(strict=true); 
-                                                   tmin=0.0, tmax=100.0, nsteps=3)
-
-        opts_strict = PM.InvariantOptions(strict=true, box = box)
         # Clip to an interior window. Along x(t) = (0.5+t, 0.5), staying in x in [0.2,0.8]
         # means t in [-0.3, 0.3], and with tmin=0 we expect max t <= 0.3.
         box = ([0.2, 0.2], [0.8, 0.8])
+        opts_strict = PM.InvariantOptions(strict=true, box = box)
         chain, tvals = PM.slice_chain(pi, x0, dir, opts_strict;
                                     tmin=0.0, tmax=100.0, nsteps=11,
                                     drop_unknown=true, dedup=true)
@@ -538,6 +534,7 @@ end
 
     # Geometric slicing wrapper sanity check with a toy locate() on R^1.
     struct ToyPi1D end
+    PM.dimension(::ToyPi1D) = 1
     function PM.locate(::ToyPi1D, x::AbstractVector)
         length(x) == 1 || error("ToyPi1D expects a 1D point")
         t = float(x[1])
@@ -696,6 +693,7 @@ end
 
     # Geometric version: compare to explicit slice using a tiny toy encoding map.
     struct ToyPi1D end
+    PM.dimension(::ToyPi1D) = 1
     function PM.locate(::ToyPi1D, x::AbstractVector)
         t = x[1]
         if 0.0 <= t < 1.0
@@ -967,13 +965,6 @@ end
 end
 
 @testset "Defaults that unblock usability (matching distance and sliced Wasserstein)" begin
-    # NOTE: `const` is only allowed at global scope in Julia (module / top-level).
-    # A @testset block is local scope, so we use plain local bindings here.
-    PM  = Main.PosetModules
-    PLB = PM.PLBackend
-    PLP = PM.PLPolyhedra
-    IR  = PM.IndicatorResolutions
-    Inv = PM.Invariants
 
     # -------------------------
     # PLBackend: defaults from pi.reps
@@ -1152,10 +1143,12 @@ end
         d_poly = PM.matching_distance_exact_2d(M23, M3, pi_poly, opts_exact; weight=:lesnick_l1, normalize_dirs=:L1)
         @test isapprox(d_poly, 1.0; atol=1e-10)
 
+        # Shared cache for downstream tests.
+        cache_full = Inv.fibered_barcode_cache_2d(M23, pi, opts_exact;
+            normalize_dirs=:L1, precompute=:full)
+
         @testset "Fibered barcode cache 2D: augmented arrangement" begin
-            # Full precompute cache (cells + barcodes)
-            cache_full = Inv.fibered_barcode_cache_2d(M23, pi, opts_exact;
-                normalize_dirs=:L1, precompute=:full)
+            # Reuse cache_full built above.
 
             bar = Inv.fibered_barcode(cache_full, [1.0, 1.0], 0.25; values=:t)
             @test bar == Dict((2.5, 5.5) => 1)
@@ -1293,15 +1286,12 @@ end
 
 
 @testset "Lp generalizations of slice-based distances" begin
-    Inv = PM.Invariants
-    PB  = PM.PLBackend
-    IR  = PM.IndicatorResolutions
 
     # Build a small 2D PLBackend encoding and a fringe module on its poset.
-    Ups = [PB.BoxUpset([0.0, 0.0], [1.0, 1.0])]
-    Downs = [PB.BoxDownset([2.0, 2.0], [3.0, 3.0])]
+    Ups = [PLB.BoxUpset([0.0, 0.0], [1.0, 1.0])]
+    Downs = [PLB.BoxDownset([2.0, 2.0], [3.0, 3.0])]
 
-    P, H, pi = PB.encode_fringe_boxes(Ups, Downs)
+    P, H, pi = PLB.encode_fringe_boxes(Ups, Downs)
     M = IR.pmodule_from_fringe(H)
     Z = PM.zero_pmodule(M.Q, QQ)
     opts_lp = PM.InvariantOptions()

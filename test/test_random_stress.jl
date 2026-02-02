@@ -5,6 +5,49 @@ using LinearAlgebra
 
 const DO_LONG = lowercase(get(ENV, "POSETMODULES_LONG_TESTS", "true")) in ("1", "true", "yes")
 
+# Helper utilities shared across random stress testsets.
+function random_chain_subposet(n::Int; p::Float64=0.35)
+    leq = falses(n, n)
+    for i in 1:n
+        leq[i, i] = true
+        for j in (i+1):n
+            leq[i, j] = rand() < p
+        end
+    end
+    # transitive closure
+    for k in 1:n, i in 1:n, j in 1:n
+        leq[i, j] = leq[i, j] || (leq[i, k] && leq[k, j])
+    end
+    return FF.FinitePoset(leq)
+end
+
+function random_upset(P::FF.FinitePoset)
+    gens = [i for i in 1:P.n if rand() < 0.35]
+    isempty(gens) && (gens = [rand(1:P.n)])
+    return FF.upset_from_generators(P, gens)
+end
+
+function random_downset(P::FF.FinitePoset)
+    gens = [i for i in 1:P.n if rand() < 0.35]
+    isempty(gens) && (gens = [rand(1:P.n)])
+    return FF.downset_from_generators(P, gens)
+end
+
+function random_fringe_module(P::FF.FinitePoset; mbound::Int=3, rbound::Int=3, density::Float64=0.6)
+    m = rand(1:mbound)  # births
+    r = rand(1:rbound)  # deaths
+    U = [random_upset(P) for _ in 1:m]
+    D = [random_downset(P) for _ in 1:r]
+
+    Phi = spzeros(QQ, r, m)
+    for j in 1:r, i in 1:m
+        if FF.intersects(U[i], D[j]) && rand() < density
+            Phi[j, i] = QQ(rand(-2:2))
+        end
+    end
+    return FF.FringeModule{QQ}(P, U, D, Phi)
+end
+
 @testset "Random stress" begin
     if !DO_LONG
         @info "Skipping random stress tests. Set POSETMODULES_LONG_TESTS=true to enable."
@@ -13,49 +56,6 @@ const DO_LONG = lowercase(get(ENV, "POSETMODULES_LONG_TESTS", "true")) in ("1", 
     end
 
     Random.seed!(12345)
-
-    # Random poset as a suborder of the chain on 1..n (always antisymmetric).
-    function random_chain_subposet(n::Int; p::Float64=0.35)
-        leq = falses(n, n)
-        for i in 1:n
-            leq[i, i] = true
-            for j in (i+1):n
-                leq[i, j] = rand() < p
-            end
-        end
-        # transitive closure
-        for k in 1:n, i in 1:n, j in 1:n
-            leq[i, j] = leq[i, j] || (leq[i, k] && leq[k, j])
-        end
-        return FF.FinitePoset(leq)
-    end
-
-    function random_upset(P::FF.FinitePoset)
-        gens = [i for i in 1:P.n if rand() < 0.35]
-        isempty(gens) && (gens = [rand(1:P.n)])
-        return FF.upset_from_generators(P, gens)
-    end
-
-    function random_downset(P::FF.FinitePoset)
-        gens = [i for i in 1:P.n if rand() < 0.35]
-        isempty(gens) && (gens = [rand(1:P.n)])
-        return FF.downset_from_generators(P, gens)
-    end
-
-    function random_fringe_module(P::FF.FinitePoset; mbound::Int=3, rbound::Int=3, density::Float64=0.6)
-        m = rand(1:mbound)  # births
-        r = rand(1:rbound)  # deaths
-        U = [random_upset(P) for _ in 1:m]
-        D = [random_downset(P) for _ in 1:r]
-
-        Phi = spzeros(QQ, r, m)
-        for j in 1:r, i in 1:m
-            if FF.intersects(U[i], D[j]) && rand() < density
-                Phi[j, i] = QQ(rand(-2:2))
-            end
-        end
-        return FF.FringeModule{QQ}(P, U, D, Phi)
-    end
 
     for trial in 1:10
         P = random_chain_subposet(rand(4:7); p=0.35)
@@ -129,7 +129,7 @@ end
 
     for trial in 1:8
         P = random_poset(rand(4:7); p_edge=0.25)
-        Pop = FF.FinitePoset(transpose(P.leq))
+        Pop = FF.FinitePoset(transpose(FF.leq_matrix(P)))
 
         Hm = random_fringe_module(P; mbound=4, rbound=3, density=0.4)
         Hn = random_fringe_module(P; mbound=4, rbound=3, density=0.4)

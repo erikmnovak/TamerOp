@@ -14,13 +14,13 @@ using Random
 
     M = one_by_one_fringe(P, U2, D2)
 
-    enc = EN.build_uptight_encoding_from_fringe(M)
+    enc = EN.build_uptight_encoding_from_fringe(M; poset_kind = :dense)
     pi = enc.pi
 
     # pi should be order-preserving: i <= j in Q => pi(i) <= pi(j) in P_Y
     for i in 1:pi.Q.n, j in 1:pi.Q.n
-        if pi.Q.leq[i,j]
-            @test pi.P.leq[pi.pi_of_q[i], pi.pi_of_q[j]]
+        if FF.leq(pi.Q, i, j)
+            @test FF.leq(pi.P, pi.pi_of_q[i], pi.pi_of_q[j])
         end
     end
 
@@ -93,7 +93,7 @@ end
     phi0 = spzeros(QQ, 0, 4)
     M = FF.FringeModule{QQ}(Q, [U1, U2, U3, U4], FF.Downset[], phi0)
 
-    enc = EN.build_uptight_encoding_from_fringe(M)
+    enc = EN.build_uptight_encoding_from_fringe(M; poset_kind = :dense)
     pi = enc.pi
     P = pi.P
 
@@ -115,15 +115,15 @@ end
     @test length(Set([A, B, C])) == 3
 
     # In the transitive closure P, we must have A <= B <= C, hence A <= C.
-    @test P.leq[A, B]
-    @test P.leq[B, C]
-    @test P.leq[A, C]
+    @test FF.leq(P, A, B)
+    @test FF.leq(P, B, C)
+    @test FF.leq(P, A, C)
 
     # But in the underlying "exists a<=c" relation on regions, there is no witness for A <= C:
     # the only point in A is (2,0), and every point in C has x=1, so (2,0) is not <= any c in C.
     has_witness = false
     for a in 1:Q.n, c in 1:Q.n
-        if pi.pi_of_q[a] == A && pi.pi_of_q[c] == C && Q.leq[a, c]
+        if pi.pi_of_q[a] == A && pi.pi_of_q[c] == C && FF.leq(Q, a, c)
             has_witness = true
             break
         end
@@ -153,7 +153,7 @@ end
     CM.axes_from_encoding(pi::DummyEncodingMap) = (collect(1:pi.n),)
     CM.representatives(pi::DummyEncodingMap) = [(i,) for i in 1:pi.n]
 
-    pi0 = DummyEncodingMap(P.n)
+    pi0 = DummyEncodingMap(FF.nvertices(P))
 
     # Construct an EncodingResult manually.
     enc = CM.EncodingResult(P, IR.pmodule_from_fringe(H), pi0;
@@ -168,24 +168,24 @@ end
     pi = upt.pi
 
     # New region poset size is the (uptight) compression of the old one.
-    @test enc2.P.n == pi.P.n
+    @test FF.nvertices(enc2.P) == FF.nvertices(pi.P)
 
     # Classifier should be postcomposition: (q,) <-> pi(q).
-    for q in 1:P.n
+    for q in 1:FF.nvertices(P)
         @test CM.locate(enc2.pi, (q,)) == pi.pi_of_q[q]
     end
 
     # Representatives are forwarded to the coarse regions (and cached).
     reps2 = CM.representatives(enc2.pi)
-    @test length(reps2) == enc2.P.n
-    for p in 1:enc2.P.n
+    @test length(reps2) == FF.nvertices(enc2.P)
+    for p in 1:FF.nvertices(enc2.P)
         @test CM.locate(enc2.pi, reps2[p]) == p
     end
 
     # Fringe module was pushed forward along the coarsening map.
     H2_expected = EN.pushforward_fringe_along_encoding(H, pi)
-    @test enc2.H.U == H2_expected.U
-    @test enc2.H.D == H2_expected.D
+    @test [u.mask for u in enc2.H.U] == [u.mask for u in H2_expected.U]
+    @test [d.mask for d in enc2.H.D] == [d.mask for d in H2_expected.D]
     @test enc2.H.phi == H2_expected.phi
 end
 
@@ -224,7 +224,7 @@ end
         M_loaded = SER.load_encoding_json(path)
 
         @test M_loaded.P.n == M.P.n
-        @test M_loaded.P.leq == M.P.leq
+        @test FF.poset_equal(M_loaded.P, M.P)
         @test M_loaded.U[1].mask == M.U[1].mask
         @test M_loaded.D[1].mask == M.D[1].mask
         @test Matrix(M_loaded.phi) == Matrix(M.phi)
@@ -315,7 +315,7 @@ end
 
     M = SER.load_encoding_json(path)
     @test M.P.n == 3
-    @test M.P.leq == BitMatrix([1 1 1; 0 1 1; 0 0 1])
+    @test FF.leq_matrix(M.P) == BitMatrix([1 1 1; 0 1 1; 0 0 1])
     @test length(M.U) == 1
     @test length(M.D) == 1
     @test M.U[1].mask == BitVector([false, true, true])
@@ -742,7 +742,7 @@ end
     end
 
     P  = chain_poset(3)
-    Pc = FF.FinitePoset(BitMatrix(P.leq); check = false)  # structurally identical, different object
+    Pc = FF.FinitePoset(BitMatrix(FF.leq_matrix(P)); check = false)  # structurally identical, different object
 
     M  = constant_1_module(P)
     Mc = constant_1_module(Pc)
@@ -857,7 +857,7 @@ end
     @test M1.edge_maps == M2.edge_maps
 
     # Rebase onto an "equivalent" poset object (same leq matrix, new instance)
-    P2 = FF.FinitePoset(copy(P.leq))
+    P2 = FF.FinitePoset(copy(FF.leq_matrix(P)))
     M3 = MD.PModule{QQ}(P2, M1.dims, M1.edge_maps)  # should not error
     @test M3.dims == M1.dims
     @test M3.edge_maps == M1.edge_maps

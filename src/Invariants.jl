@@ -2,13 +2,16 @@ module Invariants
 
 using LinearAlgebra
 using ..CoreModules: QQ, PLikeEncodingMap, locate, axes_from_encoding, dimension, representatives, InvariantOptions
+using Statistics: mean
 using ..Stats: _wilson_interval
 using ..Encoding: EncodingMap
 using ..PLPolyhedra
 using ..RegionGeometry
 
 import ..ExactQQ: rankQQ
-import ..FiniteFringe: FinitePoset, FringeModule, Upset, Downset, fiber_dimension
+import ..FiniteFringe: AbstractPoset, FinitePoset, FringeModule, Upset, Downset, fiber_dimension,
+                       leq, leq_matrix, upset_indices, downset_indices, leq_col, nvertices
+import ..ZnEncoding
 import ..IndicatorTypes: UpsetPresentation, DownsetCopresentation
 import ..ModuleComplexes: ModuleCochainComplex
 import ..ChangeOfPosets: pushforward_left, pushforward_right
@@ -101,6 +104,30 @@ export rank_map, rank_invariant, rank_invariant_tame, ecc,
 @inline function _drop_keys(nt::NamedTuple, bad::Tuple)
     return (; (k => v for (k, v) in pairs(nt) if !(k in bad))...)
 end
+@inline _drop_keys(pairs::Base.Pairs, bad::Tuple) = _drop_keys(NamedTuple(pairs), bad)
+
+# Normalize directions into the positive orthant with L1 normalization.
+@inline function orthant_directions(d::Integer)
+    d > 0 || error("orthant_directions: dimension must be positive")
+    v = fill(1.0, d)
+    v ./= sum(v)
+    return [v]
+end
+
+@inline function orthant_directions(d::Integer, directions)
+    d > 0 || error("orthant_directions: dimension must be positive")
+    dirs = Vector{Vector{Float64}}()
+    for dir in directions
+        v = float.(collect(dir))
+        length(v) == d || error("orthant_directions: expected direction of length $d, got $(length(v))")
+        v = abs.(v)
+        s = sum(v)
+        s > 0 || error("orthant_directions: zero direction not allowed")
+        v ./= s
+        push!(dirs, v)
+    end
+    return dirs
+end
 
 # Convert "box-like" input to a normalized (lo, hi) tuple of Float64 vectors.
 @inline function _coerce_box(box)
@@ -126,6 +153,9 @@ end
     )
 end
 
+@inline _resolve_opts(opts::Union{InvariantOptions,Nothing}) =
+    opts === nothing ? InvariantOptions() : opts
+
 
 # ----- Rank invariant ----------------------------------------------------------
 
@@ -149,10 +179,22 @@ function _map_leq_cached(
 
     # Fast path: cover edge.
     # NOTE: This may alias internal storage of the module; treat as read-only.
-    if cc.C[u, v]
-        X = M.edge_maps[u, v]
-        memo[key] = X
-        return X
+    if cc.C !== nothing
+        if cc.C[u, v]
+            X = M.edge_maps[u, v]
+            memo[key] = X
+            return X
+        end
+    else
+        # Fallback: scan preds[v] to check if (u,v) is a cover edge.
+        pv = cc.preds[v]
+        @inbounds for k in 1:length(pv)
+            if pv[k] == u
+                X = M.edge_maps[u, v]
+                memo[key] = X
+                return X
+            end
+        end
     end
 
     # Choose (and cache) a predecessor w of v that is still >= u.
@@ -184,9 +226,9 @@ If you will make many rank queries for a `FringeModule`, convert once:
 """
 function rank_map(M::PModule{QQ}, a::Int, b::Int; cache=nothing, memo=nothing)::Int
     Q = M.Q
-    (1 <= a <= Q.n) || error("rank_map: a out of range")
-    (1 <= b <= Q.n) || error("rank_map: b out of range")
-    Q.leq[a, b] || error("rank_map: a and b are not comparable (need a <= b)")
+    (1 <= a <= nvertices(Q)) || error("rank_map: a out of range")
+    (1 <= b <= nvertices(Q)) || error("rank_map: b out of range")
+    leq(Q, a, b) || error("rank_map: a and b are not comparable (need a <= b)")
 
     if a == b
         return M.dims[a]
@@ -268,14 +310,16 @@ function rank_invariant(
         memo_by_thread = [Dict{Tuple{Int, Int}, Matrix{QQ}}() for _ in 1:nT]
         out_by_thread = [Dict{Tuple{Int, Int}, Int}() for _ in 1:nT]
 
-        Threads.@threads for a in 1:Q.n
+        Threads.@threads for a in 1:nvertices(Q)
             tid = Threads.threadid()
             memo = memo_by_thread[tid]
             out = out_by_thread[tid]
-            for b in 1:Q.n
-                r = rank_map(M, a, b; cache = cc, memo = memo)
-                if store_zeros || r > 0
-                    out[(a, b)] = r
+            for b in 1:nvertices(Q)
+                if leq(Q, a, b)
+                    r = rank_map(M, a, b; cache = cc, memo = memo)
+                    if store_zeros || r > 0
+                        out[(a, b)] = r
+                    end
                 end
             end
         end
@@ -290,10 +334,12 @@ function rank_invariant(
     # Serial fallback (unchanged logic).
     memo = Dict{Tuple{Int, Int}, Matrix{QQ}}()
     ranks = Dict{Tuple{Int, Int}, Int}()
-    for a in 1:Q.n, b in 1:Q.n
-        r = rank_map(M, a, b; cache = cc, memo = memo)
-        if store_zeros || r > 0
-            ranks[(a, b)] = r
+    for a in 1:nvertices(Q), b in 1:nvertices(Q)
+        if leq(Q, a, b)
+            r = rank_map(M, a, b; cache = cc, memo = memo)
+            if store_zeros || r > 0
+                ranks[(a, b)] = r
+            end
         end
     end
     return ranks
@@ -454,6 +500,12 @@ end
 # For ND: iterated differences gives the product-poset Mobius inversion.
 function _mobius_inversion_product_chains!(w::AbstractArray)
     N = ndims(w)
+    if N == 1
+        @inbounds for k in length(w):-1:2
+            w[k] -= w[k-1]
+        end
+        return w
+    end
     for d in 1:N
         # eachslice keeps dimension d and fixes all others, producing 1D views
         for sl in eachslice(w; dims=d)
@@ -468,6 +520,12 @@ end
 # Inverse of Mobius inversion: prefix sums along each axis in-place.
 function _prefix_sum_product_chains!(f::AbstractArray)
     N = ndims(f)
+    if N == 1
+        @inbounds for k in 2:length(f)
+            f[k] += f[k-1]
+        end
+        return f
+    end
     for d in 1:N
         for sl in eachslice(f; dims=d)
             @inbounds for k in 2:length(sl)
@@ -1012,13 +1070,8 @@ function _choose_rectangle_signed_barcode_method(method::Symbol,
                                                  max_span,
                                                  bulk_max_elems::Int) where {N}
     if method == :auto
-        if max_span === nothing
-            ne = _estimate_rectangle_rank_array_elems(axes)
-            return (ne <= bulk_max_elems) ? :bulk : :local
-        else
-            # Span truncation typically makes local enumeration preferable.
-            return :local
-        end
+        # Prefer the local method for correctness; bulk inversion is opt-in.
+        return :local
     elseif method == :local
         return :local
     elseif method == :bulk
@@ -1041,10 +1094,6 @@ function _rectangle_signed_barcode_bulk(rank_idx::Function,
                                         drop_zeros::Bool=true,
                                         tol::Int=0,
                                         max_span=nothing) where {N}
-    span = max_span === nothing ? nothing :
-        (max_span isa Integer ? ntuple(_ -> Int(max_span), N) :
-                               ntuple(i -> Int(max_span[i]), N))
-
     dims = ntuple(i -> length(axes[i]), N)
 
     # Store the rank function r(p,q) on the whole grid (p,q), with the convention
@@ -1071,43 +1120,10 @@ function _rectangle_signed_barcode_bulk(rank_idx::Function,
         end
     end
 
-    # Mobius inversion on the interval-poset: p axes normal, q axes reversed.
-    reverse_axis = ntuple(d -> d > N, 2N)
-    _mobius_inversion_product_chains_mixed!(r, reverse_axis)
-
-    rects = Rect{N}[]
-    weights = Int[]
-    CI = CartesianIndices(dims)
-    for pCI in CI
-        p = pCI.I
-        q_ranges = ntuple(k -> p[k]:dims[k], N)
-        for qCI in CartesianIndices(q_ranges)
-            q = qCI.I
-            w = @inbounds r[p..., q...]
-
-            if span !== nothing
-                bad = false
-                @inbounds for k in 1:N
-                    if axes[k][q[k]] - axes[k][p[k]] > span[k]
-                        bad = true
-                        break
-                    end
-                end
-                bad && continue
-            end
-
-            if drop_zeros && (abs(w) <= tol)
-                continue
-            end
-
-            lo = ntuple(k -> axes[k][p[k]], N)
-            hi = ntuple(k -> axes[k][q[k]], N)
-            push!(rects, Rect{N}(lo, hi))
-            push!(weights, w)
-        end
-    end
-
-    return RectSignedBarcode{N,Int}(axes, rects, weights)
+    rank_idx_cached(p, q) = (@inbounds r[p..., q...])
+    return _rectangle_signed_barcode_local(
+        rank_idx_cached, axes; drop_zeros=drop_zeros, tol=tol, max_span=max_span
+    )
 end
 
 """
@@ -1254,10 +1270,6 @@ function rectangle_signed_barcode(M::PModule, pi::ZnEncodingMap, opts::Invariant
     )
 
     if meth == :bulk
-        span = max_span === nothing ? nothing :
-            (max_span isa Integer ? ntuple(_ -> Int(max_span), pi.n) :
-                                   ntuple(i -> Int(max_span[i]), pi.n))
-
         dims = ntuple(i -> length(axesN[i]), pi.n)
         CI = CartesianIndices(dims)
 
@@ -1289,42 +1301,10 @@ function rectangle_signed_barcode(M::PModule, pi::ZnEncodingMap, opts::Invariant
             end
         end
 
-        reverse_axis = ntuple(d -> d > pi.n, 2 * pi.n)
-        _mobius_inversion_product_chains_mixed!(r, reverse_axis)
-
-        rects = Rect{pi.n}[]
-        weights = Int[]
-
-        for pCI in CI
-            p = pCI.I
-            q_ranges = ntuple(k -> p[k]:dims[k], pi.n)
-            for qCI in CartesianIndices(q_ranges)
-                q = qCI.I
-                w = @inbounds r[pCI, qCI]
-
-                if span !== nothing
-                    bad = false
-                    @inbounds for k in 1:pi.n
-                        if axesN[k][q[k]] - axesN[k][p[k]] > span[k]
-                            bad = true
-                            break
-                        end
-                    end
-                    bad && continue
-                end
-
-                if drop_zeros && (abs(w) <= tol)
-                    continue
-                end
-
-                lo = ntuple(k -> axesN[k][p[k]], pi.n)
-                hi = ntuple(k -> axesN[k][q[k]], pi.n)
-                push!(rects, Rect{pi.n}(lo, hi))
-                push!(weights, w)
-            end
-        end
-
-        return RectSignedBarcode{pi.n,Int}(axesN, rects, weights)
+        rank_idx_cached_bulk(p, q) = (@inbounds r[p..., q...])
+        return _rectangle_signed_barcode_local(
+            rank_idx_cached_bulk, axesN; drop_zeros=drop_zeros, tol=tol, max_span=max_span
+        )
     end
 
     function rank_idx_cached(p::NTuple{N,Int}, q::NTuple{N,Int}) where {N}
@@ -1349,6 +1329,17 @@ function rectangle_signed_barcode(M::PModule, pi::ZnEncodingMap, opts::Invariant
         rank_idx_cached, axesN; drop_zeros=drop_zeros, tol=tol, max_span=max_span
     )
 end
+
+rectangle_signed_barcode(M::PModule, pi::ZnEncodingMap;
+    axes = nothing,
+    axes_policy::Symbol = :encoding,
+    max_axis_len::Int = 64,
+    kwargs...) =
+    rectangle_signed_barcode(
+        M, pi,
+        InvariantOptions(axes = axes, axes_policy = axes_policy, max_axis_len = max_axis_len);
+        kwargs...
+    )
 
 
 
@@ -1440,19 +1431,20 @@ function rectangle_signed_barcode_rank(sb::RectSignedBarcode{N};
     # Coordinate-to-index maps for each axis (axes are assumed unique and sorted).
     idx = ntuple(i -> Dict{Int,Int}(axes[i][j] => j for j in 1:dims[i]), N)
 
-    # Put weights onto a dense (lo,hi) array indexed by grid indices.
+    # Directly accumulate rank values over comparable pairs.
     w = zeros(Int, (dims..., dims...))
     for (rect, wt) in zip(sb.rects, sb.weights)
-        p = ntuple(i -> idx[i][rect.lo[i]], N)
-        q = ntuple(i -> idx[i][rect.hi[i]], N)
-        pCI = CartesianIndex(p)
-        qCI = CartesianIndex(q)
-        @inbounds w[pCI, qCI] += Int(wt)
+        plo = ntuple(i -> idx[i][rect.lo[i]], N)
+        phi = ntuple(i -> idx[i][rect.hi[i]], N)
+        p_ranges = ntuple(k -> plo[k]:phi[k], N)
+        for pCI in CartesianIndices(p_ranges)
+            p = pCI.I
+            q_ranges = ntuple(k -> p[k]:phi[k], N)
+            for qCI in CartesianIndices(q_ranges)
+                @inbounds w[pCI, qCI] += Int(wt)
+            end
+        end
     end
-
-    # Invert Mobius inversion: prefix sums in p, reverse prefix sums in q.
-    reverse_axis = ntuple(d -> d > N, 2N)
-    _prefix_sum_product_chains_mixed!(w, reverse_axis)
 
     if zero_noncomparable
         # Convention: rank invariant is only meaningful for comparable pairs p <= q.
@@ -1705,6 +1697,9 @@ function mma_decomposition(M::PModule, pi::ZnEncodingMap, opts::InvariantOptions
     end
 end
 
+mma_decomposition(M::PModule, pi::ZnEncodingMap; kwargs...) =
+    mma_decomposition(M, pi, InvariantOptions(); kwargs...)
+
 """
     mma_decomposition(M, pi, opts::InvariantOptions; method=:euler, mpp_kwargs=NamedTuple(), ...)
 
@@ -1748,6 +1743,9 @@ function mma_decomposition(M::PModule, pi, opts::InvariantOptions;
     )
     return (euler_surface=surf, euler_signed_measure=pm)
 end
+
+mma_decomposition(M::PModule, pi; opts=nothing, kwargs...) =
+    mma_decomposition(M, pi, _resolve_opts(opts); kwargs...)
 
 
 """
@@ -1796,7 +1794,7 @@ Methods:
 restricted_hilbert(M::PModule{QQ}) = copy(M.dims)
 
 function restricted_hilbert(H::FringeModule{QQ})
-    return [fiber_dimension(H, q) for q in 1:H.P.n]
+    return [fiber_dimension(H, q) for q in 1:nvertices(H.P)]
 end
 
 
@@ -1874,7 +1872,7 @@ Inputs:
 * `weights`: optional per-region weights.
 
 If `weights` is provided, it should be either:
-* a vector `w` of length `P.n`, or
+* a vector `w` of length `nvertices(P)`, or
 * a dictionary mapping region indices to weights (others default to 1).
 
 The weighted norms are computed as:
@@ -2053,12 +2051,13 @@ function euler_characteristic_surface(obj, pi::PLikeEncodingMap, opts::Invariant
 
     surf = zeros(Int, length.(ax)...)
 
+    n = dimension(pi)
     use_threads = opts.threads === nothing ? (Threads.nthreads() > 1) : opts.threads
-    x = zeros(Float64, pi.n)
+    x = zeros(Float64, n)
 
     if use_threads
         Threads.@threads for I in CartesianIndices(size(surf))
-            for i in 1:pi.n
+            for i in 1:n
                 x[i] = float(ax[i][I[i]])
             end
             u = locate(pi, x)
@@ -2066,7 +2065,7 @@ function euler_characteristic_surface(obj, pi::PLikeEncodingMap, opts::Invariant
         end
     else
         for I in CartesianIndices(size(surf))
-            for i in 1:pi.n
+            for i in 1:n
                 x[i] = float(ax[i][I[i]])
             end
             u = locate(pi, x)
@@ -2220,7 +2219,7 @@ end
 # =============================================================================
 
 # Internal helper: interpret box=:auto uniformly.
-@inline _resolve_box(pi, box) = (box === :auto ? window_box(pi) : box)
+@inline _resolve_box(pi, box) = (box === :auto ? (pi isa PLikeEncodingMap ? window_box(pi) : nothing) : box)
 
 """
     integrated_hilbert_mass(M, pi, opts::InvariantOptions; weights=nothing, kwargs...) -> Real
@@ -2842,7 +2841,7 @@ function _histogram_1d(values::Vector{Float64}; nbins::Integer=10, range=nothing
         hi = lo + 1.0
     end
 
-    edges = collect(range(lo, hi; length=nbins + 1))
+    edges = collect(Base.range(lo, hi; length=nbins + 1))
     counts = zeros(Int, nbins)
 
     for x in v
@@ -2938,7 +2937,7 @@ function region_volume_histograms_by_dim(M, pi, opts::InvariantOptions;
     samples = region_volume_samples_by_dim(M, pi, opts; weights=weights, kwargs...)
     out = Dict{Int, NamedTuple}()
     for (d, v) in samples
-        out[d] = _histogram_1d(v, nbins; range=range)
+        out[d] = _histogram_1d(v; nbins=nbins, range=range)
     end
     return out
 end
@@ -3047,7 +3046,7 @@ function region_boundary_to_volume_histograms_by_dim(M, pi, opts::InvariantOptio
     )
     out = Dict{Int, NamedTuple}()
     for (d, v) in samples
-        out[d] = _histogram_1d(v, nbins; range=range)
+        out[d] = _histogram_1d(v; nbins=nbins, range=range)
     end
     return out
 end
@@ -3332,7 +3331,7 @@ function module_geometry_summary(M, pi, opts::InvariantOptions;
         volume_histograms_by_dim=vol_hists,
         b2v_samples_by_dim=b2v_samples,
         b2v_histograms_by_dim=b2v_hists,
-        adjacency_graph=gstats
+        graph_stats=gstats
     )
 end
 
@@ -4193,7 +4192,16 @@ function slice_chain(pi, x0::AbstractVector, dir::AbstractVector, opts::Invarian
 
     b1 = opts.box === nothing ? nothing : _resolve_box(pi, opts.box)
     b2 = box2 === nothing ? nothing : _resolve_box(pi, box2)
-    bx = clip ? _intersect_axis_aligned_boxes(b1, b2) : nothing
+    if clip
+        if b1 === nothing && b2 === nothing
+            clip = false
+            bx = nothing
+        else
+            bx = _intersect_axis_aligned_boxes(b1, b2)
+        end
+    else
+        bx = nothing
+    end
 
     # Determine t-grid.
     tgrid = Float64[]
@@ -4220,6 +4228,10 @@ function slice_chain(pi, x0::AbstractVector, dir::AbstractVector, opts::Invarian
         else
             # Empty parameter interval -> empty result.
             tgrid = Float64[]
+        end
+        if clip && !isempty(tgrid)
+            tlo, thi = _line_param_range_in_box_nd(x0, dir, bx; atol=atol)
+            tgrid = [t for t in tgrid if (tlo - atol) <= t <= (thi + atol)]
         end
     else
         # Explicit t samples.
@@ -4295,10 +4307,38 @@ function _assert_chain(Q, chain::AbstractVector{Int})
     m = length(chain)
     m >= 1 || error("expected a nonempty chain")
     for q in chain
-        (1 <= q <= Q.n) || error("chain vertex out of range: $q")
+        (1 <= q <= nvertices(Q)) || error("chain vertex out of range: $q")
     end
     for i in 1:m-1
-        Q.leq[chain[i], chain[i+1]] || error("not a chain: chain[$i]=$(chain[i]) is not <= chain[$(i+1)]=$(chain[i+1])")
+        leq(Q, chain[i], chain[i+1]) || error("not a chain: chain[$i]=$(chain[i]) is not <= chain[$(i+1)]=$(chain[i+1])")
+    end
+    return nothing
+end
+
+# Helper: sanity-check monotonicity of a sampled chain along a line.
+function _check_chain_monotone(pi, x0, dir, chain::AbstractVector{Int}, tvals::AbstractVector;
+    strict::Bool=true)
+    length(chain) == length(tvals) || error("slice_chain: chain/tvals length mismatch")
+    # tvals should be nondecreasing.
+    for i in 1:(length(tvals)-1)
+        tvals[i] <= tvals[i+1] || error("slice_chain: tvals are not nondecreasing")
+    end
+
+    # If the encoding map exposes a poset, ensure the labels form a chain.
+    Q = if hasproperty(pi, :P)
+        getproperty(pi, :P)
+    elseif hasproperty(pi, :Q)
+        getproperty(pi, :Q)
+    else
+        nothing
+    end
+    if strict
+        if Q !== nothing
+            _assert_chain(Q, chain)
+        else
+            # In strict mode, require no unknown region labels.
+            any(q -> q == 0, chain) && error("slice_chain: encountered unknown region label 0 in strict mode")
+        end
     end
     return nothing
 end
@@ -5092,7 +5132,8 @@ function sliced_wasserstein_distance(M::PModule{QQ}, N::PModule{QQ}, pi::PLikeEn
         agg = agg,
         agg_p = agg_p,
         agg_norm = agg_norm,
-        weight_mode = weight,
+        weight_mode = :integrate,
+        weight = weight,
         offset_weights = offset_weights,
         normalize_weights = normalize_weights,
 
@@ -5172,7 +5213,8 @@ function sliced_bottleneck_distance(M::PModule{QQ}, N::PModule{QQ}, pi::PLikeEnc
         agg = agg,
         agg_p = agg_p,
         agg_norm = agg_norm,
-        weight_mode = weight,
+        weight_mode = :integrate,
+        weight = weight,
         offset_weights = offset_weights,
         normalize_weights = normalize_weights,
 
@@ -5909,16 +5951,11 @@ function default_offsets(pi::PLikeEncodingMap, opts::InvariantOptions;
 
     lo, hi = encoding_box(pi, opts; margin=margin)
     n = length(lo)
-
-    # Simple tensor grid per coordinate.
-    grids = [range(lo[i], hi[i], length=n_offsets) for i in 1:n]
-    offs = Vector{Vector{Float64}}()
-
-    # Build cartesian product of coordinate grids.
-    for tup in Iterators.product(grids...)
-        push!(offs, [float(tup[i]) for i in 1:n])
+    offs = Vector{Vector{Float64}}(undef, n_offsets)
+    ts = range(0.0, 1.0, length=n_offsets)
+    for (i, t) in enumerate(ts)
+        offs[i] = [float(lo[k] + t * (hi[k] - lo[k])) for k in 1:n]
     end
-
     return offs
 end
 
@@ -6150,6 +6187,7 @@ function matching_wasserstein_distance_approx(
         normalize_dirs = normalize_dirs,
         dist_fn = wasserstein_distance,
         dist_kwargs = (p=p, q=q),
+        weight_mode = :scale,
         weight = weight,
         offset_weights = offset_weights,
         default_weight = 1.0,
@@ -6403,7 +6441,7 @@ function _critical_points_poly_2d(pi::PLPolyhedra.PLEncodingMap,
 
     # Collect region vertices in the box. This is deterministic up to sorting below.
     for hp in pi.regions
-        verts = PLPolyhedra._vertices_of_hpoly_in_box(hp, (a,b);
+        verts = PLPolyhedra._vertices_of_hpoly_in_box(hp, a, b;
                                                      max_combinations=max_combinations,
                                                      max_vertices=max_vertices)
         if verts !== nothing
@@ -6521,6 +6559,51 @@ function _critical_offsets_2d(points::Vector{NTuple{2,Float64}}, dir::Vector{Flo
         push!(offs, 0.5*(cs[i] + cs[i+1]))
     end
     return offs
+end
+
+function _direction_representatives(slopes; normalize_dirs::Symbol=:L1, include_axes::Bool=false, atol::Float64=1e-12)
+    reps = _representative_slopes(Float64.(slopes); atol=atol)
+    dirs = Vector{Vector{Float64}}()
+    sizehint!(dirs, length(reps) + (include_axes ? 2 : 0))
+
+    for s in reps
+        d = _normalize_dir([1.0, s], normalize_dirs)
+        if d[1] > 0.0 && d[2] > 0.0
+            push!(dirs, d)
+        end
+    end
+
+    if include_axes
+        push!(dirs, _normalize_dir([1.0, 0.0], normalize_dirs))
+        push!(dirs, _normalize_dir([0.0, 1.0], normalize_dirs))
+    end
+
+    return dirs
+end
+
+function _line_order(points::Vector{NTuple{2,Float64}}, dir::Vector{Float64};
+                     strict::Bool=true, atol::Float64=1e-12)
+    n1 = -dir[2]
+    n2 =  dir[1]
+    idx = collect(1:length(points))
+    sort!(idx, by=i->(n1*points[i][1] + n2*points[i][2], points[i][1], points[i][2]))
+    return idx
+end
+
+function _unique_positions_for_order(points::Vector{NTuple{2,Float64}}, order::Vector{Int},
+                                     dir::Vector{Float64}; atol::Float64=1e-12)
+    n1 = -dir[2]
+    n2 =  dir[1]
+    pos = Int[]
+    lastc = NaN
+    for (k, idx) in enumerate(order)
+        c = n1*points[idx][1] + n2*points[idx][2]
+        if isempty(pos) || abs(c - lastc) > atol
+            push!(pos, k)
+            lastc = c
+        end
+    end
+    return pos
 end
 
 # Exact slice-chain extraction for coords-based backend.
@@ -6716,21 +6799,30 @@ function slice_chain_exact_2d(
           [float(bx_raw[2][1]), float(bx_raw[2][2])])
 
     # Normalize direction representation.
-    d = normalize_dir(float.(dir); normalize_dirs=normalize_dirs)
+    d = _normalize_dir(float.(dir), normalize_dirs)
 
-    pts = representatives(pi)
-    slopes = _unique_sorted_slopes(pts; atol=atol)
-    tvals = _slice_param_values_2d(d, float(offset), slopes, bx; atol=atol)
-
-    chain = Int[]
-    for t in tvals
-        # Parameterization consistent with the paper/implementation:
-        # line is { x : dot(x, d) = offset } traversed in a perpendicular direction.
-        x = _slice_point_2d(d, float(offset), float(t))
-        push!(chain, locate(pi, x; strict=strict0))
+    if hasproperty(pi, :coords)
+        coords = getproperty(pi, :coords)
+        xs = [float(x) for x in coords[1] if isfinite(x)]
+        ys = [float(y) for y in coords[2] if isfinite(y)]
+        return _slice_chain_exact_boxes_2d_fast(
+            pi, d, float(offset);
+            box = bx,
+            xs = xs,
+            ys = ys,
+            strict = strict0,
+            atol = atol
+        )
+    elseif pi isa PLPolyhedra.PLEncodingMap
+        return _slice_chain_exact_poly_2d(
+            pi, d, float(offset);
+            box = bx,
+            strict = strict0,
+            atol = atol
+        )
     end
 
-    return chain, tvals
+    error("slice_chain_exact_2d: unsupported encoding map backend $(typeof(pi))")
 end
 
 
@@ -6763,34 +6855,40 @@ function matching_distance_exact_slices_2d(
     include_axes::Bool = false,
     atol::Real = 1e-12
 )
-    strict0 = opts.strict === nothing ? true : opts.strict
+    arr = fibered_arrangement_2d(pi, opts;
+        normalize_dirs = normalize_dirs,
+        include_axes = include_axes,
+        atol = atol,
+        precompute = :cells
+    )
 
-    bx_raw = (opts.box === nothing ? encoding_box(pi, InvariantOptions()) : _resolve_box(pi, opts.box))
-    bx = ([float(bx_raw[1][1]), float(bx_raw[1][2])],
-          [float(bx_raw[2][1]), float(bx_raw[2][2])])
+    slices = NamedTuple[]
+    offsets_by_dir = Vector{Vector{Float64}}(undef, length(arr.dir_reps))
 
-    pts = representatives(pi)
-    slopes = _unique_sorted_slopes(pts; atol=atol)
-    dirs = _arrangement_directions_2d(slopes; normalize_dirs=normalize_dirs, include_axes=include_axes)
-
-    offsets_by_dir = Vector{Vector{Float64}}(undef, length(dirs))
-    slices = SliceDescriptor[]
-
-    for (i, d) in enumerate(dirs)
-        offs = _arrangement_offsets_2d(d, slopes, bx; atol=atol)
-        offsets_by_dir[i] = offs
-        for off in offs
-            push!(slices, SliceDescriptor(d, off))
+    for di in 1:length(arr.dir_reps)
+        d = arr.dir_reps[di]
+        w = _direction_weight(d; scheme=:lesnick_l1)
+        offs = Float64[]
+        for oi in 1:arr.noff[di]
+            cell = _arr2d_cell_linear_index(arr, di, oi)
+            cid = arr.cell_chain_id[cell]
+            cid > 0 || continue
+            _, _, cmid = _arr2d_cell_offset_interval(arr, di, oi)
+            chain, vals = _arr2d_slice_chain_and_values(arr, d, cmid)
+            isempty(chain) && continue
+            push!(offs, cmid)
+            push!(slices, (chain = chain, values = vals, weight = w))
         end
+        offsets_by_dir[di] = offs
     end
 
     return (
-        box = bx,
-        strict = strict0,
+        box = arr.box,
+        strict = arr.strict,
         normalize_dirs = normalize_dirs,
         include_axes = include_axes,
-        slopes = slopes,
-        directions = dirs,
+        slopes = arr.slope_breaks,
+        directions = arr.dir_reps,
         offsets_by_dir = offsets_by_dir,
         slices = slices,
     )
@@ -6944,6 +7042,16 @@ function _critical_slopes_2d(points::Vector{NTuple{2,Float64}}; atol::Float64=1e
     return slopes
 end
 
+function _unique_sorted_slopes(points; atol::Float64=1e-12)
+    pts = NTuple{2,Float64}[]
+    sizehint!(pts, length(points))
+    for p in points
+        length(p) == 2 || throw(ArgumentError("expected 2D points for slope computation"))
+        push!(pts, (float(p[1]), float(p[2])))
+    end
+    return _critical_slopes_2d(pts; atol=atol)
+end
+
 function _fibered_dir_cell_index(arr::FiberedArrangement2D, d::Vector{Float64})::Int
     if d[1] < -arr.atol || d[2] < -arr.atol
         throw(ArgumentError("direction must lie in the nonnegative quadrant"))
@@ -6982,6 +7090,7 @@ function _fibered_offset_cell_index(
     off::Float64;
     tie_break::Symbol = :up,
 )
+    tie_break === :center && (tie_break = :up)
     pos = arr.unique_pos[dir_idx]
     order = arr.orders[dir_idx]
     pts = arr.points
@@ -7373,7 +7482,7 @@ function fibered_arrangement_2d(
     max_cells = 5_000_000,
     precompute = :none
 )
-    backend = (pi isa PLPEncodingMap ? :poly : :boxes)
+    backend = (pi isa PLPolyhedra.PLEncodingMap ? :poly : :boxes)
 
     strict_arg = opts.strict === nothing ? true : opts.strict
     strict0 = (backend == :poly ? false : strict_arg)
@@ -7383,48 +7492,90 @@ function fibered_arrangement_2d(
     bx = ([float(bx_raw[1][1]), float(bx_raw[1][2])],
           [float(bx_raw[2][1]), float(bx_raw[2][2])])
 
-    points = (backend == :poly ? representatives(pi) : Float64.(representatives(pi)))
-    slopes = _unique_sorted_slopes(points; atol=atol)
-
-    combos = _generate_direction_combinations(slopes; max_combinations=max_combinations)
-    slopes2 = _combination_slopes(combos; atol=atol)
-
-    dir_reps = _direction_representatives(slopes2; normalize_dirs=normalize_dirs, include_axes=include_axes)
-
-    orders = Dict{Vector{Float64}, Vector{Int}}()
-    for d in dir_reps
-        orders[d] = _line_order(points, d; strict=strict0, atol=atol)
+    points = if backend == :boxes && hasproperty(pi, :coords)
+        _critical_points_boxes_2d(pi, bx; atol=atol)
+    elseif backend == :poly && (pi isa PLPolyhedra.PLEncodingMap)
+        _critical_points_poly_2d(pi, bx; max_combinations=max_combinations, max_vertices=max_vertices, atol=atol)
+    else
+        pts = NTuple{2,Float64}[]
+        for p in representatives(pi)
+            length(p) == 2 || throw(ArgumentError("fibered_arrangement_2d: expected 2D representatives"))
+            push!(pts, (float(p[1]), float(p[2])))
+        end
+        pts
     end
 
-    unique_pos = _unique_positions(points, slopes; strict=strict0, atol=atol)
+    slopes = _unique_sorted_slopes(points; atol=atol)
+    dir_reps = _direction_representatives(slopes; normalize_dirs=normalize_dirs, include_axes=include_axes, atol=atol)
 
-    noff = length(unique_pos)
-    start = 1
+    ndirs = length(dir_reps)
+    orders = Vector{Vector{Int}}(undef, ndirs)
+    unique_pos = Vector{Vector{Int}}(undef, ndirs)
+    noff = Vector{Int}(undef, ndirs)
+
+    for i in 1:ndirs
+        d = dir_reps[i]
+        ord = _line_order(points, d; strict=strict0, atol=atol)
+        orders[i] = ord
+        pos = _unique_positions_for_order(points, ord, d; atol=atol)
+        unique_pos[i] = pos
+        noff[i] = max(0, length(pos) - 1)
+    end
+
+    start = Vector{Int}(undef, ndirs)
     total_cells = 0
-
-    # Cell chain ids for each direction. Each cell corresponds to a specific chain id.
-    cell_chain_id = Vector{Vector{Int}}(undef, length(dir_reps))
-
-    for (i, d) in enumerate(dir_reps)
-        cid = _cell_chain_ids_for_direction(d, unique_pos, bx; strict=strict0, atol=atol)
-        cell_chain_id[i] = cid
-        total_cells += length(cid)
+    for i in 1:ndirs
+        start[i] = total_cells + 1
+        total_cells += noff[i]
     end
 
     total_cells > max_cells && error("fibered_arrangement_2d: too many cells (total_cells=$total_cells > max_cells=$max_cells)")
+
+    cell_chain_id = zeros(Int, total_cells)
+    cell_event_start = zeros(Int, total_cells)
+    cell_event_len = zeros(Int, total_cells)
+    event_pool = _AxisCoordIndex2D[]
+
+    xs = Float64[]
+    ys = Float64[]
+    region_cache = nothing
+
+    if backend == :boxes && hasproperty(pi, :coords)
+        coords = getproperty(pi, :coords)
+        xs = [float(x) for x in coords[1] if isfinite(x)]
+        ys = [float(y) for y in coords[2] if isfinite(y)]
+        _unique_sorted_floats!(xs; atol=atol)
+        _unique_sorted_floats!(ys; atol=atol)
+    elseif backend == :boxes
+        xs = [p[1] for p in points]
+        ys = [p[2] for p in points]
+        _unique_sorted_floats!(xs; atol=atol)
+        _unique_sorted_floats!(ys; atol=atol)
+    elseif backend == :poly && (pi isa PLPolyhedra.PLEncodingMap)
+        region_cache = ([Float64.(hp.A) for hp in pi.regions],
+                        [Float64.(hp.b) for hp in pi.regions])
+    end
 
     arr = FiberedArrangement2D(
         pi, bx, normalize_dirs, include_axes, strict0, atol,
         backend, points, slopes, dir_reps, orders, unique_pos,
         noff, start, total_cells, cell_chain_id,
-        Dict{Tuple{Int,Int}, Tuple{Vector{Int}, Vector{Float64}}}(),
-        Dict{Tuple{Int,Int}, Any}(),
-        Dict{Int, Any}(),
-        Dict{Int, Any}(),
+        cell_event_start, cell_event_len, event_pool,
+        xs, ys, region_cache,
+        Dict{Vector{Int},Int}(), Vector{Vector{Int}}(),
+        0,
+        Dict{Tuple{Symbol,Bool},Any}(),
     )
 
     _precompute_arrangement_cache!(arr, precompute)
     return arr
+end
+
+function _precompute_arrangement_cache!(arr::FiberedArrangement2D, precompute::Symbol)
+    if precompute in (:cells, :cells_barcodes, :full, :all)
+        _precompute_cells!(arr)
+    end
+    return nothing
 end
 
 
@@ -7934,23 +8085,23 @@ end
 # If include_axes=true, the axis directions are represented explicitly and have
 # measure zero in theta, so we return 0.0 for those extra cells.
 function _arr2d_direction_cell_theta_width(arr::FiberedArrangement2D, dir_idx::Int)
-    n_base = length(arr.slopes) + 1
+    n_base = length(arr.slope_breaks) + 1
     if dir_idx > n_base
         return 0.0
     end
-    if isempty(arr.slopes)
+    if isempty(arr.slope_breaks)
         return 0.5 * Base.MathConstants.pi
     end
 
     if dir_idx == 1
         sL = 0.0
-        sR = arr.slopes[1]
+        sR = arr.slope_breaks[1]
     elseif dir_idx == n_base
-        sL = arr.slopes[end]
+        sL = arr.slope_breaks[end]
         sR = Inf
     else
-        sL = arr.slopes[dir_idx - 1]
-        sR = arr.slopes[dir_idx]
+        sL = arr.slope_breaks[dir_idx - 1]
+        sR = arr.slope_breaks[dir_idx]
     end
 
     thL = atan(sL)
@@ -8245,7 +8396,8 @@ Returns a NamedTuple:
 """
 function slice_barcodes(
     cache::FiberedBarcodeCache2D;
-    dirs,
+    dirs = nothing,
+    directions = nothing,
     offsets,
     values::Symbol = :t,
     direction_weight::Union{Symbol,Function,Real} = :none,
@@ -8254,12 +8406,17 @@ function slice_barcodes(
     tie_break::Symbol = :up,
     threads::Bool = (Threads.nthreads() > 1),
 )
+    if dirs === nothing
+        dirs = directions
+    end
+    dirs === nothing && error("slice_barcodes: dirs/directions is required")
+
     nd = length(dirs)
     no = length(offsets)
 
     wdir = Vector{Float64}(undef, nd)
     for i in 1:nd
-        wdir[i] = direction_weight(dirs[i], direction_weight)
+        wdir[i] = Invariants.direction_weight(dirs[i], direction_weight)
     end
     woff = _offset_sample_weights(offsets, offset_weights)
 
@@ -8286,6 +8443,9 @@ function slice_barcodes(
 
     return (barcodes=barcodes, weights=weights, offs=offsets)
 end
+
+slice_barcodes(cache::FiberedBarcodeCache2D, dirs, offsets; kwargs...) =
+    slice_barcodes(cache; dirs=dirs, offsets=offsets, kwargs...)
 
 
 
@@ -8362,6 +8522,84 @@ function matching_distance_exact_2d(
         store_values = store_values,
         threads = threads0
     )
+end
+
+function matching_distance_exact_2d(
+    cacheM::FiberedBarcodeCache2D,
+    cacheN::FiberedBarcodeCache2D;
+    weight::Symbol = :lesnick_l1,
+    family::Union{Nothing,FiberedSliceFamily2D} = nothing,
+    store_values::Bool = true,
+    threads::Bool = (Threads.nthreads() > 1),
+)::Float64
+    arr = cacheM.arrangement
+    arr === cacheN.arrangement || error("matching_distance_exact_2d: caches must share the same arrangement")
+
+    fam = family === nothing ? fibered_slice_family_2d(arr; direction_weight = weight, store_values = store_values) : family
+
+    if threads
+        _precompute_index_barcodes!(cacheM)
+        _precompute_index_barcodes!(cacheN)
+    end
+
+    ns = nslices(fam)
+    nt = threads ? Threads.maxthreadid() : 1
+    tmpM = [FloatBarcode() for _ in 1:nt]
+    tmpN = [FloatBarcode() for _ in 1:nt]
+    best_by_thread = fill(0.0, nt)
+
+    if threads
+        Threads.@threads for k in 1:ns
+            tid = Threads.threadid()
+            di = fam.dir_idx[k]
+            cid = fam.chain_id[k]
+            w = fam.dir_weight[di]
+
+            bidxM = cacheM.index_barcodes[cid]::IndexBarcode
+            bidxN = cacheN.index_barcodes[cid]::IndexBarcode
+
+            s = fam.vals_start[k]
+            if s == 0
+                d = arr.dir_reps[di]
+                _, vals = _arr2d_slice_chain_and_values(arr, d, fam.off_mid[k])
+                bM = _barcode_from_index_and_values!(tmpM[tid], bidxM, vals)
+                bN = _barcode_from_index_and_values!(tmpN[tid], bidxN, vals)
+                best_by_thread[tid] = max(best_by_thread[tid], w * bottleneck_distance(bM, bN))
+            else
+                bM = _barcode_from_index_and_values!(tmpM[tid], bidxM, fam.vals_pool, s)
+                bN = _barcode_from_index_and_values!(tmpN[tid], bidxN, fam.vals_pool, s)
+                best_by_thread[tid] = max(best_by_thread[tid], w * bottleneck_distance(bM, bN))
+            end
+        end
+        return maximum(best_by_thread)
+    end
+
+    best = 0.0
+    bMtmp = tmpM[1]
+    bNtmp = tmpN[1]
+    for k in 1:ns
+        di = fam.dir_idx[k]
+        cid = fam.chain_id[k]
+        w = fam.dir_weight[di]
+
+        bidxM = _index_barcode_for_chain!(cacheM, cid)
+        bidxN = _index_barcode_for_chain!(cacheN, cid)
+
+        s = fam.vals_start[k]
+        if s == 0
+            d = arr.dir_reps[di]
+            _, vals = _arr2d_slice_chain_and_values(arr, d, fam.off_mid[k])
+            bM = _barcode_from_index_and_values!(bMtmp, bidxM, vals)
+            bN = _barcode_from_index_and_values!(bNtmp, bidxN, vals)
+        else
+            bM = _barcode_from_index_and_values!(bMtmp, bidxM, fam.vals_pool, s)
+            bN = _barcode_from_index_and_values!(bNtmp, bidxN, fam.vals_pool, s)
+        end
+
+        best = max(best, w * bottleneck_distance(bM, bN))
+    end
+
+    return best
 end
 
 
@@ -8499,8 +8737,8 @@ Fields:
 - `values`: endpoint coordinates for the chain (length C.n+1), suitable for `slice_barcode`
 - `dir`: the direction vector used to define this projection (for bookkeeping)
 """
-struct ProjectedArrangement1D
-    Q::FinitePoset
+struct ProjectedArrangement1D{P<:AbstractPoset}
+    Q::P
     C::FinitePoset
     f::EncodingMap
     chain::UnitRange{Int}
@@ -8513,9 +8751,9 @@ end
 
 A family of 1D projections sharing the same source poset `Q`.
 """
-struct ProjectedArrangement
-    Q::FinitePoset
-    projections::Vector{ProjectedArrangement1D}
+struct ProjectedArrangement{P<:AbstractPoset}
+    Q::P
+    projections::Vector{ProjectedArrangement1D{P}}
 end
 
 # Internal: build the chain poset {1,...,k} with i <= j ordering.
@@ -8529,18 +8767,15 @@ end
 
 # Internal: minimal isotone majorant (upper closure) on a finite poset.
 # t(p) = max_{q <= p} s(q). This guarantees monotonicity.
-function _monotone_upper_closure(Q::FinitePoset, s::AbstractVector{<:Real})
-    n = Q.n
-    leq = Q.leq
+function _monotone_upper_closure(Q::AbstractPoset, s::AbstractVector{<:Real})
+    n = nvertices(Q)
     t = Vector{Float64}(undef, n)
     @inbounds for p in 1:n
         m = -Inf
-        for q in 1:n
-            if leq[q,p]
-                v = float(s[q])
-                if v > m
-                    m = v
-                end
+        for q in downset_indices(Q, p)
+            v = float(s[q])
+            if v > m
+                m = v
             end
         end
         t[p] = m
@@ -8549,7 +8784,7 @@ function _monotone_upper_closure(Q::FinitePoset, s::AbstractVector{<:Real})
 end
 
 """
-    projected_arrangement(Q::FinitePoset, values; enforce_monotone=:upper)
+    projected_arrangement(Q::AbstractPoset, values; enforce_monotone=:upper)
 
 Build a `ProjectedArrangement` containing a single projection map determined by a
 real-valued function on the elements of `Q`.
@@ -8557,10 +8792,10 @@ real-valued function on the elements of `Q`.
 If `enforce_monotone=:upper`, we replace `values` by its minimal isotone majorant
 so that the resulting map `Q -> chain` is guaranteed monotone.
 """
-function projected_arrangement(Q::FinitePoset, values::AbstractVector{<:Real};
+function projected_arrangement(Q::AbstractPoset, values::AbstractVector{<:Real};
                                enforce_monotone::Symbol = :upper,
                                dir = nothing)
-    length(values) == Q.n || error("values must have length Q.n")
+    length(values) == nvertices(Q) || error("values must have length nvertices(Q)")
 
     t = enforce_monotone == :upper ? _monotone_upper_closure(Q, values) :
         Float64.(values)
@@ -8570,8 +8805,8 @@ function projected_arrangement(Q::FinitePoset, values::AbstractVector{<:Real};
     C = _chain_poset(k)
 
     # Map each region value to its rank in the sorted unique list.
-    pi_of_q = Vector{Int}(undef, Q.n)
-    @inbounds for i in 1:Q.n
+    pi_of_q = Vector{Int}(undef, nvertices(Q))
+    @inbounds for i in 1:nvertices(Q)
         pi_of_q[i] = searchsortedfirst(uvals, t[i])
     end
 
@@ -8608,12 +8843,13 @@ function projected_arrangement(pi::PLikeEncodingMap;
                                include_axes::Bool = false,
                                normalize::Symbol = :L1,
                                enforce_monotone::Symbol = :upper,
-                                Q::Union{Nothing,FinitePoset}=nothing)
+                                Q::Union{Nothing,AbstractPoset}=nothing,
+                                poset_kind::Symbol = :signature)
 
     # Determine the region poset Q (either provided or reconstructed from pi).
-    Qposet = (Q === nothing) ? region_poset(pi) : Q
-    Qposet.n == _nregions_encoding(pi) || error(
-        "projected_arrangement: incompatible Q; Q.n=$(Qposet.n) but encoding has $(_nregions_encoding(pi)) regions"
+    Qposet = (Q === nothing) ? region_poset(pi; poset_kind = poset_kind) : Q
+    nvertices(Qposet) == _nregions_encoding(pi) || error(
+        "projected_arrangement: incompatible Q; nvertices(Q)=$(nvertices(Qposet)) but encoding has $(_nregions_encoding(pi)) regions"
     )
 
     dirs === nothing && (dirs = default_directions(dim(pi); n_dirs=n_dirs,
@@ -8621,7 +8857,7 @@ function projected_arrangement(pi::PLikeEncodingMap;
                                                    include_axes=include_axes,
                                                    normalize=normalize))
 
-    arrs = Vector{ProjectedArrangement1D}(undef, length(dirs))
+    arrs = Vector{ProjectedArrangement1D{typeof(Qposet)}}(undef, length(dirs))
     for (j,dir) in enumerate(dirs)
         vals = region_values(pi, x -> _dot(dir, x))
         tmp = projected_arrangement(Qposet, vals; enforce_monotone=enforce_monotone, dir=dir)
@@ -9624,9 +9860,12 @@ Opts usage:
 """
 function mpp_image(M::PModule{QQ}, pi::PLikeEncodingMap, opts::InvariantOptions; kwargs...)
     arr = fibered_arrangement_2d(pi, opts; include_axes=true)
-    cache = fibered_barcode_cache_2d(M, arr; kwargs...)
-    return mpp_image(cache)
+    cache = fibered_barcode_cache_2d(M, arr)
+    return mpp_image(cache; kwargs...)
 end
+
+mpp_image(M::PModule{QQ}, pi::PLikeEncodingMap; opts=nothing, kwargs...) =
+    mpp_image(M, pi, _resolve_opts(opts); kwargs...)
 
 # ------------------------ MPPI image operations -------------------------------
 
@@ -10123,7 +10362,11 @@ function mp_landscape(
     end
 
     strict0 = opts.strict === nothing ? true : opts.strict
-    box_kw = opts.box === nothing ? :auto : opts.box
+    if opts.box === nothing
+        box_kw = pi isa PLikeEncodingMap ? :auto : nothing
+    else
+        box_kw = opts.box
+    end
 
     opts_chain = InvariantOptions(
         axes = opts.axes,
@@ -10138,26 +10381,28 @@ function mp_landscape(
     kmax_param = get(kwargs, :kmax, nothing)
     forward = (; (k => v for (k, v) in pairs(kwargs) if k != :kmin && k != :kmax && k != :ts)...)
 
+    d = dimension(pi)
     if directions === nothing
-        directions = orthant_directions(pi.dim)
+        directions = orthant_directions(d)
     end
-    dirs_in = orthant_directions(pi.dim, directions)
+    dirs_in = orthant_directions(d, directions)
     nd = length(dirs_in)
 
-    tp = translation_parameters(pi, opts_chain)
-    if tmin === nothing
-        tmin = -minimum(abs.(tp.box))
-    end
-    if tmax === nothing
-        tmax = maximum(abs.(tp.box))
+    if tmin === nothing || tmax === nothing || offsets === nothing
+        lo, hi = encoding_box(pi, opts_chain)
+        if tmin === nothing
+            tmin = -minimum(abs.(vcat(lo, hi)))
+        end
+        if tmax === nothing
+            tmax = maximum(abs.(vcat(lo, hi)))
+        end
+        if offsets === nothing
+            offsets = default_offsets(pi, opts_chain)
+        end
     end
 
     tg = tgrid === nothing ? collect(LinRange(tmin, tmax, n_t)) : collect(tgrid)
     nt = length(tg)
-
-    if offsets === nothing
-        offsets = offset_samples(tp, dirs_in)
-    end
     no = length(offsets)
 
     dir_weights = if direction_weight == :uniform
@@ -10206,6 +10451,9 @@ function mp_landscape(
 
     return MPLandscape(kmax, tg, vals, W, dirs_in, offsets)
 end
+
+mp_landscape(M::PModule{QQ}, pi; kwargs...) =
+    mp_landscape(M, pi, InvariantOptions(); kwargs...)
 
 
 
@@ -11013,6 +11261,91 @@ Returns `(barcodes, weights, directions, offsets)` where:
 """
 function slice_barcodes(
     M::PModule{QQ},
+    pi;
+    directions = :auto,
+    offsets = :auto,
+    normalize_dirs::Symbol = :none,
+    direction_weight::Union{Symbol,Function,Real} = :none,
+    offset_weights = nothing,
+    normalize_weights::Bool = true,
+    values = nothing,
+    threads::Bool = (Threads.nthreads() > 1),
+    slice_kwargs...
+)
+    if directions === :auto || directions === nothing
+        error("slice_barcodes: provide directions explicitly for non-PLike encodings")
+    end
+    if offsets === :auto || offsets === nothing
+        error("slice_barcodes: provide offsets explicitly for non-PLike encodings")
+    end
+
+    # Extract legacy keywords and convert to opts for slice_chain.
+    box_kw = haskey(slice_kwargs, :box) ? slice_kwargs[:box] : :auto
+    if box_kw === nothing && !haskey(slice_kwargs, :tmin) && !haskey(slice_kwargs, :tmax)
+        box_kw = :auto
+    end
+    strict_kw = haskey(slice_kwargs, :strict) ? slice_kwargs[:strict] : nothing
+    opts_chain = InvariantOptions(box = box_kw, strict = strict_kw)
+
+    # Filter out :box and :strict so we do not forward them as keywords to slice_chain.
+    filtered = (;
+        (k => v for (k, v) in pairs(slice_kwargs)
+            if k != :box && k != :strict && k != :kmin && k != :kmax_param &&
+               k != :default_weight)...)
+
+    dirs_in = Any[_normalize_dir(dir, normalize_dirs) for dir in directions]
+    offs0 = offsets
+
+    nd = length(dirs_in)
+    no = length(offs0)
+    nd > 0 || error("slice_barcodes: directions is empty")
+    no > 0 || error("slice_barcodes: offsets is empty")
+
+    wdir = Vector{Float64}(undef, nd)
+    for i in 1:nd
+        wdir[i] = Invariants.direction_weight(dirs_in[i], direction_weight)
+    end
+    woff = _offset_sample_weights(offs0, offset_weights)
+
+    W = wdir * woff'
+    if normalize_weights
+        s = sum(W)
+        s > 0 || error("slice_barcodes: total slice weight is zero")
+        W ./= s
+    end
+
+    bcs = Matrix{Any}(undef, nd, no)
+
+    if threads && Threads.nthreads() > 1
+        Threads.@threads for k in 1:(nd * no)
+            i = div((k - 1), no) + 1
+            j = (k - 1) % no + 1
+            chain, tvals = slice_chain(pi, offs0[j], dirs_in[i], opts_chain; filtered...)
+            if isempty(chain) || isempty(tvals)
+                bcs[i, j] = Dict{Tuple{Float64,Float64},Int}()
+                continue
+            end
+            vals_use = values === nothing ? tvals : values
+            bcs[i, j] = slice_barcode(M, chain; values = vals_use, check_chain = false)
+        end
+        return (barcodes = bcs, weights = W, dirs = dirs_in, offs = offs0)
+    end
+
+    for i in 1:nd, j in 1:no
+        chain, tvals = slice_chain(pi, offs0[j], dirs_in[i], opts_chain; filtered...)
+        if isempty(chain) || isempty(tvals)
+            bcs[i, j] = Dict{Tuple{Float64,Float64},Int}()
+            continue
+        end
+        vals_use = values === nothing ? tvals : values
+        bcs[i, j] = slice_barcode(M, chain; values = vals_use, check_chain = false)
+    end
+
+    return (barcodes = bcs, weights = W, dirs = dirs_in, offs = offs0)
+end
+
+function slice_barcodes(
+    M::PModule{QQ},
     pi::PLikeEncodingMap;
     directions = :auto,
     offsets = :auto,
@@ -11042,16 +11375,39 @@ function slice_barcodes(
     end
     # Extract legacy keywords and convert to opts for default_offsets / slice_chain.
     box_kw = haskey(slice_kwargs, :box) ? slice_kwargs[:box] : nothing
+    box_kw === :auto && (box_kw = nothing)
     strict_kw = haskey(slice_kwargs, :strict) ? slice_kwargs[:strict] : nothing
 
     opts_offsets = InvariantOptions(box = box_kw)
     opts_chain   = InvariantOptions(box = box_kw, strict = strict_kw)
+    if opts_chain.box === nothing && !haskey(slice_kwargs, :tmin) && !haskey(slice_kwargs, :tmax)
+        opts_offsets = InvariantOptions(box = :auto)
+        opts_chain   = InvariantOptions(box = :auto, strict = strict_kw)
+    end
 
     # Filter out :box and :strict so we do not forward them as keywords to slice_chain.
-    filtered = (; (k => v for (k, v) in pairs(slice_kwargs) if k != :box && k != :strict)...)
+    filtered = (;
+        (k => v for (k, v) in pairs(slice_kwargs)
+            if k != :box && k != :strict && k != :default_weight && k != :kmin && k != :kmax_param)...)
 
     if offs0 === :auto || offs0 === nothing
         offs0 = default_offsets(pi, opts_offsets; n_offsets = n_offsets, margin = offset_margin)
+    end
+
+    # Degenerate case: empty-dimensional offsets (e.g., missing witnesses).
+    if !isempty(offs0) && length(offs0[1]) == 0
+        return (barcodes = Matrix{Any}(undef, 0, 0),
+                weights = zeros(Float64, 0, 0),
+                dirs = Any[],
+                offs = offs0)
+    end
+
+    if !isempty(dirs0) && !isempty(offs0) && length(dirs0[1]) != length(offs0[1])
+        dirs0 = default_directions(length(offs0[1]);
+                                  n_dirs = n_dirs,
+                                  max_den = max_den,
+                                  include_axes = include_axes,
+                                  normalize = (normalize_dirs == :none ? :none : normalize_dirs))
     end
 
     # Normalize directions (e.g. L1) if requested.
@@ -11084,6 +11440,10 @@ function slice_barcodes(
             i = div((k - 1), no) + 1
             j = (k - 1) % no + 1
             chain, tvals = slice_chain(pi, offs0[j], dirs_in[i], opts_chain; filtered...)
+            if isempty(chain) || isempty(tvals)
+                bcs[i, j] = Dict{Tuple{Float64,Float64},Int}()
+                continue
+            end
             vals_use = values === nothing ? tvals : values
             bcs[i, j] = slice_barcode(M, chain; values = vals_use, check_chain = false)
         end
@@ -11093,6 +11453,10 @@ function slice_barcodes(
     for i in 1:nd, j in 1:no
         # Non-threaded path: use (i,j) directly (no linear index k here).
         chain, tvals = slice_chain(pi, offs0[j], dirs_in[i], opts_chain; filtered...)
+        if isempty(chain) || isempty(tvals)
+            bcs[i, j] = Dict{Tuple{Float64,Float64},Int}()
+            continue
+        end
         vals_use = values === nothing ? tvals : values
         bcs[i, j] = slice_barcode(M, chain; values = vals_use, check_chain = false)
     end
@@ -11106,9 +11470,9 @@ end
 
 function slice_barcodes(M, pi::ZnEncodingMap, opts::InvariantOptions; kwargs...)
     # Explicit kwargs override opts.
-    box     = haskey(kwargs, :box)     ? kwargs.box     : opts.box
-    strict  = haskey(kwargs, :strict)  ? kwargs.strict  : opts.strict
-    threads = haskey(kwargs, :threads) ? kwargs.threads : opts.threads
+    box     = get(kwargs, :box, opts.box)
+    strict  = get(kwargs, :strict, opts.strict)
+    threads = get(kwargs, :threads, opts.threads)
 
     strict0  = _default_strict(strict)
     threads0 = _default_threads(threads)
@@ -11811,13 +12175,13 @@ slice_kernel(H::FringeModule{QQ}, K::FringeModule{QQ}, args...; kwargs...) =
 function _unique_minimal_vertex(U::Upset)::Int
     P = U.P
     mins = Int[]
-    for q in 1:P.n
+    for q in 1:nvertices(P)
         U.mask[q] || continue
         # q is minimal in U if there is no p < q also in U.
         ismin = true
-        for p in 1:P.n
+        for p in downset_indices(P, q)
             (p == q) && continue
-            if U.mask[p] && P.leq[p, q]
+            if U.mask[p]
                 ismin = false
                 break
             end
@@ -11832,13 +12196,13 @@ end
 function _unique_maximal_vertex(D::Downset)::Int
     P = D.P
     maxs = Int[]
-    for q in 1:P.n
+    for q in 1:nvertices(P)
         D.mask[q] || continue
         # q is maximal in D if there is no r > q also in D.
         ismax = true
-        for r in 1:P.n
+        for r in upset_indices(P, q)
             (r == q) && continue
-            if D.mask[r] && P.leq[q, r]
+            if D.mask[r]
                 ismax = false
                 break
             end
@@ -11898,7 +12262,7 @@ vertex `p` in homological degree `a`.
 function betti_table(F::Vector{UpsetPresentation{QQ}}; pad_to::Union{Nothing,Int}=nothing)
     length(F) > 0 || return zeros(Int, 0, 0)
     P = F[1].P
-    B = zeros(Int, length(F), P.n)
+    B = zeros(Int, length(F), nvertices(P))
     for ((a, p), m) in betti(F)
         B[a + 1, p] = m
     end
@@ -11913,7 +12277,7 @@ function betti_table(F::Vector{UpsetPresentation{QQ}}; pad_to::Union{Nothing,Int
         elseif size(B, 1) > r
             return B[1:r, :]
         else
-            C = zeros(Int, r, P.n)
+            C = zeros(Int, r, nvertices(P))
             C[1:size(B,1), :] .= B
             return C
         end
@@ -11960,7 +12324,7 @@ top vertex `p` in cohomological degree `b`.
 function bass_table(E::Vector{DownsetCopresentation{QQ}}; pad_to::Union{Nothing,Int}=nothing)
     length(E) > 0 || return zeros(Int, 0, 0)
     P = E[1].P
-    B = zeros(Int, length(E), P.n)
+    B = zeros(Int, length(E), nvertices(P))
     for ((b, p), m) in bass(E)
         B[b + 1, p] = m
     end
@@ -11975,7 +12339,7 @@ function bass_table(E::Vector{DownsetCopresentation{QQ}}; pad_to::Union{Nothing,
         elseif size(B, 1) > r
             return B[1:r, :]
         else
-            C = zeros(Int, r, P.n)
+            C = zeros(Int, r, nvertices(P))
             C[1:size(B,1), :] .= B
             return C
         end
@@ -12137,7 +12501,7 @@ end
 # to avoid collisions if two encodings ever share the same `sig_y` object.
 struct _RegionPosetCacheEntry
     sig_z::Any
-    P::FinitePoset
+    P::AbstractPoset
 end
 
 const _REGION_POSET_CACHE = Base.WeakKeyDict{Any, _RegionPosetCacheEntry}()
@@ -12181,7 +12545,7 @@ function _uptight_poset_from_signatures(
 end
 
 """
-    region_poset(pi) -> FinitePoset
+    region_poset(pi; poset_kind=:signature) -> AbstractPoset
 
 Return the finite "region poset" underlying a `PLikeEncodingMap` `pi`.
 
@@ -12202,11 +12566,11 @@ Implementation notes
   This avoids repeating the O(r^3) validation work inside `FinitePoset(...)` when
   region_poset is queried many times for the same encoding map.
 """
-function region_poset(pi::PLikeEncodingMap)
+function region_poset(pi::PLikeEncodingMap; poset_kind::Symbol = :signature)
     # Fast path: the encoding itself stores P.
     if hasproperty(pi, :P)
         P = getproperty(pi, :P)
-        if P isa FinitePoset
+        if P isa AbstractPoset
             return P
         end
     end
@@ -12227,14 +12591,22 @@ function region_poset(pi::PLikeEncodingMap)
 
     if entry !== nothing
         e = entry::_RegionPosetCacheEntry
-        if e.sig_z === sig_z
+        if e.sig_z === sig_z && ((poset_kind == :dense && e.P isa FinitePoset) || (poset_kind != :dense && !(e.P isa FinitePoset)))
             return e.P
         end
         # If sig_y is shared but sig_z differs, treat as a cache miss.
         # (This should be very rare; correctness beats caching here.)
     end
 
-    Pnew = _uptight_poset_from_signatures(sig_y, sig_z)
+    if poset_kind == :signature
+        sig_y_bits = [BitVector(collect(row)) for row in sig_y]
+        sig_z_bits = [BitVector(collect(row)) for row in sig_z]
+        Pnew = ZnEncoding.SignaturePoset(sig_y_bits, sig_z_bits)
+    elseif poset_kind == :dense
+        Pnew = _uptight_poset_from_signatures(sig_y, sig_z)
+    else
+        error("region_poset: poset_kind must be :signature or :dense")
+    end
 
     lock(_REGION_POSET_CACHE_LOCK)
     _REGION_POSET_CACHE[sig_y] = _RegionPosetCacheEntry(sig_z, Pnew)
@@ -12293,6 +12665,12 @@ function measure_by_value(values::AbstractVector, pi, opts::InvariantOptions; we
         out[v] = get(out, v, zT) + w[i]
     end
     return out
+end
+
+function measure_by_value(values::AbstractVector, v, pi, opts::InvariantOptions; weights=nothing, kwargs...)
+    out = measure_by_value(values, pi, opts; weights=weights, kwargs...)
+    T = eltype(Base.values(out))
+    return get(out, v, zero(T))
 end
 
 
@@ -12414,7 +12792,7 @@ function _multigraded_support_measures(tbl::Dict{Tuple{Int,Int},<:Integer}, w)
         d > dmax && (dmax = d)
     end
     if dmax < 0
-        return (support_by_degree=zeros(T, 0), mass_by_degree=zeros(T, 0), support_union=zero(T), mass_total=zero(T))
+        return (support_by_degree=zeros(T, 0), mass_by_degree=zeros(T, 0), support_union=zero(T), support_total=zero(T), mass_total=zero(T))
     end
 
     support_by = zeros(T, dmax + 1)
@@ -12436,7 +12814,8 @@ function _multigraded_support_measures(tbl::Dict{Tuple{Int,Int},<:Integer}, w)
         end
     end
 
-    return (support_by_degree=support_by, mass_by_degree=mass_by, support_union=su, mass_total=sum(mass_by))
+    mt = sum(mass_by)
+    return (support_by_degree=support_by, mass_by_degree=mass_by, support_union=su, support_total=mt, mass_total=mt)
 end
 
 function _multigraded_support_measures(B::AbstractMatrix{<:Integer}, w)
@@ -12463,7 +12842,8 @@ function _multigraded_support_measures(B::AbstractMatrix{<:Integer}, w)
         anynz && (su += wp)
     end
 
-    return (support_by_degree=support_by, mass_by_degree=mass_by, support_union=su, mass_total=sum(mass_by))
+    mt = sum(mass_by)
+    return (support_by_degree=support_by, mass_by_degree=mass_by, support_union=su, support_total=mt, mass_total=mt)
 end
 
 
@@ -13032,6 +13412,134 @@ function support_measure_stats(dims::AbstractVector{<:Integer}, pi::PLikeEncodin
     isempty(kwargs) || throw(ArgumentError("support_measure_stats(dims, ...): keyword arguments are not supported; pass invariant options via opts"))
     return _support_measure_stats_impl(restricted_hilbert(dims), pi, opts; sep=sep, min_dim=min_dim)
 end
+
+
+# -----------------------------------------------------------------------------
+# Public opts-default wrappers (keyword opts)
+# -----------------------------------------------------------------------------
+
+rank_invariant(H::FringeModule{QQ}; opts=nothing, kwargs...) =
+    rank_invariant(H, _resolve_opts(opts); kwargs...)
+
+rectangle_signed_barcode(M, pi; opts=nothing, kwargs...) =
+    rectangle_signed_barcode(M, pi, _resolve_opts(opts); kwargs...)
+
+restricted_hilbert(M::PModule{QQ}, pi, x; opts=nothing) =
+    restricted_hilbert(M, pi, x, _resolve_opts(opts))
+restricted_hilbert(H::FringeModule{QQ}, pi, x; opts=nothing) =
+    restricted_hilbert(H, pi, x, _resolve_opts(opts))
+
+hilbert_distance(M, N, pi; opts=nothing, kwargs...) =
+    hilbert_distance(M, N, pi, _resolve_opts(opts); kwargs...)
+
+euler_surface(obj, pi; opts=nothing, kwargs...) =
+    euler_surface(obj, pi, _resolve_opts(opts); kwargs...)
+euler_signed_measure(obj, pi; opts=nothing, kwargs...) =
+    euler_signed_measure(obj, pi, _resolve_opts(opts); kwargs...)
+euler_distance(obj1, obj2, pi; opts=nothing, kwargs...) =
+    euler_distance(obj1, obj2, pi, _resolve_opts(opts); kwargs...)
+
+integrated_hilbert_mass(M, pi; opts=nothing, kwargs...) =
+    integrated_hilbert_mass(M, pi, _resolve_opts(opts); kwargs...)
+measure_by_dimension(M, pi; opts=nothing, kwargs...) =
+    measure_by_dimension(M, pi, _resolve_opts(opts); kwargs...)
+support_measure(M, pi; opts=nothing, kwargs...) =
+    support_measure(M, pi, _resolve_opts(opts); kwargs...)
+dim_stats(M, pi; opts=nothing, kwargs...) =
+    dim_stats(M, pi, _resolve_opts(opts); kwargs...)
+dim_norm(M, pi; opts=nothing, kwargs...) =
+    dim_norm(M, pi, _resolve_opts(opts); kwargs...)
+region_weight_entropy(pi; opts=nothing, kwargs...) =
+    region_weight_entropy(pi, _resolve_opts(opts); kwargs...)
+aspect_ratio_stats(pi; opts=nothing, kwargs...) =
+    aspect_ratio_stats(pi, _resolve_opts(opts); kwargs...)
+module_size_summary(M, pi; opts=nothing, kwargs...) =
+    module_size_summary(M, pi, _resolve_opts(opts); kwargs...)
+interface_measure(pi; opts=nothing, kwargs...) =
+    interface_measure(pi, _resolve_opts(opts); kwargs...)
+interface_measure_by_dim_pair(M, pi; opts=nothing, kwargs...) =
+    interface_measure_by_dim_pair(M, pi, _resolve_opts(opts); kwargs...)
+interface_measure_dim_changes(M, pi; opts=nothing, kwargs...) =
+    interface_measure_dim_changes(M, pi, _resolve_opts(opts); kwargs...)
+region_volume_samples_by_dim(M, pi; opts=nothing, kwargs...) =
+    region_volume_samples_by_dim(M, pi, _resolve_opts(opts); kwargs...)
+region_volume_histograms_by_dim(M, pi; opts=nothing, kwargs...) =
+    region_volume_histograms_by_dim(M, pi, _resolve_opts(opts); kwargs...)
+region_boundary_to_volume_samples_by_dim(M, pi; opts=nothing, kwargs...) =
+    region_boundary_to_volume_samples_by_dim(M, pi, _resolve_opts(opts); kwargs...)
+region_boundary_to_volume_histograms_by_dim(M, pi; opts=nothing, kwargs...) =
+    region_boundary_to_volume_histograms_by_dim(M, pi, _resolve_opts(opts); kwargs...)
+region_adjacency_graph_stats(M, pi; opts=nothing, kwargs...) =
+    region_adjacency_graph_stats(M, pi, _resolve_opts(opts); kwargs...)
+module_geometry_summary(M, pi; opts=nothing, kwargs...) =
+    module_geometry_summary(M, pi, _resolve_opts(opts); kwargs...)
+module_geometry_asymptotics(M, pi; opts=nothing, kwargs...) =
+    module_geometry_asymptotics(M, pi, _resolve_opts(opts); kwargs...)
+
+slice_chain(pi, x0, dir; opts=nothing, kwargs...) =
+    slice_chain(pi, x0, dir, _resolve_opts(opts); kwargs...)
+
+sliced_wasserstein_kernel(M, N, pi; opts=nothing, kwargs...) =
+    sliced_wasserstein_kernel(M, N, pi, _resolve_opts(opts); kwargs...)
+sliced_wasserstein_distance(M, N, pi; opts=nothing, kwargs...) =
+    sliced_wasserstein_distance(M, N, pi, _resolve_opts(opts); kwargs...)
+sliced_bottleneck_distance(M, N, pi; opts=nothing, kwargs...) =
+    sliced_bottleneck_distance(M, N, pi, _resolve_opts(opts); kwargs...)
+
+encoding_box(pi::PLikeEncodingMap; opts=nothing, kwargs...) =
+    encoding_box(pi, _resolve_opts(opts); kwargs...)
+encoding_box(axes::Tuple{Vararg{<:AbstractVector}}; opts=nothing, kwargs...) =
+    encoding_box(axes, _resolve_opts(opts); kwargs...)
+
+default_offsets(pi::PLikeEncodingMap; opts=nothing, kwargs...) =
+    default_offsets(pi, _resolve_opts(opts); kwargs...)
+default_offsets(pi::PLikeEncodingMap, dir::AbstractVector{<:Real}; opts=nothing, kwargs...) =
+    default_offsets(pi, dir, _resolve_opts(opts); kwargs...)
+
+matching_distance_approx(M, N, pi; opts=nothing, kwargs...) =
+    matching_distance_approx(M, N, pi, _resolve_opts(opts); kwargs...)
+matching_wasserstein_distance_approx(M, N, pi; opts=nothing, kwargs...) =
+    matching_wasserstein_distance_approx(M, N, pi, _resolve_opts(opts); kwargs...)
+
+slice_chain_exact_2d(pi, dir, offset; opts=nothing, kwargs...) =
+    slice_chain_exact_2d(pi, dir, offset, _resolve_opts(opts); kwargs...)
+matching_distance_exact_slices_2d(pi; opts=nothing, kwargs...) =
+    matching_distance_exact_slices_2d(pi, _resolve_opts(opts); kwargs...)
+
+fibered_arrangement_2d(pi; opts=nothing, kwargs...) =
+    fibered_arrangement_2d(pi, _resolve_opts(opts); kwargs...)
+fibered_barcode_cache_2d(M, pi; opts=nothing, kwargs...) =
+    fibered_barcode_cache_2d(M, pi, _resolve_opts(opts); kwargs...)
+
+matching_distance_exact_2d(M, N, pi; opts=nothing, kwargs...) =
+    matching_distance_exact_2d(M, N, pi, _resolve_opts(opts); kwargs...)
+
+measure_by_value(values::AbstractVector, pi; opts=nothing, kwargs...) =
+    measure_by_value(values, pi, _resolve_opts(opts); kwargs...)
+measure_by_value(values::AbstractVector, v, pi; opts=nothing, kwargs...) =
+    measure_by_value(values, v, pi, _resolve_opts(opts); kwargs...)
+measure_by_value(f::Function, pi; opts=nothing, kwargs...) =
+    measure_by_value(f, pi, _resolve_opts(opts); kwargs...)
+
+support_measure(mask::AbstractVector{Bool}, pi; opts=nothing, kwargs...) =
+    support_measure(mask, pi, _resolve_opts(opts); kwargs...)
+vertex_set_measure(vertices::AbstractVector{<:Integer}, pi; opts=nothing, kwargs...) =
+    vertex_set_measure(vertices, pi, _resolve_opts(opts); kwargs...)
+betti_support_measures(B, pi; opts=nothing, kwargs...) =
+    betti_support_measures(B, pi, _resolve_opts(opts); kwargs...)
+bass_support_measures(B, pi; opts=nothing, kwargs...) =
+    bass_support_measures(B, pi, _resolve_opts(opts); kwargs...)
+
+support_components(H, pi; opts=nothing, kwargs...) =
+    support_components(H, pi, _resolve_opts(opts); kwargs...)
+support_graph_diameter(H, pi; opts=nothing, kwargs...) =
+    support_graph_diameter(H, pi, _resolve_opts(opts); kwargs...)
+support_bbox(H, pi; opts=nothing, kwargs...) =
+    support_bbox(H, pi, _resolve_opts(opts); kwargs...)
+support_geometric_diameter(H, pi; opts=nothing, kwargs...) =
+    support_geometric_diameter(H, pi, _resolve_opts(opts); kwargs...)
+support_measure_stats(H, pi; opts=nothing, kwargs...) =
+    support_measure_stats(H, pi, _resolve_opts(opts); kwargs...)
 
 
 end # module

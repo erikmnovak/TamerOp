@@ -282,7 +282,7 @@ export locate, dimension, representatives, axes_from_encoding
 # Option structs (public API)
 
 """
-    EncodingOptions(; backend=:auto, max_regions=nothing, strict_eps=nothing)
+    EncodingOptions(; backend=:auto, max_regions=nothing, strict_eps=nothing, poset_kind=:signature)
 
 Options controlling finite encodings. Used by:
 * `ZnEncoding.encode_from_flange(s)` and related helpers (backend=:zn)
@@ -293,16 +293,19 @@ Fields:
 * `backend`: Symbol, one of `:auto`, `:zn`, `:pl`, `:pl_backend`.
 * `max_regions`: Integer cap for region enumeration (backend-dependent defaults).
 * `strict_eps`: QQ tolerance used by PL polyhedra backend (default backend constant).
+* `poset_kind`: `:signature` (structured, default) or `:dense` (materialized `FinitePoset`).
 """
 struct EncodingOptions
     backend::Symbol
     max_regions::Union{Nothing, Int}
     strict_eps::Any
+    poset_kind::Symbol
 end
-EncodingOptions(; backend::Symbol=:auto, max_regions=nothing, strict_eps=nothing) =
+EncodingOptions(; backend::Symbol=:auto, max_regions=nothing, strict_eps=nothing, poset_kind::Symbol=:signature) =
     EncodingOptions(backend,
                     max_regions === nothing ? nothing : Int(max_regions),
-                    strict_eps)
+                    strict_eps,
+                    poset_kind)
 
 """
     ResolutionOptions(; maxlen=3, minimal=false, check=true)
@@ -379,6 +382,37 @@ end
 DerivedFunctorOptions(; maxdeg::Int=3, model::Symbol=:auto, canon::Symbol=:auto) =
     DerivedFunctorOptions(maxdeg, model, canon)
 
+"""
+    FiniteFringeOptions(; check=true, cached=true, store_sparse=false, scalar=QQ(1), poset_kind=:regions)
+
+Options for FiniteFringe convenience entrypoints.
+"""
+struct FiniteFringeOptions
+    check::Bool
+    cached::Bool
+    store_sparse::Bool
+    scalar::Any
+    poset_kind::Symbol
+end
+FiniteFringeOptions(; check::Bool=true,
+                    cached::Bool=true,
+                    store_sparse::Bool=false,
+                    scalar=QQ(1),
+                    poset_kind::Symbol=:regions) =
+    FiniteFringeOptions(check, cached, store_sparse, scalar, poset_kind)
+
+"""
+    ModuleOptions(; check_sizes=true, cache=nothing)
+
+Options for Modules convenience entrypoints.
+"""
+struct ModuleOptions
+    check_sizes::Bool
+    cache::Any
+end
+ModuleOptions(; check_sizes::Bool=true, cache=nothing) =
+    ModuleOptions(check_sizes, cache)
+
 
 # -----------------------------------------------------------------------------
 # Workflow / pipeline result objects
@@ -418,6 +452,16 @@ EncodingResult(P, M, pi;
                backend::Symbol=opts.backend,
                meta=NamedTuple()) =
     EncodingResult(P, M, pi, H, presentation, opts, backend, meta)
+
+Base.length(::EncodingResult) = 3
+Base.IteratorSize(::Type{<:EncodingResult}) = Base.HasLength()
+
+function Base.iterate(enc::EncodingResult, state::Int=1)
+    state == 1 && return (enc.P, 2)
+    state == 2 && return (enc.M, 3)
+    state == 3 && return (enc.pi, 4)
+    return nothing
+end
 
 """
     ResolutionResult(res; enc=nothing, betti=nothing, minimality=nothing,
@@ -462,6 +506,7 @@ InvariantResult(enc, which, value;
 
 
 export EncodingOptions, ResolutionOptions, InvariantOptions, DerivedFunctorOptions
+export FiniteFringeOptions, ModuleOptions
 export EncodingResult, ResolutionResult, InvariantResult
 
 end # module

@@ -15,7 +15,7 @@ using LinearAlgebra
 
 function direct_sum_with_split_sequence(A::MD.PModule{QQ}, C::MD.PModule{QQ})
     Q = A.Q
-    @test Q.leq == C.Q.leq
+    @test FF.poset_equal(Q, C.Q)
 
     dimsB = [A.dims[v] + C.dims[v] for v in 1:Q.n]
 

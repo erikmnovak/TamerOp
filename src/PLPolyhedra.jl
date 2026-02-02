@@ -15,7 +15,12 @@ module PLPolyhedra
 # =============================================================================
 
 using ..FiniteFringe
+import ..FiniteFringe: AbstractPoset, nvertices
+import ..ZnEncoding: SignaturePoset
 using ..CoreModules: QQ, AbstractPLikeEncodingMap, EncodingOptions
+
+@inline _resolve_encoding_opts(opts::Union{EncodingOptions,Nothing}) =
+    opts === nothing ? EncodingOptions() : opts
 using ..Stats: _wilson_interval
 using Random
 
@@ -192,7 +197,7 @@ function PLFringe(Ups::Vector{PLUpset},
 end
 
 """
-    encode_from_PL_fringe(F::PLFringe, opts::EncodingOptions) -> (P, H, pi)
+    encode_from_PL_fringe(F::PLFringe, opts::EncodingOptions; poset_kind=:signature) -> (P, H, pi)
 
 Encode a single `PLFringe` presentation over R^n to a finite encoding poset `P`,
 returning the pushed-down `FiniteFringe.FringeModule{QQ}` and the classifier
@@ -204,9 +209,14 @@ returning the pushed-down `FiniteFringe.FringeModule{QQ}` and the classifier
 - `opts.strict_eps` controls strict inequality handling in feasibility checks
   (default: `STRICT_EPS_QQ`).
 """
-function encode_from_PL_fringe(F::PLFringe, opts::EncodingOptions)
-    return encode_from_PL_fringe(F.Ups, F.Downs, F.Phi, opts)
+function encode_from_PL_fringe(F::PLFringe, opts::EncodingOptions; poset_kind::Symbol = :signature)
+    return encode_from_PL_fringe(F.Ups, F.Downs, F.Phi, opts; poset_kind = poset_kind)
 end
+
+encode_from_PL_fringe(F::PLFringe;
+                      opts::Union{EncodingOptions,Nothing}=nothing,
+                      poset_kind::Symbol = :signature) =
+    encode_from_PL_fringe(F, _resolve_encoding_opts(opts); poset_kind = poset_kind)
 
 
 
@@ -2625,7 +2635,7 @@ function _uptight_from_signatures(sig_y::Vector{BitVector}, sig_z::Vector{BitVec
     return FiniteFringe.FinitePoset(leq)
 end
 
-function _images_on_P(P::FiniteFringe.FinitePoset,
+function _images_on_P(P::AbstractPoset,
                       sig_y::Vector{BitVector},
                       sig_z::Vector{BitVector},
                       ups_idx::AbstractVector{<:Integer},
@@ -2637,11 +2647,11 @@ function _images_on_P(P::FiniteFringe.FinitePoset,
     Dhat = Vector{FiniteFringe.Downset}(undef, r)
 
     for (i, gi) in enumerate(ups_idx)
-        mask = BitVector([sig_y[t][gi] == 1 for t in 1:P.n])
+        mask = BitVector([sig_y[t][gi] == 1 for t in 1:nvertices(P)])
         Uhat[i] = FiniteFringe.upset_closure(P, mask)
     end
     for (j, gj) in enumerate(downs_idx)
-        mask = BitVector([sig_z[t][gj] == 0 for t in 1:P.n])
+        mask = BitVector([sig_z[t][gj] == 0 for t in 1:nvertices(P)])
         Dhat[j] = FiniteFringe.downset_closure(P, mask)
     end
 
@@ -2649,7 +2659,7 @@ function _images_on_P(P::FiniteFringe.FinitePoset,
 end
 
 # Backward-compatible single-fringe helper: use the first m upsets and first r downsets.
-function _images_on_P(P::FiniteFringe.FinitePoset,
+function _images_on_P(P::AbstractPoset,
                       sig_y::Vector{BitVector},
                       sig_z::Vector{BitVector},
                       m::Int, r::Int)
@@ -2670,7 +2680,7 @@ function _monomialize_phi(phi::AbstractMatrix{QQ}, Uhat, Dhat)
 end
 
 """
-    encode_from_PL_fringe(Ups, Downs, Phi_in, opts::EncodingOptions) -> (P, H, pi)
+    encode_from_PL_fringe(Ups, Downs, Phi_in, opts::EncodingOptions; poset_kind=:signature) -> (P, H, pi)
 
 Encode a single PL fringe presentation specified by explicit upsets, downsets,
 and coefficient matrix.
@@ -2685,7 +2695,8 @@ This low-level overload is used by `encode_from_PL_fringe(::PLFringe, ::Encoding
 function encode_from_PL_fringe(Ups::Vector{PLUpset},
                                Downs::Vector{PLDownset},
                                Phi_in::AbstractMatrix,
-                               opts::EncodingOptions)
+                               opts::EncodingOptions;
+                               poset_kind::Symbol = :signature)
     if opts.backend != :auto && opts.backend != :pl
         error("encode_from_PL_fringe: EncodingOptions.backend must be :auto or :pl")
     end
@@ -2719,7 +2730,13 @@ function encode_from_PL_fringe(Ups::Vector{PLUpset},
         wits[k] = rec[4]
     end
 
-    P = _uptight_from_signatures(sigy, sigz)
+    if poset_kind == :signature
+        P = SignaturePoset(sigy, sigz)
+    elseif poset_kind == :dense
+        P = _uptight_from_signatures(sigy, sigz)
+    else
+        error("encode_from_PL_fringe: poset_kind must be :signature or :dense")
+    end
     m = length(Ups)
     r = length(Downs)
     Uhat, Dhat = _images_on_P(P, sigy, sigz, 1:m, 1:r)
@@ -2731,13 +2748,27 @@ function encode_from_PL_fringe(Ups::Vector{PLUpset},
     return P, H, pi
 end
 
-function encode_from_PL_fringe_with_tag(Ups, Downs, Phi_in, opts::EncodingOptions)
-    P, H, pi = encode_from_PL_fringe(Ups, Downs, Phi_in, opts)
+encode_from_PL_fringe(Ups::Vector{PLUpset},
+                      Downs::Vector{PLDownset},
+                      Phi_in::AbstractMatrix;
+                      opts::Union{EncodingOptions,Nothing}=nothing,
+                      poset_kind::Symbol = :signature) =
+    encode_from_PL_fringe(Ups, Downs, Phi_in, _resolve_encoding_opts(opts);
+                          poset_kind = poset_kind)
+
+function encode_from_PL_fringe_with_tag(Ups, Downs, Phi_in, opts::EncodingOptions; poset_kind::Symbol = :signature)
+    P, H, pi = encode_from_PL_fringe(Ups, Downs, Phi_in, opts; poset_kind = poset_kind)
     return P, H, pi, :PL
 end
 
+encode_from_PL_fringe_with_tag(Ups, Downs, Phi_in;
+                               opts::Union{EncodingOptions,Nothing}=nothing,
+                               poset_kind::Symbol = :signature) =
+    encode_from_PL_fringe_with_tag(Ups, Downs, Phi_in, _resolve_encoding_opts(opts);
+                                   poset_kind = poset_kind)
+
 """
-    encode_from_PL_fringes(Fs, opts::EncodingOptions) -> (P, Hs, pi)
+    encode_from_PL_fringes(Fs, opts::EncodingOptions; poset_kind=:signature) -> (P, Hs, pi)
 
 Build a single finite encoding poset `P` that simultaneously encodes all PL
 birth/death shapes appearing in the input `PLFringe` presentations.
@@ -2752,6 +2783,7 @@ This is the PL/R^n analog of `ZnEncoding.encode_from_flanges` for Z^n:
 - `opts.backend` must be `:auto` or `:pl`.
 - `opts.max_regions` caps region enumeration (default: 10_000).
 - `opts.strict_eps` controls strict inequality handling (default: STRICT_EPS_QQ).
+- `poset_kind`: `:signature` (structured, default) or `:dense` (materialized `FinitePoset`).
 
 Return values:
 - `P`  : the common encoding poset (a finite poset of regions)
@@ -2762,7 +2794,8 @@ Notes:
 - The returned `P` is a common refinement. Encoding a single PL fringe alone
   may yield a smaller poset. Use `encode_from_PL_fringe` for that case.
 """
-function encode_from_PL_fringes(Fs::AbstractVector{<:PLFringe}, opts::EncodingOptions)
+function encode_from_PL_fringes(Fs::AbstractVector{<:PLFringe}, opts::EncodingOptions;
+                                poset_kind::Symbol = :signature)
     if opts.backend != :auto && opts.backend != :pl
         error("encode_from_PL_fringes: EncodingOptions.backend must be :auto or :pl")
     end
@@ -2833,7 +2866,13 @@ function encode_from_PL_fringes(Fs::AbstractVector{<:PLFringe}, opts::EncodingOp
         wits[k] = rec[4]
     end
 
-    P  = _uptight_from_signatures(sigy, sigz)
+    if poset_kind == :signature
+        P = SignaturePoset(sigy, sigz)
+    elseif poset_kind == :dense
+        P = _uptight_from_signatures(sigy, sigz)
+    else
+        error("encode_from_PL_fringes: poset_kind must be :signature or :dense")
+    end
     pi = PLEncodingMap(regs[1].n, sigy, sigz, regs, wits)
 
     Hs = Vector{FiniteFringe.FringeModule{QQ}}(undef, length(Fs))
@@ -2846,23 +2885,52 @@ function encode_from_PL_fringes(Fs::AbstractVector{<:PLFringe}, opts::EncodingOp
     return P, Hs, pi
 end
 
+encode_from_PL_fringes(Fs::AbstractVector{<:PLFringe};
+                       opts::Union{EncodingOptions,Nothing}=nothing,
+                       poset_kind::Symbol = :signature) =
+    encode_from_PL_fringes(Fs, _resolve_encoding_opts(opts); poset_kind = poset_kind)
+
 # Tuple-friendly overload.
-function encode_from_PL_fringes(Fs::Tuple{Vararg{PLFringe}}, opts::EncodingOptions)
-    return encode_from_PL_fringes(collect(Fs), opts)
+function encode_from_PL_fringes(Fs::Tuple{Vararg{PLFringe}}, opts::EncodingOptions;
+                                poset_kind::Symbol = :signature)
+    return encode_from_PL_fringes(collect(Fs), opts; poset_kind = poset_kind)
 end
+
+encode_from_PL_fringes(Fs::Tuple{Vararg{PLFringe}};
+                       opts::Union{EncodingOptions,Nothing}=nothing,
+                       poset_kind::Symbol = :signature) =
+    encode_from_PL_fringes(collect(Fs), _resolve_encoding_opts(opts); poset_kind = poset_kind)
 
 # Small-arity overloads (avoid varargs-then-opts signatures).
-function encode_from_PL_fringes(F::PLFringe, opts::EncodingOptions)
-    return encode_from_PL_fringes(PLFringe[F], opts)
+function encode_from_PL_fringes(F::PLFringe, opts::EncodingOptions;
+                                poset_kind::Symbol = :signature)
+    return encode_from_PL_fringes(PLFringe[F], opts; poset_kind = poset_kind)
 end
 
-function encode_from_PL_fringes(F1::PLFringe, F2::PLFringe, opts::EncodingOptions)
-    return encode_from_PL_fringes(PLFringe[F1, F2], opts)
+encode_from_PL_fringes(F::PLFringe;
+                       opts::Union{EncodingOptions,Nothing}=nothing,
+                       poset_kind::Symbol = :signature) =
+    encode_from_PL_fringes(PLFringe[F], _resolve_encoding_opts(opts); poset_kind = poset_kind)
+
+function encode_from_PL_fringes(F1::PLFringe, F2::PLFringe, opts::EncodingOptions;
+                                poset_kind::Symbol = :signature)
+    return encode_from_PL_fringes(PLFringe[F1, F2], opts; poset_kind = poset_kind)
 end
 
-function encode_from_PL_fringes(F1::PLFringe, F2::PLFringe, F3::PLFringe, opts::EncodingOptions)
-    return encode_from_PL_fringes(PLFringe[F1, F2, F3], opts)
+encode_from_PL_fringes(F1::PLFringe, F2::PLFringe;
+                       opts::Union{EncodingOptions,Nothing}=nothing,
+                       poset_kind::Symbol = :signature) =
+    encode_from_PL_fringes(PLFringe[F1, F2], _resolve_encoding_opts(opts); poset_kind = poset_kind)
+
+function encode_from_PL_fringes(F1::PLFringe, F2::PLFringe, F3::PLFringe, opts::EncodingOptions;
+                                poset_kind::Symbol = :signature)
+    return encode_from_PL_fringes(PLFringe[F1, F2, F3], opts; poset_kind = poset_kind)
 end
+
+encode_from_PL_fringes(F1::PLFringe, F2::PLFringe, F3::PLFringe;
+                       opts::Union{EncodingOptions,Nothing}=nothing,
+                       poset_kind::Symbol = :signature) =
+    encode_from_PL_fringes(PLFringe[F1, F2, F3], _resolve_encoding_opts(opts); poset_kind = poset_kind)
 
 
 

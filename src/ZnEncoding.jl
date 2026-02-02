@@ -5,13 +5,18 @@ using SparseArrays
 using Random
 
 using ..CoreModules: QQ, AbstractPLikeEncodingMap, EncodingOptions
+
+@inline _resolve_encoding_opts(opts::Union{EncodingOptions,Nothing}) =
+    opts === nothing ? EncodingOptions() : opts
 using ..Stats: _wilson_interval
 
 import ..CoreModules: locate, dimension, representatives, axes_from_encoding
 import ..RegionGeometry: region_weights, region_adjacency
 using ..ExactQQ: colspaceQQ, solve_fullcolumnQQ
-using ..FiniteFringe: FinitePoset, cover_edges, Upset, Downset,
-                       upset_closure, downset_closure, intersects, FringeModule
+using ..FiniteFringe: AbstractPoset, FinitePoset, cover_edges, Upset, Downset,
+                       upset_closure, downset_closure, intersects, FringeModule,
+                       poset_equal
+import ..FiniteFringe: nvertices, leq, upset_indices, downset_indices
 using ..Modules: PModule
 using ..FlangeZn: Flange, IndFlat, IndInj, in_flat, in_inj
 
@@ -198,6 +203,68 @@ struct ZnEncodingMap <: AbstractPLikeEncodingMap
     sig_to_region::Dict{Tuple{Tuple,Tuple},Int}
 end
 
+"""
+    SignaturePoset(sig_y, sig_z)
+
+Structured poset on region signatures with order defined by componentwise inclusion:
+`i <= j` iff `sig_y[i] <= sig_y[j]` and `sig_z[i] <= sig_z[j]`.
+"""
+struct SignaturePoset <: AbstractPoset
+    sig_y::Vector{BitVector}
+    sig_z::Vector{BitVector}
+    n::Int
+end
+
+function SignaturePoset(sig_y::Vector{BitVector}, sig_z::Vector{BitVector})
+    length(sig_y) == length(sig_z) || error("SignaturePoset: sig_y and sig_z length mismatch")
+    return SignaturePoset(sig_y, sig_z, length(sig_y))
+end
+
+@inline function _sig_subset(a::BitVector, b::BitVector)::Bool
+    length(a) == length(b) || error("SignaturePoset: signature length mismatch")
+    ac = a.chunks
+    bc = b.chunks
+    nchunks = length(ac)
+    r = length(a) & 63
+    lastmask = (r == 0) ? typemax(UInt64) : (UInt64(1) << r) - 1
+    @inbounds for w in 1:nchunks
+        diff = ac[w] & ~bc[w]
+        if w == nchunks
+            diff &= lastmask
+        end
+        if diff != 0
+            return false
+        end
+    end
+    return true
+end
+
+nvertices(P::SignaturePoset) = P.n
+leq(P::SignaturePoset, i::Int, j::Int) =
+    _sig_subset(P.sig_y[i], P.sig_y[j]) && _sig_subset(P.sig_z[i], P.sig_z[j])
+
+function upset_indices(P::SignaturePoset, i::Int)
+    n = nvertices(P)
+    out = Int[]
+    @inbounds for j in 1:n
+        if leq(P, i, j)
+            push!(out, j)
+        end
+    end
+    return out
+end
+
+function downset_indices(P::SignaturePoset, i::Int)
+    n = nvertices(P)
+    out = Int[]
+    @inbounds for j in 1:n
+        if leq(P, j, i)
+            push!(out, j)
+        end
+    end
+    return out
+end
+
 # --- Core encoding-map interface ------------------------------------------------
 
 dimension(pi::ZnEncodingMap) = pi.n
@@ -361,7 +428,7 @@ function _uptight_from_signatures(sig_y::Vector{BitVector}, sig_z::Vector{BitVec
         leq[i,i] = true
     end
     for i in 1:rN, j in 1:rN
-        leq[i,j] = all(sig_y[i] .<= sig_y[j]) && all(sig_z[i] .<= sig_z[j])
+        leq[i,j] = _sig_subset(sig_y[i], sig_y[j]) && _sig_subset(sig_z[i], sig_z[j])
     end
     # Transitive closure (harmless even though inclusion is already transitive).
     for k in 1:rN, i in 1:rN, j in 1:rN
@@ -371,7 +438,7 @@ function _uptight_from_signatures(sig_y::Vector{BitVector}, sig_z::Vector{BitVec
 end
 
 "Images of the chosen generator upsets/downsets on the encoded poset P."
-function _images_on_P(P::FinitePoset,
+function _images_on_P(P::AbstractPoset,
                       sig_y::Vector{BitVector}, sig_z::Vector{BitVector},
                       flat_idxs::AbstractVector{<:Integer},
                       inj_idxs::AbstractVector{<:Integer})
@@ -382,12 +449,12 @@ function _images_on_P(P::FinitePoset,
 
     for (loc, i0) in enumerate(flat_idxs)
         i = Int(i0)
-        mask = BitVector([sig_y[t][i] == 1 for t in 1:P.n])
+        mask = BitVector([sig_y[t][i] == 1 for t in 1:nvertices(P)])
         Uhat[loc] = upset_closure(P, mask)
     end
     for (loc, j0) in enumerate(inj_idxs)
         j = Int(j0)
-        mask = BitVector([sig_z[t][j] == 0 for t in 1:P.n])
+        mask = BitVector([sig_z[t][j] == 0 for t in 1:nvertices(P)])
         Dhat[loc] = downset_closure(P, mask)
     end
     return Uhat, Dhat
@@ -407,7 +474,7 @@ end
 # ----------------------------- Public API --------------------------------------
 
 """
-    encode_poset_from_flanges(FGs, opts::EncodingOptions) -> (P, pi)
+    encode_poset_from_flanges(FGs, opts::EncodingOptions; poset_kind=:signature) -> (P, pi)
 
 Construct only the finite encoding poset `P` and classifier `pi : Z^n -> P`
 from the union of all flat and injective labels appearing in the given Z^n
@@ -419,6 +486,7 @@ Arguments
 - `opts`: an `EncodingOptions` (required).
   - `opts.backend` must be `:auto` or `:zn`.
   - `opts.max_regions` caps the number of distinct regions/signatures (default: 200_000).
+- `poset_kind`: `:signature` (structured, default) or `:dense` (materialized `FinitePoset`).
 
 This is the "finite encoding poset" step: extract critical coordinates, form the
 product decomposition into finitely many slabs, sample one representative per cell,
@@ -427,7 +495,8 @@ and quotient by equal (y,z)-signatures.
 Use `fringe_from_flange(P, pi, FG)` to push a flange presentation down to a finite
 fringe presentation on `P` without rebuilding the encoding.
 """
-function encode_poset_from_flanges(FGs::AbstractVector{<:Flange}, opts::EncodingOptions)
+function encode_poset_from_flanges(FGs::AbstractVector{<:Flange}, opts::EncodingOptions;
+                                   poset_kind::Symbol = :signature)
     if opts.backend != :auto && opts.backend != :zn
         error("encode_poset_from_flanges: EncodingOptions.backend must be :auto or :zn")
     end
@@ -486,7 +555,13 @@ function encode_poset_from_flanges(FGs::AbstractVector{<:Flange}, opts::Encoding
         end
     end
 
-    P = _uptight_from_signatures(sig_y, sig_z)
+    if poset_kind == :signature
+        P = SignaturePoset(sig_y, sig_z)
+    elseif poset_kind == :dense
+        P = _uptight_from_signatures(sig_y, sig_z)
+    else
+        error("encode_poset_from_flanges: poset_kind must be :signature or :dense")
+    end
 
     sig_to_region = Dict{Tuple{Tuple,Tuple},Int}()
     for t in 1:length(sig_y)
@@ -497,23 +572,53 @@ function encode_poset_from_flanges(FGs::AbstractVector{<:Flange}, opts::Encoding
     return P, pi
 end
 
+# Keyword-friendly overloads (opts may be nothing).
+encode_poset_from_flanges(FGs::AbstractVector{<:Flange};
+                          opts::Union{EncodingOptions,Nothing}=nothing,
+                          poset_kind::Symbol = :signature) =
+    encode_poset_from_flanges(FGs, _resolve_encoding_opts(opts); poset_kind = poset_kind)
+
 # Tuple-friendly overload.
-function encode_poset_from_flanges(FGs::Tuple{Vararg{Flange}}, opts::EncodingOptions)
-    return encode_poset_from_flanges(collect(FGs), opts)
+function encode_poset_from_flanges(FGs::Tuple{Vararg{Flange}}, opts::EncodingOptions;
+                                   poset_kind::Symbol = :signature)
+    return encode_poset_from_flanges(collect(FGs), opts; poset_kind = poset_kind)
 end
+
+encode_poset_from_flanges(FGs::Tuple{Vararg{Flange}};
+                          opts::Union{EncodingOptions,Nothing}=nothing,
+                          poset_kind::Symbol = :signature) =
+    encode_poset_from_flanges(collect(FGs), _resolve_encoding_opts(opts); poset_kind = poset_kind)
 
 # Small-arity overloads (avoid "varargs then opts" signatures).
-function encode_poset_from_flanges(FG::Flange, opts::EncodingOptions)
-    return encode_poset_from_flanges(Flange[FG], opts)
+function encode_poset_from_flanges(FG::Flange, opts::EncodingOptions;
+                                   poset_kind::Symbol = :signature)
+    return encode_poset_from_flanges(Flange[FG], opts; poset_kind = poset_kind)
 end
 
-function encode_poset_from_flanges(FG1::Flange, FG2::Flange, opts::EncodingOptions)
-    return encode_poset_from_flanges(Flange[FG1, FG2], opts)
+encode_poset_from_flanges(FG::Flange;
+                          opts::Union{EncodingOptions,Nothing}=nothing,
+                          poset_kind::Symbol = :signature) =
+    encode_poset_from_flanges(Flange[FG], _resolve_encoding_opts(opts); poset_kind = poset_kind)
+
+function encode_poset_from_flanges(FG1::Flange, FG2::Flange, opts::EncodingOptions;
+                                   poset_kind::Symbol = :signature)
+    return encode_poset_from_flanges(Flange[FG1, FG2], opts; poset_kind = poset_kind)
 end
 
-function encode_poset_from_flanges(FG1::Flange, FG2::Flange, FG3::Flange, opts::EncodingOptions)
-    return encode_poset_from_flanges(Flange[FG1, FG2, FG3], opts)
+encode_poset_from_flanges(FG1::Flange, FG2::Flange;
+                          opts::Union{EncodingOptions,Nothing}=nothing,
+                          poset_kind::Symbol = :signature) =
+    encode_poset_from_flanges(Flange[FG1, FG2], _resolve_encoding_opts(opts); poset_kind = poset_kind)
+
+function encode_poset_from_flanges(FG1::Flange, FG2::Flange, FG3::Flange, opts::EncodingOptions;
+                                   poset_kind::Symbol = :signature)
+    return encode_poset_from_flanges(Flange[FG1, FG2, FG3], opts; poset_kind = poset_kind)
 end
+
+encode_poset_from_flanges(FG1::Flange, FG2::Flange, FG3::Flange;
+                          opts::Union{EncodingOptions,Nothing}=nothing,
+                          poset_kind::Symbol = :signature) =
+    encode_poset_from_flanges(Flange[FG1, FG2, FG3], _resolve_encoding_opts(opts); poset_kind = poset_kind)
 
 """
     fringe_from_flange(P, pi, FG; strict=true) -> FringeModule{K}
@@ -539,10 +644,10 @@ Safety contract:
 - If `strict=false`, membership is tested only on region representatives `pi.reps[t]`.
   This is only correct if each label of `FG` is constant on each region of `pi`.
 """
-function fringe_from_flange(P::FinitePoset, pi::ZnEncodingMap, FG::Flange{K};
+function fringe_from_flange(P::AbstractPoset, pi::ZnEncodingMap, FG::Flange{K};
                             strict::Bool=true) where {K}
     FG.n == pi.n || error("fringe_from_flange: dimension mismatch (FG.n != pi.n)")
-    P.n == length(pi.sig_y) || error("fringe_from_flange: P incompatible with pi (P.n != length(pi.sig_y))")
+    nvertices(P) == length(pi.sig_y) || error("fringe_from_flange: P incompatible with pi (nvertices(P) != length(pi.sig_y))")
     length(pi.sig_y) == length(pi.sig_z) || error("fringe_from_flange: malformed pi (sig_y and sig_z lengths differ)")
 
     if strict
@@ -575,11 +680,11 @@ function fringe_from_flange(P::FinitePoset, pi::ZnEncodingMap, FG::Flange{K};
         Dhat = Vector{Downset}(undef, r)
 
         for i in 1:m
-            mask = BitVector([in_flat(FG.flats[i], pi.reps[t]) for t in 1:P.n])
+            mask = BitVector([in_flat(FG.flats[i], pi.reps[t]) for t in 1:nvertices(P)])
             Uhat[i] = upset_closure(P, mask)
         end
         for j in 1:r
-            mask = BitVector([in_inj(FG.injectives[j], pi.reps[t]) for t in 1:P.n])
+            mask = BitVector([in_inj(FG.injectives[j], pi.reps[t]) for t in 1:nvertices(P)])
             Dhat[j] = downset_closure(P, mask)
         end
 
@@ -1400,7 +1505,7 @@ end
 
 
 """
-    encode_from_flange(FG::Flange{K}, opts::EncodingOptions) -> (P, H, pi)
+    encode_from_flange(FG::Flange{K}, opts::EncodingOptions; poset_kind=:signature) -> (P, H, pi)
 
 Encode a single Z^n flange presentation `FG` to a finite encoding poset `P` and a
 finite-poset fringe module `H` on `P`, together with the classifier `pi : Z^n -> P`
@@ -1410,16 +1515,48 @@ finite-poset fringe module `H` on `P`, together with the classifier `pi : Z^n ->
 - `opts.backend` must be `:auto` or `:zn`.
 - `opts.max_regions` caps the number of distinct regions/signatures (default: 200_000).
 """
-function encode_from_flange(FG::Flange{K}, opts::EncodingOptions) where {K}
+function encode_from_flange(FG::Flange{K}, opts::EncodingOptions;
+                            poset_kind::Symbol = :signature) where {K}
     if opts.backend != :auto && opts.backend != :zn
         error("encode_from_flange: EncodingOptions.backend must be :auto or :zn")
     end
-    P, Hs, pi = encode_from_flanges(Flange{K}[FG], opts)
+    P, Hs, pi = encode_from_flanges(Flange{K}[FG], opts; poset_kind = poset_kind)
     return P, Hs[1], pi
 end
 
+encode_from_flange(FG::Flange{K};
+                   opts::Union{EncodingOptions,Nothing}=nothing,
+                   poset_kind::Symbol = :signature) where {K} =
+    encode_from_flange(FG, _resolve_encoding_opts(opts); poset_kind = poset_kind)
+
+function encode_from_flange(
+    P::AbstractPoset,
+    FG::Flange{K},
+    opts::EncodingOptions;
+    check_poset::Bool = true,
+    poset_kind::Symbol = :signature,
+) where {K}
+    if opts.backend != :auto && opts.backend != :zn
+        error("encode_from_flange: EncodingOptions.backend must be :auto or :zn")
+    end
+    P2, Hs, pi = encode_from_flanges(P, Flange{K}[FG], opts;
+                                     check_poset = check_poset, poset_kind = poset_kind)
+    return P2, Hs[1], pi
+end
+
+function encode_from_flange(
+    P::AbstractPoset,
+    FG::Flange{K};
+    opts::Union{EncodingOptions,Nothing}=nothing,
+    check_poset::Bool = true,
+    poset_kind::Symbol = :signature,
+) where {K}
+    return encode_from_flange(P, FG, _resolve_encoding_opts(opts);
+                              check_poset = check_poset, poset_kind = poset_kind)
+end
+
 """
-    encode_from_flanges(FGs, opts::EncodingOptions) -> (P, Hs, pi)
+    encode_from_flanges(FGs, opts::EncodingOptions; poset_kind=:signature) -> (P, Hs, pi)
 
 Common-encode several Z^n flange presentations to a single finite encoding poset `P`,
 and return the pushed-down fringe modules `Hs` on `P`.
@@ -1435,11 +1572,12 @@ Returns
 - `Hs` : a vector of `FiniteFringe.FringeModule{K}`, one per input flange
 - `pi` : classifier `pi : Z^n -> P` (as `ZnEncodingMap`)
 """
-function encode_from_flanges(FGs::AbstractVector{<:Flange{K}}, opts::EncodingOptions) where {K}
+function encode_from_flanges(FGs::AbstractVector{<:Flange{K}}, opts::EncodingOptions;
+                             poset_kind::Symbol = :signature) where {K}
     if opts.backend != :auto && opts.backend != :zn
         error("encode_from_flanges: EncodingOptions.backend must be :auto or :zn")
     end
-    P, pi = encode_poset_from_flanges(FGs, opts)
+    P, pi = encode_poset_from_flanges(FGs, opts; poset_kind = poset_kind)
 
     Hs = Vector{FringeModule{K}}(undef, length(FGs))
     for k in 1:length(FGs)
@@ -1448,24 +1586,162 @@ function encode_from_flanges(FGs::AbstractVector{<:Flange{K}}, opts::EncodingOpt
     return P, Hs, pi
 end
 
+encode_from_flanges(FGs::AbstractVector{<:Flange{K}};
+                    opts::Union{EncodingOptions,Nothing}=nothing,
+                    poset_kind::Symbol = :signature) where {K} =
+    encode_from_flanges(FGs, _resolve_encoding_opts(opts); poset_kind = poset_kind)
+
+"""
+    encode_from_flanges(P, FGs, opts::EncodingOptions; check_poset=true, poset_kind=:signature) -> (P, Hs, pi)
+
+Use a user-provided poset `P` (possibly structured) as the encoding poset.
+We still build the encoding map `pi` from the flanges; `check_poset=true`
+verifies that `P` has the same order as the internally constructed poset.
+"""
+function encode_from_flanges(
+    P::AbstractPoset,
+    FGs::AbstractVector{<:Flange{K}},
+    opts::EncodingOptions;
+    check_poset::Bool = true,
+    poset_kind::Symbol = :signature,
+) where {K}
+    if opts.backend != :auto && opts.backend != :zn
+        error("encode_from_flanges: EncodingOptions.backend must be :auto or :zn")
+    end
+    P0, pi = encode_poset_from_flanges(FGs, opts; poset_kind = poset_kind)
+    if check_poset
+        nvertices(P) == nvertices(P0) || error("encode_from_flanges: provided P has wrong size")
+        poset_equal(P, P0) || error("encode_from_flanges: provided P is not equal to the encoding poset")
+    end
+
+    Hs = Vector{FringeModule{K}}(undef, length(FGs))
+    for k in 1:length(FGs)
+        Hs[k] = fringe_from_flange(P, pi, FGs[k]; strict=true)
+    end
+    return P, Hs, pi
+end
+
+function encode_from_flanges(
+    P::AbstractPoset,
+    FGs::AbstractVector{<:Flange{K}};
+    opts::Union{EncodingOptions,Nothing}=nothing,
+    check_poset::Bool = true,
+    poset_kind::Symbol = :signature,
+) where {K}
+    return encode_from_flanges(P, FGs, _resolve_encoding_opts(opts);
+                               check_poset = check_poset, poset_kind = poset_kind)
+end
+
 # Tuple-friendly overload.
-function encode_from_flanges(FGs::Tuple{Vararg{Flange{K}}}, opts::EncodingOptions) where {K}
-    return encode_from_flanges(collect(FGs), opts)
+function encode_from_flanges(FGs::Tuple{Vararg{Flange{K}}}, opts::EncodingOptions;
+                             poset_kind::Symbol = :signature) where {K}
+    return encode_from_flanges(collect(FGs), opts; poset_kind = poset_kind)
+end
+
+encode_from_flanges(FGs::Tuple{Vararg{Flange{K}}};
+                    opts::Union{EncodingOptions,Nothing}=nothing,
+                    poset_kind::Symbol = :signature) where {K} =
+    encode_from_flanges(collect(FGs), _resolve_encoding_opts(opts); poset_kind = poset_kind)
+
+function encode_from_flanges(
+    P::AbstractPoset,
+    FGs::Tuple{Vararg{Flange{K}}},
+    opts::EncodingOptions;
+    check_poset::Bool = true,
+    poset_kind::Symbol = :signature,
+) where {K}
+    return encode_from_flanges(P, collect(FGs), opts;
+                               check_poset = check_poset, poset_kind = poset_kind)
+end
+
+function encode_from_flanges(
+    P::AbstractPoset,
+    FGs::Tuple{Vararg{Flange{K}}},
+    ;
+    opts::Union{EncodingOptions,Nothing}=nothing,
+    check_poset::Bool = true,
+    poset_kind::Symbol = :signature,
+) where {K}
+    return encode_from_flanges(P, collect(FGs), _resolve_encoding_opts(opts);
+                               check_poset = check_poset, poset_kind = poset_kind)
 end
 
 # Small-arity overloads (avoid "varargs then opts" signatures).
-function encode_from_flanges(FG1::Flange{K}, FG2::Flange{K}, opts::EncodingOptions) where {K}
-    return encode_from_flanges(Flange{K}[FG1, FG2], opts)
+function encode_from_flanges(FG1::Flange{K}, FG2::Flange{K}, opts::EncodingOptions;
+                             poset_kind::Symbol = :signature) where {K}
+    return encode_from_flanges(Flange{K}[FG1, FG2], opts; poset_kind = poset_kind)
 end
 
-function encode_from_flanges(FG1::Flange{K}, FG2::Flange{K}, FG3::Flange{K}, opts::EncodingOptions) where {K}
-    return encode_from_flanges(Flange{K}[FG1, FG2, FG3], opts)
+encode_from_flanges(FG1::Flange{K}, FG2::Flange{K};
+                    opts::Union{EncodingOptions,Nothing}=nothing,
+                    poset_kind::Symbol = :signature) where {K} =
+    encode_from_flanges(Flange{K}[FG1, FG2], _resolve_encoding_opts(opts); poset_kind = poset_kind)
+
+function encode_from_flanges(FG1::Flange{K}, FG2::Flange{K}, FG3::Flange{K}, opts::EncodingOptions;
+                             poset_kind::Symbol = :signature) where {K}
+    return encode_from_flanges(Flange{K}[FG1, FG2, FG3], opts; poset_kind = poset_kind)
+end
+
+encode_from_flanges(FG1::Flange{K}, FG2::Flange{K}, FG3::Flange{K};
+                    opts::Union{EncodingOptions,Nothing}=nothing,
+                    poset_kind::Symbol = :signature) where {K} =
+    encode_from_flanges(Flange{K}[FG1, FG2, FG3], _resolve_encoding_opts(opts); poset_kind = poset_kind)
+
+function encode_from_flanges(
+    P::AbstractPoset,
+    FG1::Flange{K},
+    FG2::Flange{K},
+    opts::EncodingOptions;
+    check_poset::Bool = true,
+    poset_kind::Symbol = :signature,
+) where {K}
+    return encode_from_flanges(P, Flange{K}[FG1, FG2], opts;
+                               check_poset = check_poset, poset_kind = poset_kind)
+end
+
+function encode_from_flanges(
+    P::AbstractPoset,
+    FG1::Flange{K},
+    FG2::Flange{K};
+    opts::Union{EncodingOptions,Nothing}=nothing,
+    check_poset::Bool = true,
+    poset_kind::Symbol = :signature,
+) where {K}
+    return encode_from_flanges(P, Flange{K}[FG1, FG2], _resolve_encoding_opts(opts);
+                               check_poset = check_poset, poset_kind = poset_kind)
+end
+
+function encode_from_flanges(
+    P::AbstractPoset,
+    FG1::Flange{K},
+    FG2::Flange{K},
+    FG3::Flange{K},
+    opts::EncodingOptions;
+    check_poset::Bool = true,
+    poset_kind::Symbol = :signature,
+) where {K}
+    return encode_from_flanges(P, Flange{K}[FG1, FG2, FG3], opts;
+                               check_poset = check_poset, poset_kind = poset_kind)
+end
+
+function encode_from_flanges(
+    P::AbstractPoset,
+    FG1::Flange{K},
+    FG2::Flange{K},
+    FG3::Flange{K};
+    opts::Union{EncodingOptions,Nothing}=nothing,
+    check_poset::Bool = true,
+    poset_kind::Symbol = :signature,
+) where {K}
+    return encode_from_flanges(P, Flange{K}[FG1, FG2, FG3], _resolve_encoding_opts(opts);
+                               check_poset = check_poset, poset_kind = poset_kind)
 end
 
 
 
 
 export ZnEncodingMap,
+       SignaturePoset,
        encode_poset_from_flanges,
        fringe_from_flange,
        encode_from_flange,

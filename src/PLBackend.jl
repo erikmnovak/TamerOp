@@ -21,7 +21,12 @@ module PLBackend
 # =============================================================================
 
 using ..FiniteFringe
+import ..FiniteFringe: AbstractPoset, nvertices
+import ..ZnEncoding: SignaturePoset
 using ..CoreModules: QQ, AbstractPLikeEncodingMap, EncodingOptions
+
+@inline _resolve_encoding_opts(opts::Union{EncodingOptions,Nothing}) =
+    opts === nothing ? EncodingOptions() : opts
 using Random
 using LinearAlgebra
 
@@ -1807,12 +1812,13 @@ function _uptight_from_signatures(sig_y::Vector{BitVector}, sig_z::Vector{BitVec
 end
 
 # Push the original generators forward to the signature poset.
-function _images_on_P(P::FiniteFringe.FinitePoset,
+function _images_on_P(P::AbstractPoset,
     sig_y::Vector{BitVector},
     sig_z::Vector{BitVector})
 
     N = length(sig_y)
     N == length(sig_z) || error("_images_on_P: length mismatch")
+    nvertices(P) == N || error("_images_on_P: poset size mismatch")
     m = isempty(sig_y) ? 0 : length(sig_y[1])
     r = isempty(sig_z) ? 0 : length(sig_z[1])
 
@@ -1858,7 +1864,7 @@ function _monomialize_phi(Phi_in::AbstractMatrix{QQ}, Uhat, Dhat)
 end
 
 """
-    encode_fringe_boxes(Ups, Downs, Phi, opts::EncodingOptions) -> (P, H, pi)
+    encode_fringe_boxes(Ups, Downs, Phi, opts::EncodingOptions; poset_kind=:signature) -> (P, H, pi)
 
 Encode a box-generated fringe module on `R^n` into a finite poset model.
 
@@ -1869,6 +1875,7 @@ Inputs
 - `opts::EncodingOptions`: required.
   - `opts.backend` must be `:auto` or `:pl_backend` (synonyms `:plbackend`, `:boxes` are accepted).
   - `opts.max_regions` caps the number of grid cells in the axis grid (default: 200_000).
+- `poset_kind`: `:signature` (structured, default) or `:dense` (materialized `FinitePoset`).
 
 Returns
 - `P`: the finite encoding poset
@@ -1878,7 +1885,8 @@ Returns
 function encode_fringe_boxes(Ups::Vector{BoxUpset},
                              Downs::Vector{BoxDownset},
                              Phi_in::AbstractMatrix{QQ},
-                             opts::EncodingOptions=EncodingOptions())
+                             opts::EncodingOptions=EncodingOptions();
+                             poset_kind::Symbol = :signature)
     if opts.backend != :auto && opts.backend != :pl_backend &&
         opts.backend != :pl_backend_boxes && opts.backend != :boxes && opts.backend != :axis
         error("encode_fringe_boxes: EncodingOptions.backend must be :auto or :pl_backend (or :pl_backend_boxes/:boxes/:axis)")
@@ -1957,7 +1965,13 @@ function encode_fringe_boxes(Ups::Vector{BoxUpset},
     end
 
     # Build the region poset on distinct signatures, and push the module to it.
-    P = _uptight_from_signatures(sig_y, sig_z)
+    if poset_kind == :signature
+        P = SignaturePoset(sig_y, sig_z)
+    elseif poset_kind == :dense
+        P = _uptight_from_signatures(sig_y, sig_z)
+    else
+        error("encode_fringe_boxes: poset_kind must be :signature or :dense")
+    end
     Uhat, Dhat = _images_on_P(P, sig_y, sig_z)
     Phi = _monomialize_phi(Phi_in, Uhat, Dhat)
     H = FiniteFringe.FringeModule{QQ}(P, Uhat, Dhat, Phi)
@@ -1978,27 +1992,49 @@ function encode_fringe_boxes(Ups::Vector{BoxUpset},
     return P, H, pi
 end
 
+encode_fringe_boxes(Ups::Vector{BoxUpset},
+                    Downs::Vector{BoxDownset},
+                    Phi_in::AbstractMatrix{QQ};
+                    opts::Union{EncodingOptions,Nothing}=nothing,
+                    poset_kind::Symbol = :signature) =
+    encode_fringe_boxes(Ups, Downs, Phi_in, _resolve_encoding_opts(opts); poset_kind = poset_kind)
+
 
 # Convenience overload: Phi defaults to all-ones.
 function encode_fringe_boxes(Ups::Vector{BoxUpset}, 
                              Downs::Vector{BoxDownset}, 
-                             opts::EncodingOptions=EncodingOptions())
+                             opts::EncodingOptions=EncodingOptions();
+                             poset_kind::Symbol = :signature)
     m = length(Ups)
     r = length(Downs)
     Phi = reshape(ones(QQ, r * m), r, m)
-    return encode_fringe_boxes(Ups, Downs, Phi, opts)
+    return encode_fringe_boxes(Ups, Downs, Phi, opts; poset_kind = poset_kind)
 end
+
+encode_fringe_boxes(Ups::Vector{BoxUpset},
+                    Downs::Vector{BoxDownset};
+                    opts::Union{EncodingOptions,Nothing}=nothing,
+                    poset_kind::Symbol = :signature) =
+    encode_fringe_boxes(Ups, Downs, _resolve_encoding_opts(opts); poset_kind = poset_kind)
 
 # Convenience overload: accept Phi as a length (r*m) vector.
 function encode_fringe_boxes(Ups::Vector{BoxUpset},
                              Downs::Vector{BoxDownset},
                              Phi_vec::AbstractVector{QQ},
-                             opts::EncodingOptions=EncodingOptions())
+                             opts::EncodingOptions=EncodingOptions();
+                             poset_kind::Symbol = :signature)
     m = length(Ups)
     r = length(Downs)
     length(Phi_vec) == r * m || error("Phi vector has wrong length")
     Phi = reshape(Phi_vec, r, m)
-    return encode_fringe_boxes(Ups, Downs, Phi, opts)
+    return encode_fringe_boxes(Ups, Downs, Phi, opts; poset_kind = poset_kind)
 end
+
+encode_fringe_boxes(Ups::Vector{BoxUpset},
+                    Downs::Vector{BoxDownset},
+                    Phi_vec::AbstractVector{QQ};
+                    opts::Union{EncodingOptions,Nothing}=nothing,
+                    poset_kind::Symbol = :signature) =
+    encode_fringe_boxes(Ups, Downs, Phi_vec, _resolve_encoding_opts(opts); poset_kind = poset_kind)
 
 end # module PLBackend

@@ -53,7 +53,7 @@ using Test
     # Resolution wrapper should use the same encoded poset as explicit encoding.
     enc1 = DF.encode_pmodule_from_PL_fringe(F1, enc_pl)
     res_wrap = DF.projective_resolution_Rn(F1, enc_pl, res3; return_encoding=true)
-    @test res_wrap.P.leq == enc1.P.leq
+    @test FF.poset_equal(res_wrap.P, enc1.P)
     @test DF.betti_table(res_wrap.res) == DF.betti_table(DF.projective_resolution(enc1.M, res3))
 
     # Minimal Betti data: obtain it by requesting a checked-minimal resolution.
