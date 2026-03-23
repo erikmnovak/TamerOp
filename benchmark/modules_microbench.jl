@@ -33,21 +33,21 @@ using LinearAlgebra
 
 function _load_posetmodules_for_modules_bench()
     try
-        @eval using PosetModules
+        @eval using TamerOp
         return :package
     catch
     end
 
-    src_entry = joinpath(@__DIR__, "..", "src", "PosetModules.jl")
+    src_entry = joinpath(@__DIR__, "..", "src", "TamerOp.jl")
     try
         include(src_entry)
-        @eval using .PosetModules
+        @eval using .TamerOp
         return :source_full
     catch
     end
 
     # Last-resort fallback for module-only benchmarking when unrelated files fail to load.
-    @eval module PosetModules
+    @eval module TamerOp
         include(joinpath(@__DIR__, "..", "src", "CoreModules.jl"))
         include(joinpath(@__DIR__, "..", "src", "Options.jl"))
         include(joinpath(@__DIR__, "..", "src", "EncodingCore.jl"))
@@ -55,24 +55,24 @@ function _load_posetmodules_for_modules_bench()
         include(joinpath(@__DIR__, "..", "src", "FiniteFringe.jl"))
         include(joinpath(@__DIR__, "..", "src", "Modules.jl"))
         module Advanced
-            const CoreModules = Main.PosetModules.CoreModules
-            const Options = Main.PosetModules.Options
-            const EncodingCore = Main.PosetModules.EncodingCore
-            const FiniteFringe = Main.PosetModules.FiniteFringe
-            const Modules = Main.PosetModules.Modules
+            const CoreModules = Main.TamerOp.CoreModules
+            const Options = Main.TamerOp.Options
+            const EncodingCore = Main.TamerOp.EncodingCore
+            const FiniteFringe = Main.TamerOp.FiniteFringe
+            const Modules = Main.TamerOp.Modules
         end
     end
-    @eval using .PosetModules
+    @eval using .TamerOp
     return :source_modules_only
 end
 
 const _PM_LOAD_MODE = _load_posetmodules_for_modules_bench()
 
-const PM = PosetModules.Advanced
-const MD = PM.Modules
-const FF = PM.FiniteFringe
-const CM = PM.CoreModules
-const FL = PosetModules.FieldLinAlg
+const TO = TamerOp.Advanced
+const MD = TO.Modules
+const FF = TO.FiniteFringe
+const CM = TO.CoreModules
+const FL = TamerOp.FieldLinAlg
 
 function _parse_int_arg(args, key::String, default::Int)
     for a in args
@@ -928,14 +928,14 @@ function main(args=ARGS)
             b_route_old = _bench("direct_sum route decision old", () -> begin
                 x = false
                 @inbounds for _ in 1:2000
-                    x ⊻= _direct_sum_sparse_preferred_old_emulated(As, Bs)
+                    x = xor(x, _direct_sum_sparse_preferred_old_emulated(As, Bs))
                 end
                 x
             end; reps=reps)
             b_route_new = _bench("direct_sum route decision new", () -> begin
                 x = false
                 @inbounds for _ in 1:2000
-                    x ⊻= MD._direct_sum_sparse_preferred(As, Bs)
+                    x = xor(x, MD._direct_sum_sparse_preferred(As, Bs))
                 end
                 x
             end; reps=reps)

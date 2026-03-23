@@ -1,0 +1,3 @@
+regime,invariant_kind,degree,n_cases,warm_geomean_slowdown_tamer_over_multipers,cold_geomean_slowdown_tamer_over_multipers
+alpha_parity,euler_signed_measure,0,3,0.039586,0.037838
+cubical_parity,euler_signed_measure,0,3,0.030527,0.037378

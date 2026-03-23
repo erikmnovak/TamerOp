@@ -2,4 +2,4 @@ Wrote case-level comparison: benchmark/ingestion_compare_harness/comparison_late
 Wrote summary comparison: benchmark/ingestion_compare_harness/comparison_summary_latest_recovery.csv
 
 claim_matching     warm_geomean=0.630756 cold_geomean=2.902168 n=3
-normalized_parity  warm_geomean=0.218108 cold_geomean=0.495320 n=6
+rips_parity  warm_geomean=0.218108 cold_geomean=0.495320 n=6

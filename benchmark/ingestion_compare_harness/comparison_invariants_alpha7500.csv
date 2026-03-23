@@ -1,0 +1,2 @@
+case_id,regime,invariant_kind,degree,n_points,ambient_dim,max_dim,tamer_cold_ms,multipers_cold_ms,cold_slowdown_tamer_over_multipers,tamer_warm_median_ms,multipers_warm_median_ms,warm_slowdown_tamer_over_multipers,tamer_output_term_count,multipers_output_term_count,tamer_output_abs_mass,multipers_output_abs_mass,parity_status,parity_reason,summary_included
+inv_alpha_n15000_d2_md2_s11,alpha_parity,euler_signed_measure,0,7500,2,2,31.607114999999997,739.2763590005416,0.042754,26.320674500000003,765.5136299999867,0.034383,22102,22102,29601.0,29601.0,matched,matched,yes

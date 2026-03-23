@@ -17,12 +17,12 @@ import tomllib
 import numpy as np
 
 
-def _load_cases(path: Path) -> list[dict[str, Any]]:
+def _load_contract(path: Path) -> dict[str, Any]:
     raw = tomllib.loads(path.read_text(encoding="utf-8"))
     cases = raw.get("cases", [])
     if not isinstance(cases, list) or not cases:
         raise ValueError(f"No cases found in {path}")
-    return cases
+    return raw
 
 
 def _gaussian_shell(n: int, d: int, seed: int) -> np.ndarray:
@@ -78,13 +78,52 @@ def _deterministic_landmarks(n: int, m: int, seed: int) -> list[int]:
     return [int(i) + 1 for i in idx]
 
 
-def _manifest_toml(meta: dict[str, Any], cases: list[dict[str, Any]]) -> str:
+def _format_float(x: float) -> str:
+    return format(float(x), ".17g")
+
+
+def _format_float_vec(xs: list[float]) -> str:
+    return "[" + ", ".join(_format_float(x) for x in xs) + "]"
+
+
+def _format_float_mat(rows: list[list[float]]) -> str:
+    return "[" + ", ".join(_format_float_vec(row) for row in rows) + "]"
+
+
+def _slice_query_for_case(case: dict[str, Any], points: np.ndarray) -> tuple[list[list[float]], list[list[float]]] | None:
+    regime = str(case["regime"])
+    if regime == "rips_parity":
+        radius = float(case["parity_radius"])
+        directions = [[1.0]]
+        offsets = [[0.0], [0.25 * radius], [0.5 * radius]]
+        return directions, offsets
+    if regime == "rips_lowerstar_parity":
+        radius = float(case["lowerstar_radius"])
+        coord1 = np.asarray(points[:, 0], dtype=np.float64)
+        ylo = float(np.min(coord1))
+        directions = [[1.0, 0.0], [1.0, 0.5], [1.0, 1.0]]
+        offsets = [[0.0, ylo], [0.25 * radius, ylo], [0.5 * radius, ylo]]
+        return directions, offsets
+    return None
+
+
+def _manifest_toml(
+    meta: dict[str, Any],
+    cases: list[dict[str, Any]],
+    invariant_eligibility: dict[str, list[str]] | None = None,
+) -> str:
     out: list[str] = []
     out.append("[meta]")
     out.append(f'version = {int(meta["version"])}')
     out.append(f'cases_file = "{meta["cases_file"]}"')
     out.append(f'scale = {meta["scale"]}')
     out.append("")
+    if invariant_eligibility:
+        out.append("[invariant_eligibility]")
+        for regime in sorted(invariant_eligibility):
+            vals = ", ".join(f'"{v}"' for v in invariant_eligibility[regime])
+            out.append(f"{regime} = [{vals}]")
+        out.append("")
     for c in cases:
         out.append("[[cases]]")
         out.append(f'id = "{c["id"]}"')
@@ -136,6 +175,10 @@ def _manifest_toml(meta: dict[str, Any], cases: list[dict[str, Any]]) -> str:
         if "landmarks" in c:
             lms = ", ".join(str(int(x)) for x in c["landmarks"])
             out.append(f"landmarks = [{lms}]")
+        if "slice_directions" in c:
+            out.append(f'slice_directions = {_format_float_mat(c["slice_directions"])}')
+        if "slice_offsets" in c:
+            out.append(f'slice_offsets = {_format_float_mat(c["slice_offsets"])}')
         if "image_side" in c:
             out.append(f'image_side = {int(c["image_side"])}')
         out.append("")
@@ -153,7 +196,20 @@ def main() -> None:
     if args.scale <= 0.0:
         raise ValueError("--scale must be > 0.")
 
-    cases = _load_cases(args.cases)
+    contract = _load_contract(args.cases)
+    cases = contract["cases"]
+    raw_eligibility = contract.get("invariant_eligibility", {})
+    if raw_eligibility is None:
+        raw_eligibility = {}
+    if not isinstance(raw_eligibility, dict):
+        raise ValueError("invariant_eligibility must be a table mapping regime names to string arrays.")
+    invariant_eligibility: dict[str, list[str]] = {}
+    for regime, vals in raw_eligibility.items():
+        if not isinstance(regime, str):
+            raise ValueError("invariant_eligibility keys must be strings.")
+        if not isinstance(vals, list) or not all(isinstance(v, str) for v in vals):
+            raise ValueError(f"invariant_eligibility[{regime!r}] must be an array of strings.")
+        invariant_eligibility[regime] = vals
     out_dir = args.out_dir
     out_dir.mkdir(parents=True, exist_ok=True)
 
@@ -204,7 +260,7 @@ def main() -> None:
             manifest_cases[-1]["claim_policy"] = "radius_k"
             manifest_cases[-1]["claim_k"] = claim_k
             manifest_cases[-1]["claim_radius"] = claim_radius
-        elif regime == "normalized_parity":
+        elif regime == "rips_parity":
             # Force an explicit shared threshold policy for both tools so this
             # regime remains a cleaner algorithmic comparison.
             parity_k = 16
@@ -245,6 +301,12 @@ def main() -> None:
             manifest_cases[-1]["landmark_radius"] = landmark_radius
             manifest_cases[-1]["landmarks"] = landmarks
 
+        slice_query = _slice_query_for_case(manifest_cases[-1], x)
+        if slice_query is not None:
+            directions, offsets = slice_query
+            manifest_cases[-1]["slice_directions"] = directions
+            manifest_cases[-1]["slice_offsets"] = offsets
+
     manifest = _manifest_toml(
         {
             "version": 1,
@@ -252,6 +314,7 @@ def main() -> None:
             "scale": float(args.scale),
         },
         manifest_cases,
+        invariant_eligibility,
     )
     manifest_path = out_dir / "manifest.toml"
     manifest_path.write_text(manifest, encoding="utf-8")

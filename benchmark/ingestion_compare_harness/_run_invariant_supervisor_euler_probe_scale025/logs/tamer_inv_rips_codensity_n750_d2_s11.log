@@ -1,0 +1,5 @@
+[profile] desktop (reps=4, trim_between_reps=true, trim_between_cases=true)
+NearestNeighbors package loaded: true
+Invariants: all
+inv_rips_codensity_n750_d2_s11   inv=euler_signed_measure cold_ms=4580.086 warm_med_ms=4027.465 terms=1637
+Wrote tamer invariant results: benchmark/ingestion_compare_harness/_run_invariant_supervisor_euler_probe_scale025/cases/tamer/inv_rips_codensity_n750_d2_s11.csv

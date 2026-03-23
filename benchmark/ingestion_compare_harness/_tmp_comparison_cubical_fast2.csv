@@ -1,3 +1,0 @@
-case_id,regime,n_points,ambient_dim,max_dim,tamer_cold_ms,multipers_cold_ms,cold_slowdown_tamer_over_multipers,tamer_warm_median_ms,multipers_warm_median_ms,warm_slowdown_tamer_over_multipers,tamer_simplex_count,multipers_simplex_count
-cubical_side32_s11,cubical_parity,1024,2,2,5340.241925,6.259169022087008,853.187045,0.628922,5.553301976760849,0.113252,3969,
-cubical_side40_s17,cubical_parity,1600,2,2,0.788623,8.11078998958692,0.097231,0.902769,8.166707499185577,0.110543,6241,

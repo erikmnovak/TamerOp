@@ -1,6 +1,6 @@
 using Test
 
-const FEA = PosetModules.Featurizers
+const FEA = TamerOp.Featurizers
 
 # In include-based test harnesses (no package-extension autoload), manually
 # load optional table/IO extensions when their deps are present.
@@ -34,7 +34,7 @@ end
 
     Ups = [PLB.BoxUpset([0.0, -10.0]), PLB.BoxUpset([1.0, -10.0])]
     Downs = PLB.BoxDownset[]
-    opts_enc = PM.EncodingOptions(field=field)
+    opts_enc = TO.EncodingOptions(field=field)
     P, H, pi = PLB.encode_fringe_boxes(Ups, Downs, opts_enc)
 
     r2 = EC.locate(pi, [0.5, 0.0])
@@ -43,10 +43,10 @@ end
     M23 = IR.pmodule_from_fringe(one_by_one_fringe(P, FF.principal_upset(P, r2), FF.principal_downset(P, r3), 1; field=field))
     M3  = IR.pmodule_from_fringe(one_by_one_fringe(P, FF.principal_upset(P, r3), FF.principal_downset(P, r3), 1; field=field))
 
-    enc23 = PM.EncodingResult(P, M23, pi)
-    enc3 = PM.EncodingResult(P, M3, pi)
+    enc23 = TO.EncodingResult(P, M23, pi)
+    enc3 = TO.EncodingResult(P, M3, pi)
     samples = [enc23, enc3]
-    opts_inv = PM.InvariantOptions(box=([-1.0, -1.0], [2.0, 1.0]), strict=false)
+    opts_inv = TO.InvariantOptions(box=([-1.0, -1.0], [2.0, 1.0]), strict=false)
 
     function manual_barcode_window(bar, window)
         window !== nothing && return (Float64(window[1]), Float64(window[2]))
@@ -211,24 +211,24 @@ end
         return out
     end
 
-    lspec = PM.LandscapeSpec(
+    lspec = TO.LandscapeSpec(
         directions=[[1.0, 1.0]],
         offsets=[[0.0, 0.0]],
         tgrid=collect(0.0:0.5:3.0),
         kmax=2,
         strict=false,
     )
-    lv = PM.transform(lspec, enc23; opts=opts_inv, threaded=false)
-    @test length(lv) == PM.nfeatures(lspec)
-    @test length(PM.feature_names(lspec)) == PM.nfeatures(lspec)
-    lax = PM.feature_axes(lspec)
+    lv = TO.transform(lspec, enc23; opts=opts_inv, threaded=false)
+    @test length(lv) == TO.nfeatures(lspec)
+    @test length(TO.feature_names(lspec)) == TO.nfeatures(lspec)
+    lax = TO.feature_axes(lspec)
     @test lax.k == collect(1:lspec.kmax)
     @test lax.t == lspec.tgrid
     @test lax.aggregate == lspec.aggregate
     @test FEA.supports(lspec, enc23)
     @test !FEA.supports(lspec, M23)
 
-    pispec = PM.PersistenceImageSpec(
+    pispec = TO.PersistenceImageSpec(
         directions=[[1.0, 1.0]],
         offsets=[[0.0, 0.0]],
         xgrid=collect(0.0:0.5:2.0),
@@ -236,13 +236,13 @@ end
         sigma=0.35,
         strict=false,
     )
-    piv = PM.transform(pispec, enc23; opts=opts_inv, threaded=false)
-    @test length(piv) == PM.nfeatures(pispec)
-    piax = PM.feature_axes(pispec)
+    piv = TO.transform(pispec, enc23; opts=opts_inv, threaded=false)
+    @test length(piv) == TO.nfeatures(pispec)
+    piax = TO.feature_axes(pispec)
     @test piax.x == pispec.xgrid
     @test piax.y == pispec.ygrid
 
-    mlspec = PM.MPLandscapeSpec(
+    mlspec = TO.MPLandscapeSpec(
         directions=[[1.0, 1.0]],
         offsets=[[0.0, 0.0]],
         tgrid=collect(0.0:0.5:3.0),
@@ -250,9 +250,9 @@ end
         strict=false,
         direction_weight=:uniform,
     )
-    mlv = PM.transform(mlspec, enc23; opts=opts_inv, threaded=false)
-    @test length(mlv) == PM.nfeatures(mlspec)
-    mlax = PM.feature_axes(mlspec)
+    mlv = TO.transform(mlspec, enc23; opts=opts_inv, threaded=false)
+    @test length(mlv) == TO.nfeatures(mlspec)
+    mlax = TO.feature_axes(mlspec)
     @test mlax.k == collect(1:mlspec.kmax)
     @test mlax.t == mlspec.tgrid
     mlopts = OPT.InvariantOptions(
@@ -288,46 +288,46 @@ end
                           for i in 1:size(mlobj.values, 1)]
     @test isapprox(mlv, ml_expected; atol=1e-12, rtol=0.0)
 
-    espec = PM.EulerSurfaceSpec(
+    espec = TO.EulerSurfaceSpec(
         axes=([-1.0, 0.0, 1.0, 2.0], [-1.0, 0.0, 1.0]),
         axes_policy=:as_given,
         strict=false,
     )
-    ev = PM.transform(espec, enc23; opts=opts_inv, threaded=false)
-    @test length(ev) == PM.nfeatures(espec)
-    eax = PM.feature_axes(espec)
+    ev = TO.transform(espec, enc23; opts=opts_inv, threaded=false)
+    @test length(ev) == TO.nfeatures(espec)
+    eax = TO.feature_axes(espec)
     @test eax.axis_1 == espec.axes[1]
     @test eax.axis_2 == espec.axes[2]
     @test eax.axes_policy == espec.axes_policy
 
-    rspec = PM.RankGridSpec(nvertices=PM.nvertices(P), store_zeros=true)
-    rv = PM.transform(rspec, enc23; opts=opts_inv, threaded=false)
-    @test length(rv) == PM.nfeatures(rspec)
-    rax = PM.feature_axes(rspec)
-    @test length(rax.a) == PM.nvertices(P)
-    @test length(rax.b) == PM.nvertices(P)
+    rspec = TO.RankGridSpec(nvertices=TO.nvertices(P), store_zeros=true)
+    rv = TO.transform(rspec, enc23; opts=opts_inv, threaded=false)
+    @test length(rv) == TO.nfeatures(rspec)
+    rax = TO.feature_axes(rspec)
+    @test length(rax.a) == TO.nvertices(P)
+    @test length(rax.b) == TO.nvertices(P)
 
-    rhspec = PM.RestrictedHilbertSpec(nvertices=PM.nvertices(P))
+    rhspec = TO.RestrictedHilbertSpec(nvertices=TO.nvertices(P))
     @test FEA.supports(rhspec, enc23)
-    rhv = PM.transform(rhspec, enc23; opts=opts_inv, threaded=false)
-    @test length(rhv) == PM.nfeatures(rhspec)
+    rhv = TO.transform(rhspec, enc23; opts=opts_inv, threaded=false)
+    @test length(rhv) == TO.nfeatures(rhspec)
     @test rhv == Float64.(Inv.restricted_hilbert(M23))
-    rhax = PM.feature_axes(rhspec)
-    @test rhax.vertex == collect(1:PM.nvertices(P))
+    rhax = TO.feature_axes(rhspec)
+    @test rhax.vertex == collect(1:TO.nvertices(P))
 
-    sspec = PM.SlicedBarcodeSpec(
+    sspec = TO.SlicedBarcodeSpec(
         directions=[[1.0, 1.0]],
         offsets=[[0.0, 0.0]],
         featurizer=:summary,
         strict=false,
     )
-    sv = PM.transform(sspec, enc23; opts=opts_inv, threaded=false)
-    @test length(sv) == PM.nfeatures(sspec)
-    sax = PM.feature_axes(sspec)
+    sv = TO.transform(sspec, enc23; opts=opts_inv, threaded=false)
+    @test length(sv) == TO.nfeatures(sspec)
+    sax = TO.feature_axes(sspec)
     @test sax.aggregate == sspec.aggregate
     @test sax.stat == Symbol.(sspec.summary_fields)
 
-    topkspec = PM.BarcodeTopKSpec(
+    topkspec = TO.BarcodeTopKSpec(
         directions=[[1.0, 1.0], [1.0, 0.0]],
         offsets=[[0.0, 0.0], [0.5, 0.0]],
         k=2,
@@ -336,7 +336,7 @@ end
         strict=false,
     )
     @test FEA.supports(topkspec, enc23)
-    topkv = PM.transform(topkspec, enc23; opts=opts_inv, threaded=false)
+    topkv = TO.transform(topkspec, enc23; opts=opts_inv, threaded=false)
     topk_data = Inv.slice_barcodes(
         M23,
         enc23.pi;
@@ -361,10 +361,10 @@ end
         topkspec.aggregate,
     )
     @test topkv == topk_expected
-    @test length(topkv) == PM.nfeatures(topkspec)
-    @test PM.feature_axes(topkspec).source == :slice
+    @test length(topkv) == TO.nfeatures(topkspec)
+    @test TO.feature_axes(topkspec).source == :slice
 
-    topkspec_fibered = PM.BarcodeTopKSpec(
+    topkspec_fibered = TO.BarcodeTopKSpec(
         directions=topkspec.directions,
         offsets=topkspec.offsets,
         k=topkspec.k,
@@ -374,7 +374,7 @@ end
         strict=false,
     )
     @test FEA.supports(topkspec_fibered, enc23)
-    topkv_fibered = PM.transform(topkspec_fibered, enc23; opts=opts_inv, threaded=false)
+    topkv_fibered = TO.transform(topkspec_fibered, enc23; opts=opts_inv, threaded=false)
     fcache = Inv.fibered_barcode_cache_2d(
         M23,
         enc23.pi,
@@ -402,7 +402,7 @@ end
     )
     @test topkv_fibered == topk_expected_fibered
 
-    bsumspec = PM.BarcodeSummarySpec(
+    bsumspec = TO.BarcodeSummarySpec(
         directions=topkspec.directions,
         offsets=topkspec.offsets,
         aggregate=:mean,
@@ -410,7 +410,7 @@ end
         strict=false,
     )
     @test FEA.supports(bsumspec, enc23)
-    bsumv = PM.transform(bsumspec, enc23; opts=opts_inv, threaded=false)
+    bsumv = TO.transform(bsumspec, enc23; opts=opts_inv, threaded=false)
     bsum_expected = aggregate_barcode_oracle(
         topk_data.barcodes,
         topk_data.weights,
@@ -424,24 +424,24 @@ end
         bsumspec.aggregate,
     )
     @test isapprox(bsumv, bsum_expected; atol=1e-12, rtol=0.0)
-    @test PM.feature_axes(bsumspec).field == collect(bsumspec.fields)
+    @test TO.feature_axes(bsumspec).field == collect(bsumspec.fields)
 
-    pmspec = PM.PointSignedMeasureSpec(ndims=2, k=2, coords=:values)
-    pm_direct = Inv.PointSignedMeasure(
+    pmspec = TO.PointSignedMeasureSpec(ndims=2, k=2, coords=:values)
+    pm_direct = SM.PointSignedMeasure(
         (Float64[0.0, 1.0], Float64[10.0, 20.0]),
         [(2, 1), (1, 2), (2, 2)],
         [3.0, -5.0, 1.0],
     )
     @test FEA.supports(pmspec, pm_direct)
-    pmv = PM.transform(pmspec, pm_direct; threaded=false)
+    pmv = TO.transform(pmspec, pm_direct; threaded=false)
     @test pmv == [3.0, 1.0, -5.0, 0.0, 20.0, 1.0, 3.0, 1.0, 10.0]
-    pmcache = PM.build_cache(pm_direct, pmspec; threaded=false)
-    @test PM.cache_stats(pmcache).kind == :point_measure
-    @test PM.transform(pmspec, pmcache; threaded=false) == pmv
+    pmcache = TO.build_cache(pm_direct, pmspec; threaded=false)
+    @test TO.cache_stats(pmcache).kind == :point_measure
+    @test TO.transform(pmspec, pmcache; threaded=false) == pmv
 
-    eulerspec = PM.EulerSignedMeasureSpec(ndims=2, k=4, coords=:values, strict=false)
+    eulerspec = TO.EulerSignedMeasureSpec(ndims=2, k=4, coords=:values, strict=false)
     @test FEA.supports(eulerspec, enc23)
-    eulerv = PM.transform(eulerspec, enc23; opts=opts_inv, threaded=false)
+    eulerv = TO.transform(eulerspec, enc23; opts=opts_inv, threaded=false)
     eopts = OPT.InvariantOptions(
         axes=eulerspec.axes === nothing ? opts_inv.axes : eulerspec.axes,
         axes_policy=eulerspec.axes_policy,
@@ -451,15 +451,15 @@ end
         strict=eulerspec.strict === nothing ? opts_inv.strict : eulerspec.strict,
         pl_mode=opts_inv.pl_mode,
     )
-    epm = Inv.euler_signed_measure(M23, enc23.pi, eopts;
+    epm = SM.euler_signed_measure(M23, enc23.pi, eopts;
                                    drop_zeros=eulerspec.drop_zeros,
                                    max_terms=eulerspec.max_terms > 0 ? max(eulerspec.max_terms, eulerspec.k) : 0,
                                    min_abs_weight=eulerspec.min_abs_weight)
     euler_expected = FEA._point_measure_topk_vector(epm, eulerspec.ndims, eulerspec.k, eulerspec.coords)
     @test eulerv == euler_expected
-    @test length(eulerv) == PM.nfeatures(eulerspec)
+    @test length(eulerv) == TO.nfeatures(eulerspec)
 
-    mpphistspec = PM.MPPDecompositionHistogramSpec(
+    mpphistspec = TO.MPPDecompositionHistogramSpec(
         orientation_bins=4,
         scale_bins=3,
         scale_range=(0.0, 1.0),
@@ -469,8 +469,8 @@ end
         q=1.0,
     )
     @test FEA.supports(mpphistspec, enc23)
-    mpphistv = PM.transform(mpphistspec, enc23; opts=opts_inv, threaded=false)
-    @test length(mpphistv) == PM.nfeatures(mpphistspec)
+    mpphistv = TO.transform(mpphistspec, enc23; opts=opts_inv, threaded=false)
+    @test length(mpphistv) == TO.nfeatures(mpphistspec)
     @test isapprox(sum(mpphistv[1:(mpphistspec.orientation_bins * mpphistspec.scale_bins)]), 1.0; atol=1e-12, rtol=0.0)
     @test all(isfinite, mpphistv)
 
@@ -483,7 +483,7 @@ end
         [2.0, 1.0],
         ([0.0, 0.0], [1.0, 1.0]),
     )
-    synthetic_hist = PM.MPPDecompositionHistogramSpec(
+    synthetic_hist = TO.MPPDecompositionHistogramSpec(
         orientation_bins=4,
         scale_bins=3,
         scale_range=(0.0, 1.0),
@@ -499,7 +499,7 @@ end
     @test isapprox(synthetic_hist_v[16], 1.0; atol=1e-12, rtol=0.0)
     @test isapprox(synthetic_hist_v[17], 0.9182958340544894; atol=1e-12, rtol=0.0)
 
-    mpphistspec2 = PM.MPPDecompositionHistogramSpec(
+    mpphistspec2 = TO.MPPDecompositionHistogramSpec(
         orientation_bins=6,
         scale_bins=2,
         scale_range=(0.0, 1.0),
@@ -508,21 +508,21 @@ end
         N=mpphistspec.N,
         q=mpphistspec.q,
     )
-    mpphist_pair = PM.CompositeSpec((mpphistspec, mpphistspec2), namespacing=true)
-    mpphist_cache = PM.build_cache(enc23, mpphist_pair; opts=opts_inv, threaded=false, level=:fibered)
-    mpphist_pair_v = PM.transform(mpphist_pair, mpphist_cache; opts=opts_inv, threaded=false)
+    mpphist_pair = TO.CompositeSpec((mpphistspec, mpphistspec2), namespacing=true)
+    mpphist_cache = TO.build_cache(enc23, mpphist_pair; opts=opts_inv, threaded=false, level=:fibered)
+    mpphist_pair_v = TO.transform(mpphist_pair, mpphist_cache; opts=opts_inv, threaded=false)
     @test isapprox(
         mpphist_pair_v,
         vcat(
-            PM.transform(mpphistspec, enc23; opts=opts_inv, threaded=false),
-            PM.transform(mpphistspec2, enc23; opts=opts_inv, threaded=false),
+            TO.transform(mpphistspec, enc23; opts=opts_inv, threaded=false),
+            TO.transform(mpphistspec2, enc23; opts=opts_inv, threaded=false),
         );
         atol=1e-12,
         rtol=0.0,
     )
-    @test PM.cache_stats(mpphist_cache).n_mpp_decompositions == 1
+    @test TO.cache_stats(mpphist_cache).n_mpp_decompositions == 1
 
-    sbispec = PM.SignedBarcodeImageSpec(
+    sbispec = TO.SignedBarcodeImageSpec(
         xs=collect(0.0:0.5:2.0),
         ys=collect(0.0:0.5:2.0),
         sigma=0.35,
@@ -530,29 +530,29 @@ end
         axes_policy=:as_given,
         strict=false,
     )
-    @test PM.nfeatures(sbispec) == length(sbispec.xs) * length(sbispec.ys)
-    sbax = PM.feature_axes(sbispec)
+    @test TO.nfeatures(sbispec) == length(sbispec.xs) * length(sbispec.ys)
+    sbax = TO.feature_axes(sbispec)
     @test sbax.x == sbispec.xs
     @test sbax.y == sbispec.ys
     @test sbax.mode == sbispec.mode
     @test !FEA.supports(sbispec, enc23)
-    @test_throws ArgumentError PM.transform(sbispec, enc23; opts=opts_inv, threaded=false)
+    @test_throws ArgumentError TO.transform(sbispec, enc23; opts=opts_inv, threaded=false)
 
-    dspec = PM.ProjectedDistancesSpec(
+    dspec = TO.ProjectedDistancesSpec(
         [enc3];
         reference_names=[:M3],
         n_dirs=4,
         normalize=:L1,
         precompute=true,
     )
-    dv = PM.transform(dspec, enc23; opts=opts_inv, threaded=false)
-    @test length(dv) == PM.nfeatures(dspec)
+    dv = TO.transform(dspec, enc23; opts=opts_inv, threaded=false)
+    @test length(dv) == TO.nfeatures(dspec)
     @test dv[1] >= 0.0
-    dax = PM.feature_axes(dspec)
+    dax = TO.feature_axes(dspec)
     @test dax.reference == dspec.reference_names
     @test dax.dist == dspec.dist
 
-    mppspec = PM.MPPImageSpec(
+    mppspec = TO.MPPImageSpec(
         resolution=6,
         sigma=0.15,
         N=8,
@@ -560,12 +560,12 @@ end
         segment_prune=true,
     )
     @test FEA.supports(mppspec, enc23)
-    mppv = PM.transform(mppspec, enc23; opts=opts_inv, threaded=false)
-    @test length(mppv) == PM.nfeatures(mppspec)
-    mppax = PM.feature_axes(mppspec)
+    mppv = TO.transform(mppspec, enc23; opts=opts_inv, threaded=false)
+    @test length(mppv) == TO.nfeatures(mppspec)
+    mppax = TO.feature_axes(mppspec)
     @test length(mppax.x) == mppspec.resolution
     @test length(mppax.y) == mppspec.resolution
-    mppobj = PM.mpp_image(
+    mppobj = TO.mpp_image(
         enc23;
         opts=opts_inv,
         resolution=mppspec.resolution,
@@ -584,7 +584,7 @@ end
                            for iy in 1:length(mppobj.ygrid)]
     @test isapprox(mppv, mpp_expected; atol=1e-12, rtol=0.0)
 
-    mlspec2 = PM.MPLandscapeSpec(
+    mlspec2 = TO.MPLandscapeSpec(
         directions=[[1.0, 1.0]],
         offsets=[[0.0, 0.0]],
         tgrid=collect(0.0:0.5:3.0),
@@ -592,14 +592,14 @@ end
         strict=false,
         direction_weight=:uniform,
     )
-    mlv2 = PM.transform(mlspec2, enc23; opts=opts_inv, threaded=false)
-    mlpair = PM.CompositeSpec((mlspec, mlspec2), namespacing=true)
-    mlpair_cache = PM.build_cache(enc23, mlpair; opts=opts_inv, threaded=false)
-    mlpair_v = PM.transform(mlpair, mlpair_cache; opts=opts_inv, threaded=false)
+    mlv2 = TO.transform(mlspec2, enc23; opts=opts_inv, threaded=false)
+    mlpair = TO.CompositeSpec((mlspec, mlspec2), namespacing=true)
+    mlpair_cache = TO.build_cache(enc23, mlpair; opts=opts_inv, threaded=false)
+    mlpair_v = TO.transform(mlpair, mlpair_cache; opts=opts_inv, threaded=false)
     @test isapprox(mlpair_v, vcat(mlv, mlv2); atol=1e-12, rtol=0.0)
-    @test PM.cache_stats(mlpair_cache).n_slice_plans == 1
+    @test TO.cache_stats(mlpair_cache).n_slice_plans == 1
 
-    mppspec2 = PM.MPPImageSpec(
+    mppspec2 = TO.MPPImageSpec(
         resolution=5,
         sigma=0.2,
         N=mppspec.N,
@@ -607,38 +607,38 @@ end
         tie_break=mppspec.tie_break,
         segment_prune=false,
     )
-    mppv2 = PM.transform(mppspec2, enc23; opts=opts_inv, threaded=false)
-    mpppair = PM.CompositeSpec((mppspec, mppspec2), namespacing=true)
-    mpppair_cache = PM.build_cache(enc23, mpppair; opts=opts_inv, threaded=false, level=:fibered)
-    mpppair_v = PM.transform(mpppair, mpppair_cache; opts=opts_inv, threaded=false)
+    mppv2 = TO.transform(mppspec2, enc23; opts=opts_inv, threaded=false)
+    mpppair = TO.CompositeSpec((mppspec, mppspec2), namespacing=true)
+    mpppair_cache = TO.build_cache(enc23, mpppair; opts=opts_inv, threaded=false, level=:fibered)
+    mpppair_v = TO.transform(mpppair, mpppair_cache; opts=opts_inv, threaded=false)
     @test isapprox(mpppair_v, vcat(mppv, mppv2); atol=1e-12, rtol=0.0)
-    @test PM.cache_stats(mpppair_cache).n_mpp_decompositions == 1
+    @test TO.cache_stats(mpppair_cache).n_mpp_decompositions == 1
 
-    bettispec = PM.BettiTableSpec(nvertices=PM.nvertices(P), pad_to=2, resolution_maxlen=2)
+    bettispec = TO.BettiTableSpec(nvertices=TO.nvertices(P), pad_to=2, resolution_maxlen=2)
     @test FEA.supports(bettispec, enc23)
-    betti_v = PM.transform(bettispec, enc23; threaded=false)
-    @test length(betti_v) == PM.nfeatures(bettispec)
-    betti_res = PM.resolve(enc23; kind=:projective, opts=OPT.ResolutionOptions(maxlen=2), cache=:auto)
+    betti_v = TO.transform(bettispec, enc23; threaded=false)
+    @test length(betti_v) == TO.nfeatures(bettispec)
+    betti_res = TO.resolve(enc23; kind=:projective, opts=OPT.ResolutionOptions(maxlen=2), cache=:auto)
     betti_tbl = DF.betti_table(betti_res.res; pad_to=bettispec.pad_to)
     betti_expected = Float64[betti_tbl[a + 1, p] for a in 0:bettispec.pad_to for p in 1:bettispec.nvertices]
     @test betti_v == betti_expected
-    @test PM.transform(bettispec, betti_res; threaded=false) == betti_expected
+    @test TO.transform(bettispec, betti_res; threaded=false) == betti_expected
 
-    bassspec = PM.BassTableSpec(nvertices=PM.nvertices(P), pad_to=2, resolution_maxlen=2)
+    bassspec = TO.BassTableSpec(nvertices=TO.nvertices(P), pad_to=2, resolution_maxlen=2)
     @test FEA.supports(bassspec, enc23)
-    bass_v = PM.transform(bassspec, enc23; threaded=false)
-    @test length(bass_v) == PM.nfeatures(bassspec)
-    bass_res = PM.resolve(enc23; kind=:injective, opts=OPT.ResolutionOptions(maxlen=2), cache=:auto)
+    bass_v = TO.transform(bassspec, enc23; threaded=false)
+    @test length(bass_v) == TO.nfeatures(bassspec)
+    bass_res = TO.resolve(enc23; kind=:injective, opts=OPT.ResolutionOptions(maxlen=2), cache=:auto)
     bass_tbl = DF.bass_table(bass_res.res; pad_to=bassspec.pad_to)
     bass_expected = Float64[bass_tbl[b + 1, p] for b in 0:bassspec.pad_to for p in 1:bassspec.nvertices]
     @test bass_v == bass_expected
-    @test PM.transform(bassspec, bass_res; threaded=false) == bass_expected
-    @test_throws ArgumentError PM.transform(bettispec, bass_res; threaded=false)
-    @test_throws ArgumentError PM.transform(bassspec, betti_res; threaded=false)
+    @test TO.transform(bassspec, bass_res; threaded=false) == bass_expected
+    @test_throws ArgumentError TO.transform(bettispec, bass_res; threaded=false)
+    @test_throws ArgumentError TO.transform(bassspec, betti_res; threaded=false)
 
-    betti_support_spec = PM.BettiSupportMeasuresSpec(pad_to=2, resolution_maxlen=2)
+    betti_support_spec = TO.BettiSupportMeasuresSpec(pad_to=2, resolution_maxlen=2)
     @test FEA.supports(betti_support_spec, enc23)
-    betti_support_v = PM.transform(betti_support_spec, enc23; opts=opts_inv, threaded=false)
+    betti_support_v = TO.transform(betti_support_spec, enc23; opts=opts_inv, threaded=false)
     betti_support_nt = Inv.betti_support_measures(betti_tbl, enc23.pi, opts_inv)
     betti_support_expected = Float64[
         betti_support_nt.support_by_degree[a + 1] for a in 0:betti_support_spec.pad_to
@@ -652,11 +652,11 @@ end
         betti_support_nt.mass_total,
     ])
     @test betti_support_v == betti_support_expected
-    @test PM.transform(betti_support_spec, betti_res; opts=opts_inv, threaded=false) == betti_support_expected
+    @test TO.transform(betti_support_spec, betti_res; opts=opts_inv, threaded=false) == betti_support_expected
 
-    bass_support_spec = PM.BassSupportMeasuresSpec(pad_to=2, resolution_maxlen=2)
+    bass_support_spec = TO.BassSupportMeasuresSpec(pad_to=2, resolution_maxlen=2)
     @test FEA.supports(bass_support_spec, enc23)
-    bass_support_v = PM.transform(bass_support_spec, enc23; opts=opts_inv, threaded=false)
+    bass_support_v = TO.transform(bass_support_spec, enc23; opts=opts_inv, threaded=false)
     bass_support_nt = Inv.bass_support_measures(bass_tbl, enc23.pi, opts_inv)
     bass_support_expected = Float64[
         bass_support_nt.support_by_degree[b + 1] for b in 0:bass_support_spec.pad_to
@@ -670,213 +670,213 @@ end
         bass_support_nt.mass_total,
     ])
     @test bass_support_v == bass_support_expected
-    @test PM.transform(bass_support_spec, bass_res; opts=opts_inv, threaded=false) == bass_support_expected
-    @test_throws ArgumentError PM.transform(betti_support_spec, bass_res; opts=opts_inv, threaded=false)
-    @test_throws ArgumentError PM.transform(bass_support_spec, betti_res; opts=opts_inv, threaded=false)
+    @test TO.transform(bass_support_spec, bass_res; opts=opts_inv, threaded=false) == bass_support_expected
+    @test_throws ArgumentError TO.transform(betti_support_spec, bass_res; opts=opts_inv, threaded=false)
+    @test_throws ArgumentError TO.transform(bass_support_spec, betti_res; opts=opts_inv, threaded=false)
 
-    betti_pair = PM.CompositeSpec((bettispec, bettispec), namespacing=true)
+    betti_pair = TO.CompositeSpec((bettispec, bettispec), namespacing=true)
     @test FEA.supports(betti_pair, betti_res)
-    @test PM.transform(betti_pair, betti_res; threaded=false) == vcat(betti_expected, betti_expected)
-    @test !FEA.supports(PM.CompositeSpec((bettispec, bassspec), namespacing=true), enc23)
+    @test TO.transform(betti_pair, betti_res; threaded=false) == vcat(betti_expected, betti_expected)
+    @test !FEA.supports(TO.CompositeSpec((bettispec, bassspec), namespacing=true), enc23)
 
-    proj_pair = PM.CompositeSpec((bettispec, betti_support_spec), namespacing=true)
+    proj_pair = TO.CompositeSpec((bettispec, betti_support_spec), namespacing=true)
     @test FEA.supports(proj_pair, enc23)
-    proj_pair_cache = PM.build_cache(enc23, proj_pair; opts=opts_inv, threaded=false)
+    proj_pair_cache = TO.build_cache(enc23, proj_pair; opts=opts_inv, threaded=false)
     @test proj_pair_cache isa FEA.ResolutionMeasureInvariantCache
-    @test PM.transform(proj_pair, proj_pair_cache; opts=opts_inv, threaded=false) ==
+    @test TO.transform(proj_pair, proj_pair_cache; opts=opts_inv, threaded=false) ==
           vcat(betti_expected, betti_support_expected)
 
-    cspec = PM.CompositeSpec((lspec, pispec), namespacing=true)
-    cv = PM.transform(cspec, enc23; opts=opts_inv, threaded=false)
-    @test length(cv) == PM.nfeatures(cspec)
-    @test length(PM.feature_names(cspec)) == PM.nfeatures(cspec)
-    cax = PM.feature_axes(cspec)
+    cspec = TO.CompositeSpec((lspec, pispec), namespacing=true)
+    cv = TO.transform(cspec, enc23; opts=opts_inv, threaded=false)
+    @test length(cv) == TO.nfeatures(cspec)
+    @test length(TO.feature_names(cspec)) == TO.nfeatures(cspec)
+    cax = TO.feature_axes(cspec)
     @test cax.namespacing == cspec.namespacing
     @test length(cax.components) == 2
     @test cax.components[1].start == 1
-    @test cax.components[2].start == PM.nfeatures(lspec) + 1
+    @test cax.components[2].start == TO.nfeatures(lspec) + 1
 
     # Composite fusion for lower-cost families (Euler + rank grid).
-    csmall = PM.CompositeSpec((espec, rspec), namespacing=true)
-    csmall_v = PM.transform(csmall, enc23; opts=opts_inv, threaded=false)
+    csmall = TO.CompositeSpec((espec, rspec), namespacing=true)
+    csmall_v = TO.transform(csmall, enc23; opts=opts_inv, threaded=false)
     @test isapprox(csmall_v, vcat(ev, rv); atol=1e-12, rtol=0.0)
 
     # Invariant cache protocol: build once, transform many.
-    ccache = PM.build_cache(enc23, cspec; opts=opts_inv, threaded=false)
+    ccache = TO.build_cache(enc23, cspec; opts=opts_inv, threaded=false)
     @test ccache isa FEA.EncodingInvariantCache
-    cv_cached = PM.transform(cspec, ccache; threaded=false)
+    cv_cached = TO.transform(cspec, ccache; threaded=false)
     @test isapprox(cv_cached, cv; atol=1e-12, rtol=0.0)
-    cstats = PM.cache_stats(ccache)
+    cstats = TO.cache_stats(ccache)
     @test cstats.kind == :encoding
     @test cstats.n_slice_plans == 1
     @test cstats.n_fibered == 0
 
     # Explicit cache-level control.
-    ccache_slice = PM.build_cache(enc23, cspec; opts=opts_inv, threaded=false, level=:slice)
-    cstats_slice = PM.cache_stats(ccache_slice)
+    ccache_slice = TO.build_cache(enc23, cspec; opts=opts_inv, threaded=false, level=:slice)
+    cstats_slice = TO.cache_stats(ccache_slice)
     @test cstats_slice.n_slice_plans == 1
     @test cstats_slice.n_fibered == 0
-    cv_slice = PM.transform(cspec, ccache_slice; threaded=false)
+    cv_slice = TO.transform(cspec, ccache_slice; threaded=false)
     @test isapprox(cv_slice, cv; atol=1e-12, rtol=0.0)
-    lv_slice = PM.transform(lspec, ccache_slice; threaded=false)
-    piv_slice = PM.transform(pispec, ccache_slice; threaded=false)
+    lv_slice = TO.transform(lspec, ccache_slice; threaded=false)
+    piv_slice = TO.transform(pispec, ccache_slice; threaded=false)
     @test isapprox(cv_slice, vcat(lv_slice, piv_slice); atol=1e-12, rtol=0.0)
 
-    ccache_fibered = PM.build_cache(enc23, cspec; opts=opts_inv, threaded=false, level=:fibered)
-    cstats_fibered = PM.cache_stats(ccache_fibered)
+    ccache_fibered = TO.build_cache(enc23, cspec; opts=opts_inv, threaded=false, level=:fibered)
+    cstats_fibered = TO.cache_stats(ccache_fibered)
     @test cstats_fibered.n_fibered >= 1
     @test cstats_fibered.n_slice_plans == 0
-    cv_fibered = PM.transform(cspec, ccache_fibered; threaded=false)
+    cv_fibered = TO.transform(cspec, ccache_fibered; threaded=false)
     @test length(cv_fibered) == length(cv)
     @test all(isfinite, cv_fibered)
 
-    csmall_cache = PM.build_cache(enc23, csmall; opts=opts_inv, threaded=false)
-    csmall_cached = PM.transform(csmall, csmall_cache; threaded=false)
+    csmall_cache = TO.build_cache(enc23, csmall; opts=opts_inv, threaded=false)
+    csmall_cached = TO.transform(csmall, csmall_cache; threaded=false)
     @test isapprox(csmall_cached, csmall_v; atol=1e-12, rtol=0.0)
 
-    lcache = PM.build_cache(enc23, lspec; opts=opts_inv, threaded=false)
-    lv_cached = PM.transform(lspec, lcache; threaded=false)
+    lcache = TO.build_cache(enc23, lspec; opts=opts_inv, threaded=false)
+    lv_cached = TO.transform(lspec, lcache; threaded=false)
     @test isapprox(lv_cached, lv; atol=1e-12, rtol=0.0)
 
-    rhcache = PM.build_cache(enc23, rhspec; opts=opts_inv, threaded=false)
+    rhcache = TO.build_cache(enc23, rhspec; opts=opts_inv, threaded=false)
     @test rhcache isa FEA.RestrictedHilbertInvariantCache
-    @test PM.transform(rhspec, rhcache; threaded=false) == rhv
+    @test TO.transform(rhspec, rhcache; threaded=false) == rhv
 
-    dcache = PM.build_cache(enc23, dspec; opts=opts_inv, threaded=false)
-    dv_cached = PM.transform(dspec, dcache; threaded=false)
+    dcache = TO.build_cache(enc23, dspec; opts=opts_inv, threaded=false)
+    dv_cached = TO.transform(dspec, dcache; threaded=false)
     @test isapprox(dv_cached, dv; atol=1e-12, rtol=0.0)
 
-    mlcache = PM.build_cache(enc23, mlspec; opts=opts_inv, threaded=false)
-    mlv_cached = PM.transform(mlspec, mlcache; threaded=false)
+    mlcache = TO.build_cache(enc23, mlspec; opts=opts_inv, threaded=false)
+    mlv_cached = TO.transform(mlspec, mlcache; threaded=false)
     @test isapprox(mlv_cached, mlv; atol=1e-12, rtol=0.0)
 
-    mppcache = PM.build_cache(enc23, mppspec; opts=opts_inv, threaded=false, level=:fibered)
-    @test PM.cache_stats(mppcache).n_fibered >= 1
-    mppv_cached = PM.transform(mppspec, mppcache; threaded=false)
+    mppcache = TO.build_cache(enc23, mppspec; opts=opts_inv, threaded=false, level=:fibered)
+    @test TO.cache_stats(mppcache).n_fibered >= 1
+    mppv_cached = TO.transform(mppspec, mppcache; threaded=false)
     @test isapprox(mppv_cached, mppv; atol=1e-12, rtol=0.0)
-    @test PM.cache_stats(mppcache).n_mpp_decompositions == 1
+    @test TO.cache_stats(mppcache).n_mpp_decompositions == 1
 
-    betti_cache = PM.build_cache(enc23, bettispec; threaded=false)
-    @test PM.cache_stats(betti_cache).kind == :resolution
-    @test PM.cache_stats(betti_cache).resolution_kind == :projective
-    @test PM.transform(bettispec, betti_cache; threaded=false) == betti_expected
+    betti_cache = TO.build_cache(enc23, bettispec; threaded=false)
+    @test TO.cache_stats(betti_cache).kind == :resolution
+    @test TO.cache_stats(betti_cache).resolution_kind == :projective
+    @test TO.transform(bettispec, betti_cache; threaded=false) == betti_expected
 
-    bass_cache = PM.build_cache(enc23, bassspec; threaded=false)
-    @test PM.cache_stats(bass_cache).kind == :resolution
-    @test PM.cache_stats(bass_cache).resolution_kind == :injective
-    @test PM.transform(bassspec, bass_cache; threaded=false) == bass_expected
+    bass_cache = TO.build_cache(enc23, bassspec; threaded=false)
+    @test TO.cache_stats(bass_cache).kind == :resolution
+    @test TO.cache_stats(bass_cache).resolution_kind == :injective
+    @test TO.transform(bassspec, bass_cache; threaded=false) == bass_expected
 
-    mcache = PM.build_cache(M23; opts=opts_inv, threaded=false)
+    mcache = TO.build_cache(M23; opts=opts_inv, threaded=false)
     @test mcache isa FEA.ModuleInvariantCache
-    @test PM.cache_stats(mcache).kind == :module
-    rv_cached = PM.transform(rspec, mcache; threaded=false)
+    @test TO.cache_stats(mcache).kind == :module
+    rv_cached = TO.transform(rspec, mcache; threaded=false)
     @test isapprox(rv_cached, rv; atol=1e-12, rtol=0.0)
-    @test_throws ArgumentError PM.build_cache(M23, lspec; opts=opts_inv, threaded=false)
-    @test_throws ArgumentError PM.build_cache(enc23, lspec; opts=opts_inv, threaded=false, level=:bad_level)
+    @test_throws ArgumentError TO.build_cache(M23, lspec; opts=opts_inv, threaded=false)
+    @test_throws ArgumentError TO.build_cache(enc23, lspec; opts=opts_inv, threaded=false, level=:bad_level)
 
-    eh_cache = PM.build_cache(enc23, espec; opts=opts_inv, threaded=false)
+    eh_cache = TO.build_cache(enc23, espec; opts=opts_inv, threaded=false)
     @test eh_cache isa FEA.RestrictedHilbertInvariantCache
-    @test PM.cache_stats(eh_cache).kind == :restricted_hilbert
-    ev_cached = PM.transform(espec, eh_cache; threaded=false)
+    @test TO.cache_stats(eh_cache).kind == :restricted_hilbert
+    ev_cached = TO.transform(espec, eh_cache; threaded=false)
     @test isapprox(ev_cached, ev; atol=1e-12, rtol=0.0)
 
     # Rank-only composite should fuse on module cache as well.
-    rdouble = PM.CompositeSpec((rspec, rspec), namespacing=true)
-    rdouble_v = PM.transform(rdouble, M23; opts=opts_inv, threaded=false)
+    rdouble = TO.CompositeSpec((rspec, rspec), namespacing=true)
+    rdouble_v = TO.transform(rdouble, M23; opts=opts_inv, threaded=false)
     @test isapprox(rdouble_v, vcat(rv, rv); atol=1e-12, rtol=0.0)
-    rdouble_cache = PM.build_cache(M23, rdouble; opts=opts_inv, threaded=false)
-    rdouble_cached = PM.transform(rdouble, rdouble_cache; threaded=false)
+    rdouble_cache = TO.build_cache(M23, rdouble; opts=opts_inv, threaded=false)
+    rdouble_cached = TO.transform(rdouble, rdouble_cache; threaded=false)
     @test isapprox(rdouble_cached, rdouble_v; atol=1e-12, rtol=0.0)
 
     # Signed-barcode cache path should materialize rank-query cache for Zn backends.
-    F = PM.FlangeZn.face(2, [1, 2])
-    flats = [PM.FlangeZn.IndFlat(F, [0, 0]; id=:F)]
-    injectives = [PM.FlangeZn.IndInj(F, [0, 0]; id=:E)]
+    F = TO.FlangeZn.face(2, [1, 2])
+    flats = [TO.FlangeZn.IndFlat(F, [0, 0]; id=:F)]
+    injectives = [TO.FlangeZn.IndInj(F, [0, 0]; id=:E)]
     FG = FZ.Flange{CM.QQ}(2, flats, injectives, reshape([CM.QQ(1)], 1, 1); field=field)
-    enc_zn = PosetModules.encode(FG; backend=:zn)
-    sbispec_zn = PM.SignedBarcodeImageSpec(
+    enc_zn = TamerOp.encode(FG; backend=:zn)
+    sbispec_zn = TO.SignedBarcodeImageSpec(
         xs=collect(-1.0:0.5:1.0),
         ys=collect(-1.0:0.5:1.0),
         sigma=0.35,
         strict=false,
     )
     @test FEA.supports(sbispec_zn, enc_zn)
-    opts_zn = PM.InvariantOptions(strict=false)
-    sbcache = PM.build_cache(enc_zn, sbispec_zn; opts=opts_zn, threaded=false, level=:all)
-    @test PM.cache_stats(sbcache).has_rank_query
-    sbvals = PM.transform(sbispec_zn, sbcache; opts=opts_zn, threaded=false)
-    @test length(sbvals) == PM.nfeatures(sbispec_zn)
+    opts_zn = TO.InvariantOptions(strict=false)
+    sbcache = TO.build_cache(enc_zn, sbispec_zn; opts=opts_zn, threaded=false, level=:all)
+    @test TO.cache_stats(sbcache).has_rank_query
+    sbvals = TO.transform(sbispec_zn, sbcache; opts=opts_zn, threaded=false)
+    @test length(sbvals) == TO.nfeatures(sbispec_zn)
 
-    rectspec = PM.RectangleSignedBarcodeTopKSpec(ndims=2, k=2, coords=:indices, strict=false)
+    rectspec = TO.RectangleSignedBarcodeTopKSpec(ndims=2, k=2, coords=:indices, strict=false)
     @test FEA.supports(rectspec, enc_zn)
-    rectv = PM.transform(rectspec, enc_zn; opts=opts_zn, threaded=false)
+    rectv = TO.transform(rectspec, enc_zn; opts=opts_zn, threaded=false)
     sb_zn = Inv.rectangle_signed_barcode(enc_zn.M, enc_zn.pi, opts_zn; threads=false)
     rect_expected = FEA._rect_signed_barcode_topk_vector(sb_zn, rectspec.ndims, rectspec.k, rectspec.coords)
     @test rectv == rect_expected
-    rectcache = PM.build_cache(enc_zn, rectspec; opts=opts_zn, threaded=false, level=:all)
-    @test PM.cache_stats(rectcache).has_rank_query
-    @test PM.transform(rectspec, rectcache; opts=opts_zn, threaded=false) == rect_expected
+    rectcache = TO.build_cache(enc_zn, rectspec; opts=opts_zn, threaded=false, level=:all)
+    @test TO.cache_stats(rectcache).has_rank_query
+    @test TO.transform(rectspec, rectcache; opts=opts_zn, threaded=false) == rect_expected
 
-    sb_direct = Inv.RectSignedBarcode(
+    sb_direct = SM.RectSignedBarcode(
         (Int[0, 1, 2], Int[0, 1, 2]),
-        [Inv.Rect{2}((1, 1), (2, 2)), Inv.Rect{2}((2, 1), (2, 2))],
+        [SM.Rect{2}((1, 1), (2, 2)), SM.Rect{2}((2, 1), (2, 2))],
         Int[3, -1],
     )
-    rectspec_direct = PM.RectangleSignedBarcodeTopKSpec(ndims=2, k=2, coords=:values)
-    @test PM.transform(rectspec_direct, sb_direct; threaded=false) ==
+    rectspec_direct = TO.RectangleSignedBarcodeTopKSpec(ndims=2, k=2, coords=:values)
+    @test TO.transform(rectspec_direct, sb_direct; threaded=false) ==
           [2.0, 1.0, 3.0, 0.0, 0.0, 1.0, 1.0, 1.0, -1.0, 1.0, 0.0, 1.0, 1.0]
 
-    mdspec = PM.MatchingDistanceBankSpec([enc3]; reference_names=[:M3], method=:approx, n_dirs=8, n_offsets=4)
+    mdspec = TO.MatchingDistanceBankSpec([enc3]; reference_names=[:M3], method=:approx, n_dirs=8, n_offsets=4)
     @test FEA.supports(mdspec, enc23)
-    mdv = PM.transform(mdspec, enc23; opts=opts_inv, threaded=false)
-    @test length(mdv) == PM.nfeatures(mdspec)
-    @test isapprox(mdv[1], PM.matching_distance(enc23, enc3; method=:approx, opts=opts_inv, n_dirs=8, n_offsets=4); atol=1e-12, rtol=0.0)
+    mdv = TO.transform(mdspec, enc23; opts=opts_inv, threaded=false)
+    @test length(mdv) == TO.nfeatures(mdspec)
+    @test isapprox(mdv[1], TO.matching_distance(enc23, enc3; method=:approx, opts=opts_inv, n_dirs=8, n_offsets=4); atol=1e-12, rtol=0.0)
 
-    bserial = PM.BatchOptions(threaded=false, backend=:serial, deterministic=true)
-    fs = PM.featurize(samples, lspec;
+    bserial = TO.BatchOptions(threaded=false, backend=:serial, deterministic=true)
+    fs = TO.featurize(samples, lspec;
                       opts=opts_inv,
                       batch=bserial,
-                      idfun=s -> string(PM.nvertices(s.P)),
+                      idfun=s -> string(TO.nvertices(s.P)),
                       labelfun=s -> Inv.rank_map(s.M, r3, r3))
     @test size(fs.X, 1) == length(samples)
-    @test size(fs.X, 2) == PM.nfeatures(lspec)
-    @test length(fs.names) == PM.nfeatures(lspec)
+    @test size(fs.X, 2) == TO.nfeatures(lspec)
+    @test length(fs.names) == TO.nfeatures(lspec)
     @test length(fs.ids) == length(samples)
     @test haskey(fs.meta, :labels)
     @test fs.meta.labels == [1, 1]
     @test haskey(fs.meta, :feature_axes)
-    @test PM.feature_axes(fs) == PM.feature_axes(lspec)
+    @test TO.feature_axes(fs) == TO.feature_axes(lspec)
 
-    fs_batch_serial = PM.featurize(samples, lspec; opts=opts_inv, batch=bserial)
+    fs_batch_serial = TO.featurize(samples, lspec; opts=opts_inv, batch=bserial)
     @test size(fs_batch_serial.X) == size(fs.X)
     @test fs_batch_serial.X == fs.X
 
-    bthreads = PM.BatchOptions(threaded=true, backend=:threads, deterministic=true, chunk_size=1)
-    fs_batch_threads = PM.featurize(samples, lspec; opts=opts_inv, batch=bthreads)
+    bthreads = TO.BatchOptions(threaded=true, backend=:threads, deterministic=true, chunk_size=1)
+    fs_batch_threads = TO.featurize(samples, lspec; opts=opts_inv, batch=bthreads)
     @test fs_batch_threads.X == fs_batch_serial.X
     @test fs_batch_threads.names == fs_batch_serial.names
     @test fs_batch_threads.ids == fs_batch_serial.ids
 
-    bfolds = PM.BatchOptions(threaded=true, backend=:folds, deterministic=true)
-    fs_batch_folds = PM.featurize(samples, lspec; opts=opts_inv, batch=bfolds)
+    bfolds = TO.BatchOptions(threaded=true, backend=:folds, deterministic=true)
+    fs_batch_folds = TO.featurize(samples, lspec; opts=opts_inv, batch=bfolds)
     @test fs_batch_folds.X == fs_batch_serial.X
 
-    bprogress = PM.BatchOptions(threaded=false, backend=:serial, progress=true, deterministic=true)
-    fs_batch_progress = PM.featurize(samples, lspec; opts=opts_inv, batch=bprogress)
+    bprogress = TO.BatchOptions(threaded=false, backend=:serial, progress=true, deterministic=true)
+    fs_batch_progress = TO.featurize(samples, lspec; opts=opts_inv, batch=bprogress)
     @test fs_batch_progress.X == fs_batch_serial.X
     @test fs_batch_progress.meta.batch.progress
 
-    @test_throws ArgumentError PM.BatchOptions(threaded=true, backend=:bad_backend)
+    @test_throws ArgumentError TO.BatchOptions(threaded=true, backend=:bad_backend)
 
-    fs_bt = PM.batch_transform(samples, lspec; opts=opts_inv, batch=bthreads)
+    fs_bt = TO.batch_transform(samples, lspec; opts=opts_inv, batch=bthreads)
     @test fs_bt.X == fs_batch_threads.X
     @test fs_bt.names == fs_batch_threads.names
     @test fs_bt.ids == fs_batch_threads.ids
 
     # Repeated deterministic runs should preserve exact row order/content.
-    fs_det_ref = PM.featurize(samples, lspec; opts=opts_inv, batch=bthreads, cache=:auto)
+    fs_det_ref = TO.featurize(samples, lspec; opts=opts_inv, batch=bthreads, cache=:auto)
     for _ in 1:3
-        fs_det = PM.featurize(samples, lspec; opts=opts_inv, batch=bthreads, cache=:auto)
+        fs_det = TO.featurize(samples, lspec; opts=opts_inv, batch=bthreads, cache=:auto)
         @test fs_det.ids == fs_det_ref.ids
         @test fs_det.names == fs_det_ref.names
         @test fs_det.X == fs_det_ref.X
@@ -884,26 +884,26 @@ end
 
     # Cache policy parity in threaded batch mode.
     session_cache = CM.SessionCache()
-    fs_cache_auto = PM.featurize(samples, lspec; opts=opts_inv, batch=bthreads, cache=:auto)
-    fs_cache_explicit_1 = PM.featurize(samples, lspec; opts=opts_inv, batch=bthreads, cache=session_cache)
-    fs_cache_explicit_2 = PM.featurize(samples, lspec; opts=opts_inv, batch=bthreads, cache=session_cache)
+    fs_cache_auto = TO.featurize(samples, lspec; opts=opts_inv, batch=bthreads, cache=:auto)
+    fs_cache_explicit_1 = TO.featurize(samples, lspec; opts=opts_inv, batch=bthreads, cache=session_cache)
+    fs_cache_explicit_2 = TO.featurize(samples, lspec; opts=opts_inv, batch=bthreads, cache=session_cache)
     @test fs_cache_explicit_1.X == fs_cache_auto.X
     @test fs_cache_explicit_2.X == fs_cache_auto.X
     @test fs_cache_explicit_1.ids == fs_cache_auto.ids
     @test fs_cache_explicit_1.names == fs_cache_auto.names
 
     Xbuf = Matrix{Float64}(undef, size(fs_batch_threads.X, 1), size(fs_batch_threads.X, 2))
-    fs_bang = PM.batch_transform!(Xbuf, samples, lspec; opts=opts_inv, batch=bthreads)
+    fs_bang = TO.batch_transform!(Xbuf, samples, lspec; opts=opts_inv, batch=bthreads)
     @test fs_bang.X === Xbuf
     @test fs_bang.X == fs_batch_threads.X
 
-    Xm = Matrix{Union{Missing,Float64}}(undef, length(samples), PM.nfeatures(lspec))
-    fs_bang_missing = PM.batch_transform!(Xm, samples, lspec; opts=opts_inv, on_unsupported=:missing, batch=bserial)
+    Xm = Matrix{Union{Missing,Float64}}(undef, length(samples), TO.nfeatures(lspec))
+    fs_bang_missing = TO.batch_transform!(Xm, samples, lspec; opts=opts_inv, on_unsupported=:missing, batch=bserial)
     @test fs_bang_missing.X === Xm
     @test all(!ismissing, fs_bang_missing.X)
 
-    buff = zeros(Float64, PM.nfeatures(lspec))
-    PM.transform!(buff, lspec, enc23; opts=opts_inv, threaded=false)
+    buff = zeros(Float64, TO.nfeatures(lspec))
+    TO.transform!(buff, lspec, enc23; opts=opts_inv, threaded=false)
     @test isapprox(buff, lv; atol=1e-12, rtol=0.0)
 
     @test FEA.asrowmajor(fs) === fs.X
@@ -911,7 +911,7 @@ end
     @test FEA.feature_table(fs; format=:wide) isa FEA.FeatureSetWideTable
     @test FEA.feature_table(fs; format=:long) isa FEA.FeatureSetLongTable
     @test_throws ArgumentError FEA.feature_table(fs; format=:bad)
-    @test PM.Serialization.TAMER_FEATURE_SCHEMA_VERSION == v"0.2.0"
+    @test TO.Serialization.TAMER_FEATURE_SCHEMA_VERSION == v"0.2.0"
 
     md = FEA.feature_metadata(fs; format=:wide)
     @test md["kind"] == "features"
@@ -922,10 +922,10 @@ end
     @test md["format"] == "wide"
     @test haskey(md, "feature_axes")
     @test string(md["feature_axes"]["aggregate"]) == string(lspec.aggregate)
-    hdr = PM.Serialization.feature_schema_header(format=:wide)
+    hdr = TO.Serialization.feature_schema_header(format=:wide)
     @test hdr["kind"] == "features"
     @test hdr["schema_version"] == "0.2.0"
-    @test PM.Serialization.validate_feature_metadata_schema(md)
+    @test TO.Serialization.validate_feature_metadata_schema(md)
 
     mpath = FEA.default_feature_metadata_path(joinpath(mktempdir(), "features.arrow"))
     @test endswith(mpath, "features.arrow.meta.json")
@@ -937,8 +937,8 @@ end
     @test string(md2["schema_version"]) == "0.2.0"
     @test Int(md2["n_features"]) == size(fs.X, 2)
     md_typed = FEA.load_metadata_json(meta_path; validate_feature_schema=true, typed=true)
-    @test md_typed.spec isa PM.LandscapeSpec
-    @test md_typed.opts isa PM.InvariantOptions
+    @test md_typed.spec isa TO.LandscapeSpec
+    @test md_typed.opts isa TO.InvariantOptions
     @test md_typed.spec.kmax == lspec.kmax
     @test md_typed.spec.aggregate == lspec.aggregate
     @test md_typed.opts.axes_policy == opts_inv.axes_policy
@@ -947,26 +947,26 @@ end
 
     # Explicit typed round-trip from metadata fragments.
     lspec2 = FEA.spec_from_metadata(md["spec"])
-    @test lspec2 isa PM.LandscapeSpec
-    @test PM.feature_names(lspec2) == PM.feature_names(lspec)
-    @test PM.nfeatures(lspec2) == PM.nfeatures(lspec)
+    @test lspec2 isa TO.LandscapeSpec
+    @test TO.feature_names(lspec2) == TO.feature_names(lspec)
+    @test TO.nfeatures(lspec2) == TO.nfeatures(lspec)
 
     opts2 = FEA.invariant_options_from_metadata(md["opts"])
-    @test opts2 isa PM.InvariantOptions
+    @test opts2 isa TO.InvariantOptions
     @test opts2.axes_policy == opts_inv.axes_policy
     @test opts2.max_axis_len == opts_inv.max_axis_len
     @test opts2.strict == opts_inv.strict
 
     # Nested spec round-trip (composite + nested specs).
-    mdc = FEA.feature_metadata(PM.FeatureSet(fs.X, fs.names, fs.ids, (spec=cspec, opts=opts_inv)); format=:wide)
+    mdc = FEA.feature_metadata(TO.FeatureSet(fs.X, fs.names, fs.ids, (spec=cspec, opts=opts_inv)); format=:wide)
     cspec2 = FEA.spec_from_metadata(mdc["spec"])
-    @test cspec2 isa PM.CompositeSpec
+    @test cspec2 isa TO.CompositeSpec
     @test length(cspec2.specs) == length(cspec.specs)
-    @test PM.feature_names(cspec2) == PM.feature_names(cspec)
+    @test TO.feature_names(cspec2) == TO.feature_names(cspec)
 
-    mdd = FEA.feature_metadata(PM.FeatureSet(fs.X, fs.names, fs.ids, (spec=dspec, opts=opts_inv)); format=:wide)
+    mdd = FEA.feature_metadata(TO.FeatureSet(fs.X, fs.names, fs.ids, (spec=dspec, opts=opts_inv)); format=:wide)
     dspec2 = FEA.spec_from_metadata(mdd["spec"])
-    @test dspec2 isa PM.ProjectedDistancesSpec
+    @test dspec2 isa TO.ProjectedDistancesSpec
     @test dspec2.reference_names == dspec.reference_names
     @test dspec2.dist == dspec.dist
     @test haskey(mdd["spec"]["fields"], "reference_ids")
@@ -974,47 +974,47 @@ end
 
     resolve_ref = id -> id == "M3" ? enc3 : nothing
     dspec3 = FEA.load_spec_with_resolver(mdd["spec"], resolve_ref)
-    @test dspec3 isa PM.ProjectedDistancesSpec
+    @test dspec3 isa TO.ProjectedDistancesSpec
     @test length(dspec3.references) == 1
     @test dspec3.references[1] === enc3
-    dv3 = PM.transform(dspec3, enc23; opts=opts_inv, threaded=false)
+    dv3 = TO.transform(dspec3, enc23; opts=opts_inv, threaded=false)
     @test isapprox(dv3, dv; atol=1e-12, rtol=0.0)
     @test_throws ArgumentError FEA.load_spec_with_resolver(mdd["spec"], _ -> nothing; require_all=true)
 
-    mdm = FEA.feature_metadata(PM.FeatureSet(zeros(Float64, 1, PM.nfeatures(mdspec)),
-                                            PM.feature_names(mdspec),
+    mdm = FEA.feature_metadata(TO.FeatureSet(zeros(Float64, 1, TO.nfeatures(mdspec)),
+                                            TO.feature_names(mdspec),
                                             ["sample"],
                                             (spec=mdspec, opts=opts_inv)); format=:wide)
     mdspec2 = FEA.load_spec_with_resolver(mdm["spec"], resolve_ref)
-    @test mdspec2 isa PM.MatchingDistanceBankSpec
+    @test mdspec2 isa TO.MatchingDistanceBankSpec
     @test mdspec2.references[1] === enc3
     @test mdspec2.reference_names == mdspec.reference_names
 
-    pmm = FEA.feature_metadata(PM.FeatureSet(zeros(Float64, 1, PM.nfeatures(pmspec)),
-                                            PM.feature_names(pmspec),
+    pmm = FEA.feature_metadata(TO.FeatureSet(zeros(Float64, 1, TO.nfeatures(pmspec)),
+                                            TO.feature_names(pmspec),
                                             ["sample"],
                                             (spec=pmspec, opts=opts_inv)); format=:wide)
     pmspec2 = FEA.spec_from_metadata(pmm["spec"])
-    @test pmspec2 isa PM.PointSignedMeasureSpec
-    @test PM.feature_names(pmspec2) == PM.feature_names(pmspec)
+    @test pmspec2 isa TO.PointSignedMeasureSpec
+    @test TO.feature_names(pmspec2) == TO.feature_names(pmspec)
 
-    em = FEA.feature_metadata(PM.FeatureSet(zeros(Float64, 1, PM.nfeatures(eulerspec)),
-                                           PM.feature_names(eulerspec),
+    em = FEA.feature_metadata(TO.FeatureSet(zeros(Float64, 1, TO.nfeatures(eulerspec)),
+                                           TO.feature_names(eulerspec),
                                            ["sample"],
                                            (spec=eulerspec, opts=opts_inv)); format=:wide)
     eulerspec2 = FEA.spec_from_metadata(em["spec"])
-    @test eulerspec2 isa PM.EulerSignedMeasureSpec
-    @test PM.feature_names(eulerspec2) == PM.feature_names(eulerspec)
+    @test eulerspec2 isa TO.EulerSignedMeasureSpec
+    @test TO.feature_names(eulerspec2) == TO.feature_names(eulerspec)
 
-    rm = FEA.feature_metadata(PM.FeatureSet(zeros(Float64, 1, PM.nfeatures(rectspec)),
-                                           PM.feature_names(rectspec),
+    rm = FEA.feature_metadata(TO.FeatureSet(zeros(Float64, 1, TO.nfeatures(rectspec)),
+                                           TO.feature_names(rectspec),
                                            ["sample"],
                                            (spec=rectspec, opts=opts_zn)); format=:wide)
     rectspec2 = FEA.spec_from_metadata(rm["spec"])
-    @test rectspec2 isa PM.RectangleSignedBarcodeTopKSpec
-    @test PM.feature_names(rectspec2) == PM.feature_names(rectspec)
+    @test rectspec2 isa TO.RectangleSignedBarcodeTopKSpec
+    @test TO.feature_names(rectspec2) == TO.feature_names(rectspec)
 
-    extended_spec = PM.CompositeSpec((
+    extended_spec = TO.CompositeSpec((
         rhspec,
         topkspec,
         bsumspec,
@@ -1031,30 +1031,30 @@ end
         bass_support_spec,
     ), namespacing=true)
     mdx = FEA.feature_metadata(
-        PM.FeatureSet(zeros(Float64, 1, PM.nfeatures(extended_spec)),
-                      PM.feature_names(extended_spec),
+        TO.FeatureSet(zeros(Float64, 1, TO.nfeatures(extended_spec)),
+                      TO.feature_names(extended_spec),
                       ["sample"],
                       (spec=extended_spec, opts=opts_inv));
         format=:wide,
     )
     extended_spec2 = FEA.spec_from_metadata(mdx["spec"])
-    @test extended_spec2 isa PM.CompositeSpec
+    @test extended_spec2 isa TO.CompositeSpec
     @test length(extended_spec2.specs) == 14
-    @test extended_spec2.specs[1] isa PM.RestrictedHilbertSpec
-    @test extended_spec2.specs[2] isa PM.BarcodeTopKSpec
-    @test extended_spec2.specs[3] isa PM.BarcodeSummarySpec
-    @test extended_spec2.specs[4] isa PM.PointSignedMeasureSpec
-    @test extended_spec2.specs[5] isa PM.EulerSignedMeasureSpec
-    @test extended_spec2.specs[6] isa PM.RectangleSignedBarcodeTopKSpec
-    @test extended_spec2.specs[7] isa PM.MatchingDistanceBankSpec
-    @test extended_spec2.specs[8] isa PM.MPLandscapeSpec
-    @test extended_spec2.specs[9] isa PM.MPPImageSpec
-    @test extended_spec2.specs[10] isa PM.MPPDecompositionHistogramSpec
-    @test extended_spec2.specs[11] isa PM.BettiTableSpec
-    @test extended_spec2.specs[12] isa PM.BassTableSpec
-    @test extended_spec2.specs[13] isa PM.BettiSupportMeasuresSpec
-    @test extended_spec2.specs[14] isa PM.BassSupportMeasuresSpec
-    @test PM.feature_names(extended_spec2) == PM.feature_names(extended_spec)
+    @test extended_spec2.specs[1] isa TO.RestrictedHilbertSpec
+    @test extended_spec2.specs[2] isa TO.BarcodeTopKSpec
+    @test extended_spec2.specs[3] isa TO.BarcodeSummarySpec
+    @test extended_spec2.specs[4] isa TO.PointSignedMeasureSpec
+    @test extended_spec2.specs[5] isa TO.EulerSignedMeasureSpec
+    @test extended_spec2.specs[6] isa TO.RectangleSignedBarcodeTopKSpec
+    @test extended_spec2.specs[7] isa TO.MatchingDistanceBankSpec
+    @test extended_spec2.specs[8] isa TO.MPLandscapeSpec
+    @test extended_spec2.specs[9] isa TO.MPPImageSpec
+    @test extended_spec2.specs[10] isa TO.MPPDecompositionHistogramSpec
+    @test extended_spec2.specs[11] isa TO.BettiTableSpec
+    @test extended_spec2.specs[12] isa TO.BassTableSpec
+    @test extended_spec2.specs[13] isa TO.BettiSupportMeasuresSpec
+    @test extended_spec2.specs[14] isa TO.BassSupportMeasuresSpec
+    @test TO.feature_names(extended_spec2) == TO.feature_names(extended_spec)
 
     proj_meta_path = joinpath(tmpd, "projected_features.meta.json")
     FEA.save_metadata_json(proj_meta_path, mdd)
@@ -1063,7 +1063,7 @@ end
                                        typed=true,
                                        resolve_ref=resolve_ref,
                                        require_resolved_refs=true)
-    @test proj_typed.spec isa PM.ProjectedDistancesSpec
+    @test proj_typed.spec isa TO.ProjectedDistancesSpec
     @test proj_typed.spec.references[1] === enc3
 
     # Internal wide/long reconstruction helpers (no optional deps required).
@@ -1084,77 +1084,77 @@ end
     # Arrow IO (optional extension)
     arrow_path = joinpath(tmpd, "features.arrow")
     if Base.find_package("Arrow") === nothing
-        @test_throws ArgumentError PM.save_features_arrow(arrow_path, fs)
-        @test_throws ArgumentError PM.load_features_arrow(arrow_path)
-        @test_throws ArgumentError PM.save_features(arrow_path, fs; format=:arrow)
-        @test_throws ArgumentError PM.load_features(arrow_path; format=:arrow)
-        @test_throws ArgumentError PM.save_features(arrow_path, fs; format=:auto)
-        @test_throws ArgumentError PM.load_features(arrow_path; format=:auto)
+        @test_throws ArgumentError TO.save_features_arrow(arrow_path, fs)
+        @test_throws ArgumentError TO.load_features_arrow(arrow_path)
+        @test_throws ArgumentError TO.save_features(arrow_path, fs; format=:arrow)
+        @test_throws ArgumentError TO.load_features(arrow_path; format=:arrow)
+        @test_throws ArgumentError TO.save_features(arrow_path, fs; format=:auto)
+        @test_throws ArgumentError TO.load_features(arrow_path; format=:auto)
     else
         @eval using Arrow
-        PM.save_features_arrow(arrow_path, fs; format=:wide)
+        TO.save_features_arrow(arrow_path, fs; format=:wide)
         @test isfile(arrow_path)
         @test isfile(FEA.default_feature_metadata_path(arrow_path))
-        fs_arrow = PM.load_features_arrow(arrow_path; format=:wide)
+        fs_arrow = TO.load_features_arrow(arrow_path; format=:wide)
         @test fs_arrow.names == fs.names
         @test fs_arrow.ids == fs.ids
         @test size(fs_arrow.X) == size(fs.X)
         @test all(fs_arrow.X .== fs.X)
 
-        PM.save_features(arrow_path, fs; format=:arrow, mode=:wide, metadata=true)
-        fs_arrow2 = PM.load_features(arrow_path; format=:arrow, mode=:wide)
+        TO.save_features(arrow_path, fs; format=:arrow, mode=:wide, metadata=true)
+        fs_arrow2 = TO.load_features(arrow_path; format=:arrow, mode=:wide)
         @test fs_arrow2.names == fs.names
         @test fs_arrow2.ids == fs.ids
         @test size(fs_arrow2.X) == size(fs.X)
         @test all(fs_arrow2.X .== fs.X)
 
-        PM.save_features(arrow_path, fs; format=:auto, mode=:wide, metadata=true)
-        fs_arrow3 = PM.load_features(arrow_path; format=:auto, mode=:wide)
+        TO.save_features(arrow_path, fs; format=:auto, mode=:wide, metadata=true)
+        fs_arrow3 = TO.load_features(arrow_path; format=:auto, mode=:wide)
         @test fs_arrow3.names == fs.names
         @test fs_arrow3.ids == fs.ids
         @test size(fs_arrow3.X) == size(fs.X)
         @test all(fs_arrow3.X .== fs.X)
 
-        @test_throws ArgumentError PM.save_features(arrow_path, fs; format=:arrow, layout=:features_by_samples)
-        @test_throws ArgumentError PM.load_features(arrow_path; format=:arrow, layout=:features_by_samples)
+        @test_throws ArgumentError TO.save_features(arrow_path, fs; format=:arrow, layout=:features_by_samples)
+        @test_throws ArgumentError TO.load_features(arrow_path; format=:arrow, layout=:features_by_samples)
     end
 
     # Parquet IO (optional extension)
     parq_path = joinpath(tmpd, "features.parquet")
     if Base.find_package("Parquet2") === nothing
-        @test_throws ArgumentError PM.save_features_parquet(parq_path, fs)
-        @test_throws ArgumentError PM.load_features_parquet(parq_path)
-        @test_throws ArgumentError PM.save_features(parq_path, fs; format=:parquet)
-        @test_throws ArgumentError PM.load_features(parq_path; format=:parquet)
-        @test_throws ArgumentError PM.save_features(parq_path, fs; format=:auto)
-        @test_throws ArgumentError PM.load_features(parq_path; format=:auto)
+        @test_throws ArgumentError TO.save_features_parquet(parq_path, fs)
+        @test_throws ArgumentError TO.load_features_parquet(parq_path)
+        @test_throws ArgumentError TO.save_features(parq_path, fs; format=:parquet)
+        @test_throws ArgumentError TO.load_features(parq_path; format=:parquet)
+        @test_throws ArgumentError TO.save_features(parq_path, fs; format=:auto)
+        @test_throws ArgumentError TO.load_features(parq_path; format=:auto)
     else
         @eval using Parquet2
-        PM.save_features_parquet(parq_path, fs; format=:long)
+        TO.save_features_parquet(parq_path, fs; format=:long)
         @test isfile(parq_path)
         @test isfile(FEA.default_feature_metadata_path(parq_path))
-        fs_parq = PM.load_features_parquet(parq_path; format=:long)
+        fs_parq = TO.load_features_parquet(parq_path; format=:long)
         @test fs_parq.names == fs.names
         @test fs_parq.ids == fs.ids
         @test size(fs_parq.X) == size(fs.X)
         @test all(fs_parq.X .== fs.X)
 
-        PM.save_features(parq_path, fs; format=:parquet, mode=:long, metadata=true)
-        fs_parq2 = PM.load_features(parq_path; format=:parquet, mode=:long)
+        TO.save_features(parq_path, fs; format=:parquet, mode=:long, metadata=true)
+        fs_parq2 = TO.load_features(parq_path; format=:parquet, mode=:long)
         @test fs_parq2.names == fs.names
         @test fs_parq2.ids == fs.ids
         @test size(fs_parq2.X) == size(fs.X)
         @test all(fs_parq2.X .== fs.X)
 
-        PM.save_features(parq_path, fs; format=:auto, mode=:long, metadata=true)
-        fs_parq3 = PM.load_features(parq_path; format=:auto, mode=:long)
+        TO.save_features(parq_path, fs; format=:auto, mode=:long, metadata=true)
+        fs_parq3 = TO.load_features(parq_path; format=:auto, mode=:long)
         @test fs_parq3.names == fs.names
         @test fs_parq3.ids == fs.ids
         @test size(fs_parq3.X) == size(fs.X)
         @test all(fs_parq3.X .== fs.X)
 
-        @test_throws ArgumentError PM.save_features(parq_path, fs; format=:parquet, layout=:features_by_samples)
-        @test_throws ArgumentError PM.load_features(parq_path; format=:parquet, layout=:features_by_samples)
+        @test_throws ArgumentError TO.save_features(parq_path, fs; format=:parquet, layout=:features_by_samples)
+        @test_throws ArgumentError TO.load_features(parq_path; format=:parquet, layout=:features_by_samples)
     end
 
     # NPZ is extension-backed; CSV save has a built-in fallback, while CSV load
@@ -1162,64 +1162,64 @@ end
     npz_path = joinpath(tmpd, "features.npz")
     csv_path = joinpath(tmpd, "features.csv")
     if Base.find_package("NPZ") === nothing
-        @test_throws ArgumentError PM.save_features_npz(npz_path, fs)
-        @test_throws ArgumentError PM.load_features_npz(npz_path)
-        @test_throws ArgumentError PM.save_features(npz_path, fs; format=:npz)
-        @test_throws ArgumentError PM.load_features(npz_path; format=:npz)
+        @test_throws ArgumentError TO.save_features_npz(npz_path, fs)
+        @test_throws ArgumentError TO.load_features_npz(npz_path)
+        @test_throws ArgumentError TO.save_features(npz_path, fs; format=:npz)
+        @test_throws ArgumentError TO.load_features(npz_path; format=:npz)
     else
         @eval using NPZ
-        PM.save_features_npz(npz_path, fs; format=:wide, layout=:samples_by_features)
+        TO.save_features_npz(npz_path, fs; format=:wide, layout=:samples_by_features)
         @test isfile(npz_path)
         @test isfile(FEA.default_feature_metadata_path(npz_path))
-        fs_npz = PM.load_features_npz(npz_path)
+        fs_npz = TO.load_features_npz(npz_path)
         @test fs_npz.names == fs.names
         @test fs_npz.ids == fs.ids
         @test size(fs_npz.X) == size(fs.X)
         @test all(fs_npz.X .== fs.X)
         md_npz = FEA.load_metadata_json(FEA.default_feature_metadata_path(npz_path); validate_feature_schema=true)
         @test md_npz["kind"] == "features"
-        @test md_npz["schema_version"] == string(PM.Serialization.TAMER_FEATURE_SCHEMA_VERSION)
+        @test md_npz["schema_version"] == string(TO.Serialization.TAMER_FEATURE_SCHEMA_VERSION)
 
         # Generic interop entrypoints should route to NPZ extension.
-        PM.save_features(npz_path, fs; format=:auto, mode=:wide, layout=:samples_by_features, metadata=true)
-        fs_npz2 = PM.load_features(npz_path; format=:auto, mode=:wide)
+        TO.save_features(npz_path, fs; format=:auto, mode=:wide, layout=:samples_by_features, metadata=true)
+        fs_npz2 = TO.load_features(npz_path; format=:auto, mode=:wide)
         @test fs_npz2.names == fs.names
         @test fs_npz2.ids == fs.ids
         @test size(fs_npz2.X) == size(fs.X)
         @test all(fs_npz2.X .== fs.X)
         @test haskey(fs_npz2.meta, :metadata)
-        @test fs_npz2.meta.metadata["schema_version"] == string(PM.Serialization.TAMER_FEATURE_SCHEMA_VERSION)
+        @test fs_npz2.meta.metadata["schema_version"] == string(TO.Serialization.TAMER_FEATURE_SCHEMA_VERSION)
 
         # Optional transposed storage layout round-trip.
-        PM.save_features(npz_path, fs; format=:npz, mode=:wide, layout=:features_by_samples, metadata=true)
-        fs_npz3 = PM.load_features(npz_path; format=:npz, mode=:wide)
+        TO.save_features(npz_path, fs; format=:npz, mode=:wide, layout=:features_by_samples, metadata=true)
+        fs_npz3 = TO.load_features(npz_path; format=:npz, mode=:wide)
         @test fs_npz3.names == fs.names
         @test fs_npz3.ids == fs.ids
         @test size(fs_npz3.X) == size(fs.X)
         @test all(fs_npz3.X .== fs.X)
     end
     if Base.find_package("CSV") === nothing
-        PM.save_features_csv(csv_path, fs)
+        TO.save_features_csv(csv_path, fs)
         @test isfile(csv_path)
         @test isfile(FEA.default_feature_metadata_path(csv_path))
-        @test_throws ArgumentError PM.load_features_csv(csv_path)
-        PM.save_features(csv_path, fs; format=:csv)
+        @test_throws ArgumentError TO.load_features_csv(csv_path)
+        TO.save_features(csv_path, fs; format=:csv)
         @test isfile(csv_path)
         @test isfile(FEA.default_feature_metadata_path(csv_path))
-        @test_throws ArgumentError PM.load_features(csv_path; format=:csv)
+        @test_throws ArgumentError TO.load_features(csv_path; format=:csv)
     else
         @eval using CSV
-        PM.save_features_csv(csv_path, fs; format=:wide, layout=:samples_by_features)
+        TO.save_features_csv(csv_path, fs; format=:wide, layout=:samples_by_features)
         @test isfile(csv_path)
         @test isfile(FEA.default_feature_metadata_path(csv_path))
-        fs_csv = PM.load_features_csv(csv_path; format=:wide)
+        fs_csv = TO.load_features_csv(csv_path; format=:wide)
         @test fs_csv.names == fs.names
         @test fs_csv.ids == fs.ids
         @test size(fs_csv.X) == size(fs.X)
         @test all(fs_csv.X .== fs.X)
 
-        PM.save_features(csv_path, fs; format=:auto, mode=:wide, layout=:samples_by_features, metadata=true)
-        fs_csv2 = PM.load_features(csv_path; format=:auto, mode=:wide)
+        TO.save_features(csv_path, fs; format=:auto, mode=:wide, layout=:samples_by_features, metadata=true)
+        fs_csv2 = TO.load_features(csv_path; format=:auto, mode=:wide)
         @test fs_csv2.names == fs.names
         @test fs_csv2.ids == fs.ids
         @test size(fs_csv2.X) == size(fs.X)
@@ -1230,76 +1230,76 @@ end
         @test header == ["id"; String.(fs.names)]
 
         # Long mode write/load support.
-        PM.save_features_csv(csv_path, fs; format=:long, layout=:samples_by_features)
-        fs_csv_long = PM.load_features_csv(csv_path; format=:long)
+        TO.save_features_csv(csv_path, fs; format=:long, layout=:samples_by_features)
+        fs_csv_long = TO.load_features_csv(csv_path; format=:long)
         @test fs_csv_long.names == fs.names
         @test fs_csv_long.ids == fs.ids
         @test size(fs_csv_long.X) == size(fs.X)
         @test all(fs_csv_long.X .== fs.X)
     end
-    @test_throws ArgumentError PM.save_features(joinpath(tmpd, "features.unknown"), fs; format=:auto)
-    @test_throws ArgumentError PM.load_features(joinpath(tmpd, "features.unknown"); format=:auto)
+    @test_throws ArgumentError TO.save_features(joinpath(tmpd, "features.unknown"), fs; format=:auto)
+    @test_throws ArgumentError TO.load_features(joinpath(tmpd, "features.unknown"); format=:auto)
 
     mixed = Any[enc23, M23, enc3]
-    @test_throws ArgumentError PM.featurize(mixed, lspec; opts=opts_inv, batch=bserial, on_unsupported=:error)
+    @test_throws ArgumentError TO.featurize(mixed, lspec; opts=opts_inv, batch=bserial, on_unsupported=:error)
 
-    fs_skip = PM.featurize(mixed, lspec; opts=opts_inv, batch=bserial, on_unsupported=:skip)
+    fs_skip = TO.featurize(mixed, lspec; opts=opts_inv, batch=bserial, on_unsupported=:skip)
     @test size(fs_skip.X, 1) == 2
-    @test size(fs_skip.X, 2) == PM.nfeatures(lspec)
+    @test size(fs_skip.X, 2) == TO.nfeatures(lspec)
     @test fs_skip.meta.skipped_indices == [2]
 
-    fs_missing = PM.featurize(mixed, lspec; opts=opts_inv, batch=bserial, on_unsupported=:missing)
+    fs_missing = TO.featurize(mixed, lspec; opts=opts_inv, batch=bserial, on_unsupported=:missing)
     @test size(fs_missing.X, 1) == 3
-    @test size(fs_missing.X, 2) == PM.nfeatures(lspec)
+    @test size(fs_missing.X, 2) == TO.nfeatures(lspec)
     @test all(ismissing, view(fs_missing.X, 2, :))
     @test !any(ismissing, view(fs_missing.X, 1, :))
     @test !any(ismissing, view(fs_missing.X, 3, :))
 
-    Xmixed = Matrix{Float64}(undef, 3, PM.nfeatures(lspec))
-    @test_throws ArgumentError PM.batch_transform!(Xmixed, mixed, lspec; opts=opts_inv, batch=bserial, on_unsupported=:missing)
-    Xmixed_m = Matrix{Union{Missing,Float64}}(undef, 3, PM.nfeatures(lspec))
-    fs_missing_bang = PM.batch_transform!(Xmixed_m, mixed, lspec; opts=opts_inv, batch=bserial, on_unsupported=:missing)
+    Xmixed = Matrix{Float64}(undef, 3, TO.nfeatures(lspec))
+    @test_throws ArgumentError TO.batch_transform!(Xmixed, mixed, lspec; opts=opts_inv, batch=bserial, on_unsupported=:missing)
+    Xmixed_m = Matrix{Union{Missing,Float64}}(undef, 3, TO.nfeatures(lspec))
+    fs_missing_bang = TO.batch_transform!(Xmixed_m, mixed, lspec; opts=opts_inv, batch=bserial, on_unsupported=:missing)
     @test all(ismissing, view(fs_missing_bang.X, 2, :))
 
     # Unsupported-sample policy parity across deterministic backends.
-    fs_skip_serial = PM.featurize(mixed, lspec; opts=opts_inv, batch=bserial, on_unsupported=:skip)
-    fs_skip_threads = PM.featurize(mixed, lspec; opts=opts_inv, batch=bthreads, on_unsupported=:skip)
+    fs_skip_serial = TO.featurize(mixed, lspec; opts=opts_inv, batch=bserial, on_unsupported=:skip)
+    fs_skip_threads = TO.featurize(mixed, lspec; opts=opts_inv, batch=bthreads, on_unsupported=:skip)
     @test fs_skip_threads.X == fs_skip_serial.X
     @test fs_skip_threads.ids == fs_skip_serial.ids
     @test fs_skip_threads.names == fs_skip_serial.names
 
-    fs_missing_serial = PM.featurize(mixed, lspec; opts=opts_inv, batch=bserial, on_unsupported=:missing)
-    fs_missing_threads = PM.featurize(mixed, lspec; opts=opts_inv, batch=bthreads, on_unsupported=:missing)
+    fs_missing_serial = TO.featurize(mixed, lspec; opts=opts_inv, batch=bserial, on_unsupported=:missing)
+    fs_missing_threads = TO.featurize(mixed, lspec; opts=opts_inv, batch=bthreads, on_unsupported=:missing)
     @test isequal(fs_missing_threads.X, fs_missing_serial.X)
     @test fs_missing_threads.ids == fs_missing_serial.ids
     @test fs_missing_threads.names == fs_missing_serial.names
 
     if Base.find_package("Folds") !== nothing
-        fs_skip_folds = PM.featurize(mixed, lspec; opts=opts_inv, batch=bfolds, on_unsupported=:skip)
-        fs_missing_folds = PM.featurize(mixed, lspec; opts=opts_inv, batch=bfolds, on_unsupported=:missing)
+        fs_skip_folds = TO.featurize(mixed, lspec; opts=opts_inv, batch=bfolds, on_unsupported=:skip)
+        fs_missing_folds = TO.featurize(mixed, lspec; opts=opts_inv, batch=bfolds, on_unsupported=:missing)
         @test fs_skip_folds.X == fs_skip_serial.X
         @test isequal(fs_missing_folds.X, fs_missing_serial.X)
     end
 
     if Threads.nthreads() > 1
-        fs_thr_1 = PM.featurize(samples, lspec; opts=opts_inv, batch=bthreads, cache=:auto)
-        fs_thr_2 = PM.featurize(samples, lspec; opts=opts_inv, batch=bthreads, cache=:auto)
+        fs_thr_1 = TO.featurize(samples, lspec; opts=opts_inv, batch=bthreads, cache=:auto)
+        fs_thr_2 = TO.featurize(samples, lspec; opts=opts_inv, batch=bthreads, cache=:auto)
         @test fs_thr_1.X == fs_thr_2.X
         @test fs_thr_1.ids == fs_thr_2.ids
     end
 
     # All unsupported samples: skip => empty matrix, missing => all-missing rows.
-    fs_sb_skip = PM.featurize(samples, sbispec; opts=opts_inv, batch=bserial, on_unsupported=:skip)
+    fs_sb_skip = TO.featurize(samples, sbispec; opts=opts_inv, batch=bserial, on_unsupported=:skip)
     @test size(fs_sb_skip.X, 1) == 0
-    @test size(fs_sb_skip.X, 2) == PM.nfeatures(sbispec)
+    @test size(fs_sb_skip.X, 2) == TO.nfeatures(sbispec)
 
-    fs_sb_missing = PM.featurize(samples, sbispec; opts=opts_inv, batch=bserial, on_unsupported=:missing)
+    fs_sb_missing = TO.featurize(samples, sbispec; opts=opts_inv, batch=bserial, on_unsupported=:missing)
     @test size(fs_sb_missing.X, 1) == length(samples)
-    @test size(fs_sb_missing.X, 2) == PM.nfeatures(sbispec)
+    @test size(fs_sb_missing.X, 2) == TO.nfeatures(sbispec)
     @test all(ismissing, fs_sb_missing.X)
 
     # Long-form wrappers for optional Tables.jl integration.
-    es = PM.euler_surface(M23, pi, opts_inv)
+    es = TO.euler_surface(M23, pi, opts_inv)
     est = FEA.euler_surface_table(es; id="m23")
     @test est isa FEA.EulerSurfaceLongTable
 
@@ -1308,11 +1308,11 @@ end
     pit = FEA.persistence_image_table(PI; id="pi")
     @test pit isa FEA.PersistenceImageLongTable
 
-    L = PM.mp_landscape(M23, [Int[r2, r3]]; kmax=2, tgrid=collect(0.0:0.5:3.0))
+    L = TO.mp_landscape(M23, [Int[r2, r3]]; kmax=2, tgrid=collect(0.0:0.5:3.0))
     lt = FEA.mp_landscape_table(L; id="land")
     @test lt isa FEA.MPLandscapeLongTable
 
-    pm = Inv.euler_signed_measure(M23, pi, opts_inv)
+    pm = SM.euler_signed_measure(M23, pi, opts_inv)
     pmt = FEA.point_signed_measure_table(pm; id="pm")
     @test pmt isa FEA.PointSignedMeasureLongTable
 
@@ -1323,8 +1323,8 @@ end
         else
             @eval using KernelFunctions
             chain = Int[r2, r3]
-            L23_small = PM.mp_landscape(M23, [chain]; kmax=2, tgrid=collect(0.0:0.5:3.0))
-            L3_small = PM.mp_landscape(M3, [chain]; kmax=2, tgrid=collect(0.0:0.5:3.0))
+            L23_small = TO.mp_landscape(M23, [chain]; kmax=2, tgrid=collect(0.0:0.5:3.0))
+            L3_small = TO.mp_landscape(M3, [chain]; kmax=2, tgrid=collect(0.0:0.5:3.0))
 
             k_land = FEA.mp_landscape_kernel_object(kind=:gaussian, sigma=1.0, p=2)
             @test isapprox(KernelFunctions.kappa(k_land, L23_small, L23_small), 1.0; atol=1e-12)
@@ -1342,7 +1342,7 @@ end
 
             k_pm = FEA.point_signed_measure_kernel_object(sigma=1.0)
             @test isapprox(KernelFunctions.kappa(k_pm, pm, pm),
-                           Inv.point_signed_measure_kernel(pm, pm; sigma=1.0);
+                           SM.point_signed_measure_kernel(pm, pm; sigma=1.0);
                            atol=1e-12)
 
             sb_zn = Inv.rectangle_signed_barcode(enc_zn.M, enc_zn.pi, opts_zn)
@@ -1360,15 +1360,15 @@ end
 
             m_match = FEA.matching_distance_metric(method=:approx, opts=opts_inv)
             d_match = Distances.evaluate(m_match, enc23, enc3)
-            @test isapprox(d_match, PM.matching_distance(enc23, enc3; method=:approx, opts=opts_inv); atol=1e-12)
+            @test isapprox(d_match, TO.matching_distance(enc23, enc3; method=:approx, opts=opts_inv); atol=1e-12)
             D_match = Distances.pairwise(m_match, Any[enc23, enc3])
             @test size(D_match) == (2, 2)
             @test isapprox(D_match[1, 1], 0.0; atol=1e-12)
             @test isapprox(D_match[1, 2], D_match[2, 1]; atol=1e-12)
 
             chain = Int[r2, r3]
-            L23_small = PM.mp_landscape(M23, [chain]; kmax=2, tgrid=collect(0.0:0.5:3.0))
-            L3_small = PM.mp_landscape(M3, [chain]; kmax=2, tgrid=collect(0.0:0.5:3.0))
+            L23_small = TO.mp_landscape(M23, [chain]; kmax=2, tgrid=collect(0.0:0.5:3.0))
+            L3_small = TO.mp_landscape(M3, [chain]; kmax=2, tgrid=collect(0.0:0.5:3.0))
             m_land = FEA.mp_landscape_distance_metric(p=2)
             @test isapprox(Distances.evaluate(m_land, L23_small, L23_small), 0.0; atol=1e-12)
             @test Distances.evaluate(m_land, L23_small, L3_small) >= 0.0
@@ -1417,7 +1417,7 @@ end
                                         cache=:auto,
                                         io=io_nowrite,
                                         metadata=(tag="nowrite",))
-        res_nowrite = PM.run_experiment(exp_nowrite, samples)
+        res_nowrite = TO.run_experiment(exp_nowrite, samples)
         @test length(res_nowrite.artifacts) == 1
         @test res_nowrite.run_dir === nothing
         @test res_nowrite.manifest_path === nothing
@@ -1441,7 +1441,7 @@ end
                                     cache=:auto,
                                     io=io_out,
                                     metadata=(purpose="featurizer_smoke",))
-        res_out = PM.run_experiment(exp_out, samples)
+        res_out = TO.run_experiment(exp_out, samples)
         @test length(res_out.artifacts) == 2
         @test res_out.run_dir !== nothing
         @test isdir(res_out.run_dir)
@@ -1460,25 +1460,25 @@ end
                 @test !haskey(art.feature_paths, :arrow)
             end
         end
-        @test res_out.artifacts[1].features.X == PM.featurize(samples, lspec; opts=opts_inv, batch=bserial, cache=:auto).X
+        @test res_out.artifacts[1].features.X == TO.featurize(samples, lspec; opts=opts_inv, batch=bserial, cache=:auto).X
 
-        loaded_meta = PM.load_experiment(res_out.manifest_path; load_features=false)
+        loaded_meta = TO.load_experiment(res_out.manifest_path; load_features=false)
         @test loaded_meta isa FEA.LoadedExperimentResult
         @test length(loaded_meta.artifacts) == 2
         @test loaded_meta.total_elapsed_seconds >= 0.0
         @test all(a -> a.features === nothing, loaded_meta.artifacts)
         @test all(a -> a.metadata !== nothing, loaded_meta.artifacts)
 
-        loaded_none = PM.load_experiment(res_out.run_dir; load_features=true, prefer=:none)
+        loaded_none = TO.load_experiment(res_out.run_dir; load_features=true, prefer=:none)
         @test all(a -> a.features === nothing, loaded_none.artifacts)
 
         if has_arrow
-            loaded_arrow = PM.load_experiment(res_out.run_dir; load_features=true, prefer=:arrow)
+            loaded_arrow = TO.load_experiment(res_out.run_dir; load_features=true, prefer=:arrow)
             @test length(loaded_arrow.artifacts) == 2
             @test loaded_arrow.artifacts[1].features !== nothing
             @test loaded_arrow.artifacts[1].features.X == res_out.artifacts[1].features.X
-            @test loaded_arrow.artifacts[1].spec isa PM.AbstractFeaturizerSpec
-            @test loaded_arrow.artifacts[1].opts isa PM.InvariantOptions
+            @test loaded_arrow.artifacts[1].spec isa TO.AbstractFeaturizerSpec
+            @test loaded_arrow.artifacts[1].opts isa TO.InvariantOptions
         end
 
         if has_parquet
@@ -1488,7 +1488,7 @@ end
                                             formats=[:parquet],
                                             write_metadata=true,
                                             overwrite=true)
-            res_parq = PM.run_experiment((lspec,), samples;
+            res_parq = TO.run_experiment((lspec,), samples;
                                          name="exp_parq",
                                          opts=opts_inv,
                                          batch=bserial,
@@ -1498,7 +1498,7 @@ end
             @test haskey(res_parq.artifacts[1].feature_paths, :parquet)
             @test isfile(res_parq.artifacts[1].feature_paths[:parquet])
             @test isfile(res_parq.manifest_path)
-            loaded_parq = PM.load_experiment(res_parq.manifest_path; prefer=:parquet)
+            loaded_parq = TO.load_experiment(res_parq.manifest_path; prefer=:parquet)
             @test length(loaded_parq.artifacts) == 1
             @test loaded_parq.artifacts[1].features !== nothing
             @test loaded_parq.artifacts[1].features.X == res_parq.artifacts[1].features.X
@@ -1518,7 +1518,7 @@ end
                                              formats=fmts,
                                              write_metadata=true,
                                              overwrite=true)
-            res_multi = PM.run_experiment((lspec,), samples;
+            res_multi = TO.run_experiment((lspec,), samples;
                                           name="exp_multi",
                                           opts=opts_inv,
                                           batch=bserial,
@@ -1543,22 +1543,186 @@ end
             @test haskey(man_multi["artifacts"][1]["feature_paths"], string(first(fmts)))
 
             if has_npz
-                loaded_npz = PM.load_experiment(res_multi.manifest_path; prefer=:npz)
+                loaded_npz = TO.load_experiment(res_multi.manifest_path; prefer=:npz)
                 @test loaded_npz.artifacts[1].features !== nothing
                 @test loaded_npz.artifacts[1].features.X == res_multi.artifacts[1].features.X
             end
             if has_csv
-                loaded_csv = PM.load_experiment(res_multi.manifest_path; prefer=:csv)
+                loaded_csv = TO.load_experiment(res_multi.manifest_path; prefer=:csv)
                 @test loaded_csv.artifacts[1].features !== nothing
                 @test loaded_csv.artifacts[1].features.X == res_multi.artifacts[1].features.X
             end
         end
     end
 
+    @testset "Featurizers UX summaries and validators" begin
+        fs_ux = TO.featurize(samples, lspec; opts=opts_inv, batch=bserial, cache=:auto)
+        @test FEA.feature_names(fs_ux) == fs_ux.names
+        @test FEA.sample_ids(fs_ux) == fs_ux.ids
+        @test FEA.feature_matrix(fs_ux) === fs_ux.X
+        @test FEA.feature_values(fs_ux) === fs_ux.X
+        @test FEA.sample_labels(fs_ux) === nothing
+        @test FEA.metadata(fs_ux) === fs_ux.meta
+        @test TO.describe(fs_ux).kind == :feature_set
+        @test FEA.feature_set_summary(fs_ux) == TO.describe(fs_ux)
+        @test occursin("FeatureSet(", sprint(show, fs_ux))
+        @test occursin("FeatureSet", sprint(show, MIME"text/plain"(), fs_ux))
+
+        fs_ok = FEA.check_feature_set(fs_ux)
+        @test fs_ok.valid
+        @test TO.describe(fs_ok).kind == :feature_set_validation
+        @test occursin("FeatureSetValidationSummary", sprint(show, fs_ok))
+
+        bad_fs = FEA.FeatureSet(zeros(Float64, 2, 1), [:f1, :f1], ["s1"], (labels=["a"],))
+        bad_fs_summary = FEA.check_feature_set(bad_fs)
+        @test !bad_fs_summary.valid
+        @test !isempty(bad_fs_summary.issues)
+        @test_throws ArgumentError FEA.check_feature_set(bad_fs; throw=true)
+
+        @test FEA.featurizer_summary(lspec).spec_type == :LandscapeSpec
+        @test occursin("LandscapeSpec", sprint(show, lspec))
+        @test occursin("LandscapeSpec", sprint(show, MIME"text/plain"(), lspec))
+        good_spec_summary = FEA.check_featurizer_spec(lspec)
+        @test good_spec_summary.valid
+
+        bad_lspec = FEA.LandscapeSpec(
+            [[0.0, 0.0]],
+            [[0.0]],
+            nothing,
+            0,
+            Float64[],
+            :bad,
+            true,
+            nothing,
+            nothing,
+            0,
+            true,
+            true,
+            true,
+            :bad,
+            :bad,
+            nothing,
+        )
+        bad_spec_summary = FEA.check_featurizer_spec(bad_lspec)
+        @test !bad_spec_summary.valid
+        @test !isempty(bad_spec_summary.issues)
+        @test_throws ArgumentError FEA.check_featurizer_spec(bad_lspec; throw=true)
+
+        tmp_ux = mktempdir()
+        io_ux = FEA.ExperimentIOConfig(outdir=tmp_ux,
+                                       prefix="exp_ux",
+                                       format=:wide,
+                                       formats=Symbol[],
+                                       write_metadata=true,
+                                       overwrite=true)
+        exp_ux = FEA.ExperimentSpec((lspec,);
+                                    name="exp_ux",
+                                    opts=opts_inv,
+                                    batch=bserial,
+                                    cache=:auto,
+                                    io=io_ux,
+                                    metadata=(tag="ux",))
+        exp_summary = FEA.experiment_summary(exp_ux)
+        @test exp_summary.kind == :experiment_spec
+        @test FEA.experiment_name(exp_ux) == "exp_ux"
+        @test occursin("ExperimentSpec", sprint(show, exp_ux))
+        @test occursin("ExperimentSpec", sprint(show, MIME"text/plain"(), exp_ux))
+
+        exp_valid = FEA.check_experiment_spec(exp_ux)
+        @test exp_valid.valid
+        @test occursin("ExperimentSpecValidationSummary", sprint(show, exp_valid))
+
+        bad_rank_spec = FEA.RankGridSpec(-1, true, nothing)
+        bad_exp = FEA.ExperimentSpec((bad_rank_spec,);
+                                     name="",
+                                     opts=opts_inv,
+                                     batch=bserial,
+                                     cache=:auto,
+                                     io=FEA.ExperimentIOConfig(outdir=nothing,
+                                                               prefix="bad_exp",
+                                                               format=:wide,
+                                                               formats=Symbol[],
+                                                               write_metadata=false,
+                                                               overwrite=true))
+        bad_exp_summary = FEA.check_experiment_spec(bad_exp)
+        @test !bad_exp_summary.valid
+        @test !isempty(bad_exp_summary.invalid_specs)
+        @test_throws ArgumentError FEA.check_experiment_spec(bad_exp; throw=true)
+
+        res_ux = TO.run_experiment(exp_ux, samples)
+        art_key = only(FEA.artifact_keys(res_ux))
+        art_ux = FEA.artifact(res_ux, art_key)
+        @test FEA.experiment_name(res_ux) == "exp_ux"
+        @test FEA.artifacts(res_ux) === res_ux.artifacts
+        @test FEA.nartifacts(res_ux) == 1
+        @test FEA.artifact_spec(art_ux) === lspec
+        @test FEA.artifact_features(art_ux) isa FEA.FeatureSet
+        @test FEA.artifact_elapsed_seconds(art_ux) >= 0.0
+        @test FEA.feature_paths(art_ux) == Dict{Symbol,String}()
+        @test FEA.run_dir(res_ux) == res_ux.run_dir
+        @test FEA.manifest_path(res_ux) == res_ux.manifest_path
+        @test FEA.total_elapsed_seconds(res_ux) == res_ux.total_elapsed_seconds
+        @test FEA.has_features(art_ux)
+        @test FEA.has_features(res_ux)
+        @test FEA.experiment_artifact_summary(art_ux).kind == :experiment_artifact
+        @test occursin("ExperimentResult", sprint(show, res_ux))
+        @test occursin("ExperimentArtifact", sprint(show, art_ux))
+
+        loaded_ux = TO.load_experiment(res_ux.manifest_path; load_features=false)
+        loaded_art = FEA.artifact(loaded_ux, art_key)
+        @test FEA.experiment_name(loaded_ux) == "exp_ux"
+        @test FEA.nartifacts(loaded_ux) == 1
+        @test !FEA.has_features(loaded_art)
+        @test !FEA.has_features(loaded_ux)
+        @test FEA.artifact_spec(loaded_art) isa FEA.AbstractFeaturizerSpec
+        @test FEA.artifact_features(loaded_art) === nothing
+        @test FEA.experiment_artifact_summary(loaded_art).kind == :loaded_experiment_artifact
+        @test occursin("LoadedExperimentResult", sprint(show, loaded_ux))
+        @test occursin("LoadedExperimentArtifact", sprint(show, loaded_art))
+
+        loaded_valid = FEA.check_loaded_experiment(loaded_ux)
+        @test loaded_valid.valid
+        @test occursin("LoadedExperimentValidationSummary", sprint(show, loaded_valid))
+
+        bad_loaded = FEA.LoadedExperimentResult(
+            Dict("kind" => "bad_manifest"),
+            FEA.LoadedExperimentArtifact[
+                FEA.LoadedExperimentArtifact(:dup, nothing, nothing, nothing, nothing, 0.0, Dict{String,Any}(), Dict{Symbol,String}(), nothing),
+                FEA.LoadedExperimentArtifact(:dup, nothing, nothing, nothing, nothing, 0.0, Dict{String,Any}(), Dict{Symbol,String}(), nothing),
+            ],
+            nothing,
+            "manifest.json",
+            0.0,
+        )
+        bad_loaded_summary = FEA.check_loaded_experiment(bad_loaded)
+        @test !bad_loaded_summary.valid
+        @test !isempty(bad_loaded_summary.issues)
+        @test_throws ArgumentError FEA.check_loaded_experiment(bad_loaded; throw=true)
+
+        @test TOA.ExperimentSpec === FEA.ExperimentSpec
+        @test TOA.ExperimentResult === FEA.ExperimentResult
+        @test TOA.FeatureSetValidationSummary === FEA.FeatureSetValidationSummary
+        @test TOA.feature_set_summary === FEA.feature_set_summary
+        @test TOA.experiment_summary === FEA.experiment_summary
+        @test TOA.experiment_artifact_summary === FEA.experiment_artifact_summary
+        @test TOA.featurizer_summary === FEA.featurizer_summary
+        @test TOA.check_feature_set === FEA.check_feature_set
+        @test TOA.check_experiment_spec === FEA.check_experiment_spec
+        @test TOA.check_loaded_experiment === FEA.check_loaded_experiment
+        @test TOA.check_featurizer_spec === FEA.check_featurizer_spec
+        @test TOA.sample_ids === FEA.sample_ids
+        @test TOA.feature_matrix === FEA.feature_matrix
+        @test TOA.feature_values === FEA.feature_values
+        @test TOA.sample_labels === FEA.sample_labels
+        @test TOA.metadata === FEA.metadata
+        @test TOA.experiment_name === FEA.experiment_name
+        @test TOA.artifact === FEA.artifact
+    end
+
     @testset "Batch perf guards (lightweight)" begin
         perf_samples = vcat(fill(enc23, 16), fill(enc3, 16))
-        perf_batch = PM.BatchOptions(threaded=false, backend=:serial, deterministic=true)
-        perf_run(cache_mode) = PM.featurize(perf_samples, lspec; opts=opts_inv, batch=perf_batch, cache=cache_mode)
+        perf_batch = TO.BatchOptions(threaded=false, backend=:serial, deterministic=true)
+        perf_run(cache_mode) = TO.featurize(perf_samples, lspec; opts=opts_inv, batch=perf_batch, cache=cache_mode)
 
         # Warmup before timing/allocation checks.
         perf_run(nothing)

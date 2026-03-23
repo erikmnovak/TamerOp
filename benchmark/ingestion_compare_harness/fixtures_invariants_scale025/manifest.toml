@@ -1,0 +1,115 @@
+[meta]
+version = 1
+cases_file = "benchmark/ingestion_compare_harness/cases_invariants.toml"
+scale = 0.25
+
+[[cases]]
+id = "inv_degree_rips_n1000_d2_s11"
+regime = "degree_rips_parity"
+dataset = "gaussian_shell"
+path = "inv_degree_rips_n1000_d2_s11.csv"
+n_points = 250
+ambient_dim = 2
+seed = 11
+max_dim = 1
+degree_policy = "radius_k"
+degree_k = 16
+degree_radius = 0.224965011445
+
+[[cases]]
+id = "inv_degree_rips_n1000_d8_s11"
+regime = "degree_rips_parity"
+dataset = "gaussian_shell"
+path = "inv_degree_rips_n1000_d8_s11.csv"
+n_points = 250
+ambient_dim = 8
+seed = 11
+max_dim = 1
+degree_policy = "radius_k"
+degree_k = 16
+degree_radius = 0.673787139177
+
+[[cases]]
+id = "inv_rips_codensity_n750_d2_s11"
+regime = "rips_codensity_parity"
+dataset = "gaussian_shell"
+path = "inv_rips_codensity_n750_d2_s11.csv"
+n_points = 188
+ambient_dim = 2
+seed = 11
+max_dim = 1
+codensity_policy = "radius_k+dtm_mass"
+codensity_k = 16
+codensity_radius = 0.280532535787
+codensity_dtm_mass = 0.0851063829787
+
+[[cases]]
+id = "inv_rips_codensity_n750_d8_s11"
+regime = "rips_codensity_parity"
+dataset = "gaussian_shell"
+path = "inv_rips_codensity_n750_d8_s11.csv"
+n_points = 188
+ambient_dim = 8
+seed = 11
+max_dim = 1
+codensity_policy = "radius_k+dtm_mass"
+codensity_k = 16
+codensity_radius = 0.718713104598
+codensity_dtm_mass = 0.0851063829787
+
+[[cases]]
+id = "inv_rips_lowerstar_n1000_d2_s11"
+regime = "rips_lowerstar_parity"
+dataset = "gaussian_shell"
+path = "inv_rips_lowerstar_n1000_d2_s11.csv"
+n_points = 250
+ambient_dim = 2
+seed = 11
+max_dim = 1
+lowerstar_policy = "radius_k+coord1_function"
+lowerstar_k = 16
+lowerstar_radius = 0.224965011445
+
+[[cases]]
+id = "inv_rips_lowerstar_n1000_d8_s11"
+regime = "rips_lowerstar_parity"
+dataset = "gaussian_shell"
+path = "inv_rips_lowerstar_n1000_d8_s11.csv"
+n_points = 250
+ambient_dim = 8
+seed = 11
+max_dim = 1
+lowerstar_policy = "radius_k+coord1_function"
+lowerstar_k = 16
+lowerstar_radius = 0.673787139177
+
+[[cases]]
+id = "inv_alpha_n150_d2_md2_s11"
+regime = "alpha_parity"
+dataset = "gaussian_shell"
+path = "inv_alpha_n150_d2_md2_s11.csv"
+n_points = 38
+ambient_dim = 2
+seed = 11
+max_dim = 2
+
+[[cases]]
+id = "inv_core_delaunay_n150_d2_md2_s11"
+regime = "core_delaunay_parity"
+dataset = "gaussian_shell"
+path = "inv_core_delaunay_n150_d2_md2_s11.csv"
+n_points = 38
+ambient_dim = 2
+seed = 11
+max_dim = 2
+
+[[cases]]
+id = "inv_cubical_side24_s11"
+regime = "cubical_parity"
+dataset = "image_sine"
+path = "inv_cubical_side24_s11.csv"
+n_points = 144
+ambient_dim = 2
+seed = 11
+max_dim = 2
+image_side = 12

@@ -1,3 +1,3 @@
 case_id,regime,n_points,ambient_dim,max_dim,tamer_cold_ms,multipers_cold_ms,cold_slowdown_tamer_over_multipers,tamer_warm_median_ms,multipers_warm_median_ms,warm_slowdown_tamer_over_multipers,tamer_simplex_count,multipers_simplex_count
-alpha_n200_d2_md2_s11,alpha_function_delaunay,200,2,2,17725.452258,5.710686964448541,3103.908929,3.405178,2.4759420193731785,1.375306,1151,1141
-alpha_n300_d2_md2_s17,alpha_function_delaunay,300,2,2,6.050845,4.800644994247705,1.260423,5.211009,3.597673960030079,1.448438,1759,1749
+alpha_n200_d2_md2_s11,alpha_parity,200,2,2,17725.452258,5.710686964448541,3103.908929,3.405178,2.4759420193731785,1.375306,1151,1141
+alpha_n300_d2_md2_s17,alpha_parity,300,2,2,6.050845,4.800644994247705,1.260423,5.211009,3.597673960030079,1.448438,1759,1749

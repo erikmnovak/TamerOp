@@ -1,0 +1,73 @@
+[profile] desktop (reps=4, trim_between_reps=true, trim_between_cases=true)
+NearestNeighbors package loaded: true
+Invariants: [:euler_signed_measure]
+
+[289758] signal 15: Terminated
+in expression starting at /home/eriknovak/Documents/duke_fall_2025/tamer-op/benchmark/ingestion_compare_harness/run_tamer_invariants.jl:467
+unknown function (ip: 0x746212491115) at /lib/x86_64-linux-gnu/libc.so.6
+pthread_cond_wait at /lib/x86_64-linux-gnu/libc.so.6 (unknown line)
+uv_cond_wait at /workspace/srcdir/libuv/src/unix/thread.c:822
+ijl_task_get_next at /cache/build/tester-amdci4-14/julialang/julia-release-1-dot-12/src/scheduler.c:523
+poptask at ./task.jl:1187
+wait at ./task.jl:1199
+#wait#398 at ./condition.jl:141
+wait at ./condition.jl:136 [inlined]
+_trywait at ./asyncevent.jl:185
+profile_printing_listener at ./Base.jl:332
+#start_profile_listener##0 at ./Base.jl:352
+jfptr_YY.start_profile_listenerYY.YY.0_15858.1 at /home/eriknovak/.julia/juliaup/julia-1.12.1+0.x64.linux.gnu/lib/julia/sys.so (unknown line)
+jl_apply at /cache/build/tester-amdci4-14/julialang/julia-release-1-dot-12/src/julia.h:2391 [inlined]
+start_task at /cache/build/tester-amdci4-14/julialang/julia-release-1-dot-12/src/task.c:1249
+unknown function (ip: (nil)) at (unknown file)
+jl_gc_add_finalizer_ at /cache/build/tester-amdci4-14/julialang/julia-release-1-dot-12/src/gc-common.c:446 [inlined]
+ijl_gc_add_ptr_finalizer at /cache/build/tester-amdci4-14/julialang/julia-release-1-dot-12/src/gc-common.c:453
+finalizer at ./gcutils.jl:92 [inlined]
+_ at ./gmp.jl:71 [inlined]
+BigInt at ./gmp.jl:69 [inlined]
+set_si at ./gmp.jl:218
+BigInt at ./gmp.jl:316 [inlined]
+Rational at ./rational.jl:151 [inlined]
+coerce at /home/eriknovak/Documents/duke_fall_2025/tamer-op/src/CoreModules.jl:109 [inlined]
+_restricted_coboundary_component at /home/eriknovak/Documents/duke_fall_2025/tamer-op/src/DataIngestion.jl:3909
+unknown function (ip: 0x7461ded05fe1) at (unknown file)
+#_lazy_diff_components#157 at /home/eriknovak/Documents/duke_fall_2025/tamer-op/src/DataIngestion.jl:3947
+_lazy_diff_components at /home/eriknovak/Documents/duke_fall_2025/tamer-op/src/DataIngestion.jl:3916 [inlined]
+_lazy_diff_idx! at /home/eriknovak/Documents/duke_fall_2025/tamer-op/src/DataIngestion.jl:3965
+#_materialize_cochain#226 at /home/eriknovak/Documents/duke_fall_2025/tamer-op/src/DataIngestion.jl:5218
+_materialize_cochain at /home/eriknovak/Documents/duke_fall_2025/tamer-op/src/DataIngestion.jl:5209 [inlined]
+#_run_ingestion_plan#538 at /home/eriknovak/Documents/duke_fall_2025/tamer-op/src/DataIngestion.jl:11917
+_run_ingestion_plan at /home/eriknovak/Documents/duke_fall_2025/tamer-op/src/DataIngestion.jl:11757 [inlined]
+#run_ingestion#539 at /home/eriknovak/Documents/duke_fall_2025/tamer-op/src/DataIngestion.jl:11996 [inlined]
+run_ingestion at /home/eriknovak/Documents/duke_fall_2025/tamer-op/src/DataIngestion.jl:11996
+unknown function (ip: 0x7461df9c3f76) at (unknown file)
+_run_euler_signed_measure_uncached at /home/eriknovak/Documents/duke_fall_2025/tamer-op/benchmark/ingestion_compare_harness/run_tamer_invariants.jl:296 [inlined]
+_run_invariant_uncached at /home/eriknovak/Documents/duke_fall_2025/tamer-op/benchmark/ingestion_compare_harness/run_tamer_invariants.jl:314
+unknown function (ip: 0x7461df9296c5) at (unknown file)
+main at /home/eriknovak/Documents/duke_fall_2025/tamer-op/benchmark/ingestion_compare_harness/run_tamer_invariants.jl:392
+unknown function (ip: 0x7461f5fd96cf) at (unknown file)
+jl_apply at /cache/build/tester-amdci4-14/julialang/julia-release-1-dot-12/src/julia.h:2391 [inlined]
+do_call at /cache/build/tester-amdci4-14/julialang/julia-release-1-dot-12/src/interpreter.c:123
+eval_value at /cache/build/tester-amdci4-14/julialang/julia-release-1-dot-12/src/interpreter.c:243
+eval_stmt_value at /cache/build/tester-amdci4-14/julialang/julia-release-1-dot-12/src/interpreter.c:194 [inlined]
+eval_body at /cache/build/tester-amdci4-14/julialang/julia-release-1-dot-12/src/interpreter.c:707
+jl_interpret_toplevel_thunk at /cache/build/tester-amdci4-14/julialang/julia-release-1-dot-12/src/interpreter.c:898
+jl_toplevel_eval_flex at /cache/build/tester-amdci4-14/julialang/julia-release-1-dot-12/src/toplevel.c:1035
+jl_toplevel_eval_flex at /cache/build/tester-amdci4-14/julialang/julia-release-1-dot-12/src/toplevel.c:975
+ijl_toplevel_eval at /cache/build/tester-amdci4-14/julialang/julia-release-1-dot-12/src/toplevel.c:1047
+ijl_toplevel_eval_in at /cache/build/tester-amdci4-14/julialang/julia-release-1-dot-12/src/toplevel.c:1092
+eval at ./boot.jl:489
+include_string at ./loading.jl:2842
+_include at ./loading.jl:2902
+include at ./Base.jl:306
+exec_options at ./client.jl:317
+_start at ./client.jl:550
+jfptr__start_31204.1 at /home/eriknovak/.julia/juliaup/julia-1.12.1+0.x64.linux.gnu/lib/julia/sys.so (unknown line)
+jl_apply at /cache/build/tester-amdci4-14/julialang/julia-release-1-dot-12/src/julia.h:2391 [inlined]
+true_main at /cache/build/tester-amdci4-14/julialang/julia-release-1-dot-12/src/jlapi.c:971
+jl_repl_entrypoint at /cache/build/tester-amdci4-14/julialang/julia-release-1-dot-12/src/jlapi.c:1139
+main at /cache/build/tester-amdci4-14/julialang/julia-release-1-dot-12/cli/loader_exe.c:58
+unknown function (ip: 0x746212429d8f) at /lib/x86_64-linux-gnu/libc.so.6
+__libc_start_main at /lib/x86_64-linux-gnu/libc.so.6 (unknown line)
+unknown function (ip: 0x4010b8) at /workspace/srcdir/glibc-2.17/csu/../sysdeps/x86_64/start.S
+unknown function (ip: (nil)) at (unknown file)
+Allocations: 439997764 (Pool: 439995551; Big: 2213); GC: 51

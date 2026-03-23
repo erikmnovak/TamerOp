@@ -34,21 +34,21 @@
 using Random
 
 try
-    using PosetModules
+    using TamerOp
 catch
-    include(joinpath(@__DIR__, "..", "src", "PosetModules.jl"))
-    using .PosetModules
+    include(joinpath(@__DIR__, "..", "src", "TamerOp.jl"))
+    using .TamerOp
 end
 
-const PM = PosetModules.Advanced
-const CM = PM.CoreModules
-const OPT = PM.Options
-const DT = PM.DataTypes
-const EC = PM.EncodingCore
-const RES = PM.Results
-const PLB = PM.PLBackend
-const PLP = PM.PLPolyhedra
-const RG = PosetModules.RegionGeometry
+const TO = TamerOp.Advanced
+const CM = TO.CoreModules
+const OPT = TO.Options
+const DT = TO.DataTypes
+const EC = TO.EncodingCore
+const RES = TO.Results
+const PLB = TO.PLBackend
+const PLP = TO.PLPolyhedra
+const RG = TamerOp.RegionGeometry
 
 function _parse_arg(args, key::String, default::Int)
     for a in args
@@ -118,7 +118,7 @@ function _axis_fixture(; splits::Int=10)
         Phi[i, j] = CM.coerce(field, ((i + 3 * j) % 5) - 2)
     end
 
-    opts = PM.EncodingOptions(backend=:pl_backend, max_regions=2_000_000, poset_kind=:signature, field=field)
+    opts = TO.EncodingOptions(backend=:pl_backend, max_regions=2_000_000, poset_kind=:signature, field=field)
     P, H, pi = PLB.encode_fringe_boxes(Ups, Downs, Phi, opts)
     return (P=P, H=H, pi=pi, Ups=Ups, Downs=Downs, Phi=Phi, opts=opts)
 end
@@ -257,7 +257,7 @@ function _pl_fringe_fixture(; nups::Int=4, ndowns::Int=4)
         Phi[j, i] = ((i + 2 * j) % 3 == 0) ? K(0) : K(1)
     end
     F = PLP.PLFringe(Ups, Downs, Phi)
-    opts = PM.EncodingOptions(backend=:pl, max_regions=100_000, poset_kind=:signature)
+    opts = TO.EncodingOptions(backend=:pl, max_regions=100_000, poset_kind=:signature)
     return (F=F, opts=opts)
 end
 

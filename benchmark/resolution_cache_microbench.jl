@@ -1,17 +1,17 @@
 #!/usr/bin/env julia
 
 try
-    using PosetModules
+    using TamerOp
 catch
-    include(joinpath(@__DIR__, "..", "src", "PosetModules.jl"))
-    using .PosetModules
+    include(joinpath(@__DIR__, "..", "src", "TamerOp.jl"))
+    using .TamerOp
 end
 
-const CM = PosetModules.CoreModules
-const OPT = PosetModules.Options
-const FF = PosetModules.FiniteFringe
-const IR = PosetModules.IndicatorResolutions
-const DF = PosetModules.DerivedFunctors
+const CM = TamerOp.CoreModules
+const OPT = TamerOp.Options
+const FF = TamerOp.FiniteFringe
+const IR = TamerOp.IndicatorResolutions
+const DF = TamerOp.DerivedFunctors
 
 function _parse_int_arg(args, key::String, default::Int)
     for a in args

@@ -1,0 +1,4 @@
+regime,invariant_kind,degree,n_cases,warm_geomean_slowdown_tamer_over_multipers,cold_geomean_slowdown_tamer_over_multipers
+rips_codensity_parity,euler_signed_measure,0,2,0.117407,0.133408
+rips_lowerstar_parity,euler_signed_measure,0,2,0.065790,0.073002
+rips_parity,euler_signed_measure,0,2,0.152194,0.186602

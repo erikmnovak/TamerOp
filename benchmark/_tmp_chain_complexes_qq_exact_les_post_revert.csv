@@ -1,7 +1,0 @@
-probe,median_ms,median_kib
-cc cohomology_data all,9.249782999999999,5304.21875
-cc induced_map_on_cohomology,0.00028877343749999997,0.28314208984375
-cc mapping_cone_triangle,0.849884,586.4453125
-cc long_exact_sequence,28.791286,26897.0234375
-cc exact long_exact_sequence focused,28.539477,26896.1015625
-cc e2e warm_uncached,25.175386,26991.0859375

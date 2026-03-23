@@ -2,18 +2,18 @@ module TamerOpDistancesExt
 
 using Distances
 
-const PM = let pm = nothing
-    if isdefined(Main, :PosetModules)
-        pm = getfield(Main, :PosetModules)
+const TO = let pm = nothing
+    if isdefined(Main, :TamerOp)
+        pm = getfield(Main, :TamerOp)
     else
-        @eval import PosetModules
-        pm = PosetModules
+        @eval import TamerOp
+        pm = TamerOp
     end
     pm
 end
 
-const FEA = PM.Featurizers
-const Inv = PM.Invariants
+const FEA = TO.Featurizers
+const Inv = TO.Invariants
 
 abstract type AbstractTamerDistanceMetric <: Distances.PreMetric end
 
@@ -30,7 +30,7 @@ function MatchingDistanceMetric(; method::Symbol=:auto,
 end
 
 @inline function Distances.evaluate(m::MatchingDistanceMetric, x, y)
-    return PM.matching_distance(x, y; method=m.method, opts=m.opts, m.kwargs...)
+    return TO.matching_distance(x, y; method=m.method, opts=m.opts, m.kwargs...)
 end
 
 struct MPLandscapeDistanceMetric <: AbstractTamerDistanceMetric

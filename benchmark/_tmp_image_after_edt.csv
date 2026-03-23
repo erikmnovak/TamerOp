@@ -1,9 +1,0 @@
-case,family,stage,cache_mode,median_ms,p90_ms,median_alloc_kib
-image_lower_star,image,graded,auto,3.773007,4.095157,9732.390625
-image_lower_star,image,graded,session,2.181032,10.36174,3974.742188
-image_cubical,image,graded,auto,4.238418,4.803613,9732.421875
-image_cubical,image,graded,session,2.394471,9.776844,3974.710938
-image_distance_bifiltration,image,graded,auto,3.432666,4.30702,10171.96875
-image_distance_bifiltration,image,graded,session,2.15625,15.506061,4263.601562
-embedded_wing_vein_bifiltration,image,graded,auto,135.524455,218.718462,84985.070312
-embedded_wing_vein_bifiltration,image,graded,session,129.360702,233.539991,84355.734375

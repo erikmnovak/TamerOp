@@ -159,8 +159,8 @@ end
 
 function _warmup()
     DC = _build_dc(seed=7, density=0.20, na=2, nb=2, dmin=1, dmax=1)
-    ssv = CC.spectral_sequence(DC; first=:vertical)
-    ssh = CC.spectral_sequence(DC; first=:horizontal)
+    ssv = CC.spectral_sequence(DC; output=:full, first=:vertical)
+    ssh = CC.spectral_sequence(DC; output=:full, first=:horizontal)
     _ = CC.page(ssv, 1)
     _ = CC.differential(ssv, 1)
     _ = CC.filtration_dims(ssv, ssv.Tot.tmin)
@@ -205,19 +205,17 @@ function main(; out::String=joinpath(@__DIR__, "_tmp_chain_complexes_exact_spect
               reps::Int=3)
     DC = _build_dc(seed=seed, density=density, na=na, nb=nb, dmin=dmin, dmax=dmax)
 
-    old_h = CC._spectral_exact_horizontal_filtimg_mode[]
     old_b = CC._spectral_exact_filtimg_basis_mode[]
     try
         println("warmup")
         flush(stdout)
         _warmup()
 
-        ssv_auto = CC.spectral_sequence(DC; first=:vertical)
-        ssh_auto = CC.spectral_sequence(DC; first=:horizontal)
+        ssv_auto = CC.spectral_sequence(DC; output=:full, first=:vertical)
+        ssh_auto = CC.spectral_sequence(DC; output=:full, first=:horizontal)
         CC._spectral_exact_filtimg_basis_mode[] = :full
-        ssv_old = CC.spectral_sequence(DC; first=:vertical)
-        CC._spectral_exact_horizontal_filtimg_mode[] = :optimized
-        ssh_old = CC.spectral_sequence(DC; first=:horizontal)
+        ssv_old = CC.spectral_sequence(DC; output=:full, first=:vertical)
+        ssh_old = CC.spectral_sequence(DC; output=:full, first=:horizontal)
         Tot_ref, blocks_ref = CC._total_complex_with_blocks(DC)
         idx_ref = argmax(ssv_auto.E2_dims)
         Iref = CartesianIndices(ssv_auto.E2_dims)[idx_ref]
@@ -254,29 +252,23 @@ function main(; out::String=joinpath(@__DIR__, "_tmp_chain_complexes_exact_spect
         end
 
         pushrow("exact_horizontal_build_old_policy", () -> begin
-            oldh2 = CC._spectral_exact_horizontal_filtimg_mode[]
             oldb2 = CC._spectral_exact_filtimg_basis_mode[]
             try
-                CC._spectral_exact_horizontal_filtimg_mode[] = :optimized
                 CC._spectral_exact_filtimg_basis_mode[] = :full
-                ss = CC.spectral_sequence(DC; first=:horizontal)
+                ss = CC.spectral_sequence(DC; output=:full, first=:horizontal)
                 _digest_page(CC.page(ss, 1)) + _digest_diff(CC.differential(ss, 1))
             finally
-                CC._spectral_exact_horizontal_filtimg_mode[] = oldh2
                 CC._spectral_exact_filtimg_basis_mode[] = oldb2
             end
         end)
 
         pushrow("exact_horizontal_build_auto", () -> begin
-            oldh2 = CC._spectral_exact_horizontal_filtimg_mode[]
             oldb2 = CC._spectral_exact_filtimg_basis_mode[]
             try
-                CC._spectral_exact_horizontal_filtimg_mode[] = :auto
                 CC._spectral_exact_filtimg_basis_mode[] = :auto
-                ss = CC.spectral_sequence(DC; first=:horizontal)
+                ss = CC.spectral_sequence(DC; output=:full, first=:horizontal)
                 _digest_page(CC.page(ss, 1)) + _digest_diff(CC.differential(ss, 1))
             finally
-                CC._spectral_exact_horizontal_filtimg_mode[] = oldh2
                 CC._spectral_exact_filtimg_basis_mode[] = oldb2
             end
         end)
@@ -312,10 +304,8 @@ function main(; out::String=joinpath(@__DIR__, "_tmp_chain_complexes_exact_spect
         end)
 
         pushrow("exact_horizontal_page_terms_inf_old_materialization", () -> begin
-            oldh2 = CC._spectral_exact_horizontal_filtimg_mode[]
             oldb2 = CC._spectral_exact_filtimg_basis_mode[]
             try
-                CC._spectral_exact_horizontal_filtimg_mode[] = :optimized
                 CC._spectral_exact_filtimg_basis_mode[] = :full
                 ssh_old.Einf_spaces.value = nothing
                 ssh_old.filt_img.value = nothing
@@ -324,16 +314,13 @@ function main(; out::String=joinpath(@__DIR__, "_tmp_chain_complexes_exact_spect
                 end
                 _digest_terms(CC.page_terms(ssh_old, :inf))
             finally
-                CC._spectral_exact_horizontal_filtimg_mode[] = oldh2
                 CC._spectral_exact_filtimg_basis_mode[] = oldb2
             end
         end)
 
         pushrow("exact_horizontal_page_terms_inf_auto_materialization", () -> begin
-            oldh2 = CC._spectral_exact_horizontal_filtimg_mode[]
             oldb2 = CC._spectral_exact_filtimg_basis_mode[]
             try
-                CC._spectral_exact_horizontal_filtimg_mode[] = :auto
                 CC._spectral_exact_filtimg_basis_mode[] = :auto
                 ssh_auto.Einf_spaces.value = nothing
                 ssh_auto.filt_img.value = nothing
@@ -342,7 +329,6 @@ function main(; out::String=joinpath(@__DIR__, "_tmp_chain_complexes_exact_spect
                 end
                 _digest_terms(CC.page_terms(ssh_auto, :inf))
             finally
-                CC._spectral_exact_horizontal_filtimg_mode[] = oldh2
                 CC._spectral_exact_filtimg_basis_mode[] = oldb2
             end
         end)
@@ -351,8 +337,8 @@ function main(; out::String=joinpath(@__DIR__, "_tmp_chain_complexes_exact_spect
             oldb2 = CC._spectral_exact_filtimg_basis_mode[]
             try
                 CC._spectral_exact_filtimg_basis_mode[] = :auto
-                ss = CC.spectral_sequence(DC; first=:vertical)
-                tmid = ss.Tot.tmin + ((ss.Tot.tmax - ss.Tot.tmin) ÷ 2)
+                ss = CC.spectral_sequence(DC; output=:full, first=:vertical)
+                tmid = ss.Tot.tmin + div(ss.Tot.tmax - ss.Tot.tmin, 2)
                 B = CC.filtration_basis(ss, ss.pmin, tmid)
                 size(B, 1) + size(B, 2)
             finally
@@ -364,8 +350,8 @@ function main(; out::String=joinpath(@__DIR__, "_tmp_chain_complexes_exact_spect
             oldb2 = CC._spectral_exact_filtimg_basis_mode[]
             try
                 CC._spectral_exact_filtimg_basis_mode[] = :columnwise
-                ss = CC.spectral_sequence(DC; first=:vertical)
-                tmid = ss.Tot.tmin + ((ss.Tot.tmax - ss.Tot.tmin) ÷ 2)
+                ss = CC.spectral_sequence(DC; output=:full, first=:vertical)
+                tmid = ss.Tot.tmin + div(ss.Tot.tmax - ss.Tot.tmin, 2)
                 B = CC.filtration_basis(ss, ss.pmin, tmid)
                 size(B, 1) + size(B, 2)
             finally
@@ -432,7 +418,6 @@ function main(; out::String=joinpath(@__DIR__, "_tmp_chain_complexes_exact_spect
         println("Wrote ", out)
         flush(stdout)
     finally
-        CC._spectral_exact_horizontal_filtimg_mode[] = old_h
         CC._spectral_exact_filtimg_basis_mode[] = old_b
     end
 end

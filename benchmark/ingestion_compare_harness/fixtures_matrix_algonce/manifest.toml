@@ -109,7 +109,7 @@ claim_radius = 0.276871438665
 
 [[cases]]
 id = "matrix_parity_n200_d2_md2_s11"
-regime = "normalized_parity"
+regime = "rips_parity"
 dataset = "gaussian_shell"
 path = "matrix_parity_n200_d2_md2_s11.csv"
 n_points = 200
@@ -122,7 +122,7 @@ parity_radius = 0.26443487807
 
 [[cases]]
 id = "matrix_parity_n300_d2_md2_s17"
-regime = "normalized_parity"
+regime = "rips_parity"
 dataset = "gaussian_shell"
 path = "matrix_parity_n300_d2_md2_s17.csv"
 n_points = 300
@@ -135,7 +135,7 @@ parity_radius = 0.186644622726
 
 [[cases]]
 id = "matrix_parity_n200_d8_md2_s11"
-regime = "normalized_parity"
+regime = "rips_parity"
 dataset = "gaussian_shell"
 path = "matrix_parity_n200_d8_md2_s11.csv"
 n_points = 200

@@ -1,0 +1,80 @@
+=== inv_degree_rips_n1000_d2_s11 (1/9) ===
+[profile] desktop (reps=4, trim_between_reps=true, trim_between_cases=true)
+NearestNeighbors package loaded: true
+Invariants: [:euler_signed_measure]
+inv_degree_rips_n1000_d2_s11     inv=euler_signed_measure cold_ms=19404.99 warm_med_ms=18865.828 terms=1994
+Wrote tamer invariant results: benchmark/ingestion_compare_harness/results_tamer_invariants_cases/inv_degree_rips_n1000_d2_s11.csv
+[rc] inv_degree_rips_n1000_d2_s11 -> 0
+=== inv_degree_rips_n1000_d8_s11 (2/9) ===
+
+[75804] signal 15: Terminated
+in expression starting at /home/eriknovak/Documents/duke_fall_2025/tamer-op/benchmark/ingestion_compare_harness/run_tamer_invariants.jl:398
+unknown function (ip: 0x7ea143491115) at /lib/x86_64-linux-gnu/libc.so.6
+pthread_cond_wait at /lib/x86_64-linux-gnu/libc.so.6 (unknown line)
+uv_cond_wait at /workspace/srcdir/libuv/src/unix/thread.c:822
+ijl_task_get_next at /cache/build/tester-amdci4-14/julialang/julia-release-1-dot-12/src/scheduler.c:523
+poptask at ./task.jl:1187
+wait at ./task.jl:1199
+#wait#398 at ./condition.jl:141
+wait at ./condition.jl:136 [inlined]
+_trywait at ./asyncevent.jl:185
+profile_printing_listener at ./Base.jl:332
+#start_profile_listener##0 at ./Base.jl:352
+jfptr_YY.start_profile_listenerYY.YY.0_15858.1 at /home/eriknovak/.julia/juliaup/julia-1.12.1+0.x64.linux.gnu/lib/julia/sys.so (unknown line)
+jl_apply at /cache/build/tester-amdci4-14/julialang/julia-release-1-dot-12/src/julia.h:2391 [inlined]
+start_task at /cache/build/tester-amdci4-14/julialang/julia-release-1-dot-12/src/task.c:1249
+unknown function (ip: (nil)) at (unknown file)
+_setindex! at ./array.jl:991 [inlined]
+setindex! at ./array.jl:986 [inlined]
+_fill! at ./array.jl:333 [inlined]
+fill! at ./array.jl:329 [inlined]
+fill! at ./bitarray.jl:382
+falses at ./bitarray.jl:405
+falses at ./bitarray.jl:403 [inlined]
+_cover_edges_from_edges at /home/eriknovak/Documents/duke_fall_2025/tamer-op/src/finite_fringe/posets.jl:1392 [inlined]
+#28 at /home/eriknovak/Documents/duke_fall_2025/tamer-op/src/finite_fringe/posets.jl:1427
+_cover_edges_cached_or_build! at /home/eriknovak/Documents/duke_fall_2025/tamer-op/src/finite_fringe/posets.jl:1360
+#cover_edges#26 at /home/eriknovak/Documents/duke_fall_2025/tamer-op/src/finite_fringe/posets.jl:1409 [inlined]
+cover_edges at /home/eriknovak/Documents/duke_fall_2025/tamer-op/src/finite_fringe/posets.jl:1407 [inlined]
+_build_cover_cache at /home/eriknovak/Documents/duke_fall_2025/tamer-op/src/finite_fringe/posets.jl:390
+_get_cover_cache at /home/eriknovak/Documents/duke_fall_2025/tamer-op/src/finite_fringe/posets.jl:333
+unknown function (ip: 0x7ea1109c64b5) at (unknown file)
+_cohomology_module_h0_unionfind_from_lazy at /home/eriknovak/Documents/duke_fall_2025/tamer-op/src/DataIngestion.jl:4237
+_cohomology_module_from_lazy at /home/eriknovak/Documents/duke_fall_2025/tamer-op/src/DataIngestion.jl:5182
+_materialize_lazy_module! at /home/eriknovak/Documents/duke_fall_2025/tamer-op/src/DataIngestion.jl:4002 [inlined]
+materialize_module at /home/eriknovak/Documents/duke_fall_2025/tamer-op/src/DataIngestion.jl:4014 [inlined]
+pmodule at /home/eriknovak/Documents/duke_fall_2025/tamer-op/src/Workflow.jl:1175 [inlined]
+#euler_signed_measure#98 at /home/eriknovak/Documents/duke_fall_2025/tamer-op/src/Workflow.jl:2390
+euler_signed_measure at /home/eriknovak/Documents/duke_fall_2025/tamer-op/src/Workflow.jl:2384
+unknown function (ip: 0x7ea1109c3260) at (unknown file)
+_run_invariant_uncached at /home/eriknovak/Documents/duke_fall_2025/tamer-op/benchmark/ingestion_compare_harness/run_tamer_invariants.jl:232
+unknown function (ip: 0x7ea110902a85) at (unknown file)
+main at /home/eriknovak/Documents/duke_fall_2025/tamer-op/benchmark/ingestion_compare_harness/run_tamer_invariants.jl:326
+unknown function (ip: 0x7ea126fde69f) at (unknown file)
+jl_apply at /cache/build/tester-amdci4-14/julialang/julia-release-1-dot-12/src/julia.h:2391 [inlined]
+do_call at /cache/build/tester-amdci4-14/julialang/julia-release-1-dot-12/src/interpreter.c:123
+eval_value at /cache/build/tester-amdci4-14/julialang/julia-release-1-dot-12/src/interpreter.c:243
+eval_stmt_value at /cache/build/tester-amdci4-14/julialang/julia-release-1-dot-12/src/interpreter.c:194 [inlined]
+eval_body at /cache/build/tester-amdci4-14/julialang/julia-release-1-dot-12/src/interpreter.c:707
+jl_interpret_toplevel_thunk at /cache/build/tester-amdci4-14/julialang/julia-release-1-dot-12/src/interpreter.c:898
+jl_toplevel_eval_flex at /cache/build/tester-amdci4-14/julialang/julia-release-1-dot-12/src/toplevel.c:1035
+jl_toplevel_eval_flex at /cache/build/tester-amdci4-14/julialang/julia-release-1-dot-12/src/toplevel.c:975
+ijl_toplevel_eval at /cache/build/tester-amdci4-14/julialang/julia-release-1-dot-12/src/toplevel.c:1047
+ijl_toplevel_eval_in at /cache/build/tester-amdci4-14/julialang/julia-release-1-dot-12/src/toplevel.c:1092
+eval at ./boot.jl:489
+include_string at ./loading.jl:2842
+_include at ./loading.jl:2902
+include at ./Base.jl:306
+exec_options at ./client.jl:317
+_start at ./client.jl:550
+jfptr__start_31204.1 at /home/eriknovak/.julia/juliaup/julia-1.12.1+0.x64.linux.gnu/lib/julia/sys.so (unknown line)
+jl_apply at /cache/build/tester-amdci4-14/julialang/julia-release-1-dot-12/src/julia.h:2391 [inlined]
+true_main at /cache/build/tester-amdci4-14/julialang/julia-release-1-dot-12/src/jlapi.c:971
+jl_repl_entrypoint at /cache/build/tester-amdci4-14/julialang/julia-release-1-dot-12/src/jlapi.c:1139
+main at /cache/build/tester-amdci4-14/julialang/julia-release-1-dot-12/cli/loader_exe.c:58
+unknown function (ip: 0x7ea143429d8f) at /lib/x86_64-linux-gnu/libc.so.6
+__libc_start_main at /lib/x86_64-linux-gnu/libc.so.6 (unknown line)
+unknown function (ip: 0x4010b8) at /workspace/srcdir/glibc-2.17/csu/../sysdeps/x86_64/start.S
+unknown function (ip: (nil)) at (unknown file)
+Allocations: 217733650 (Pool: 217731494; Big: 2156); GC: 79
+[rc] inv_degree_rips_n1000_d8_s11 -> -9

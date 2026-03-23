@@ -5,8 +5,294 @@ using SparseArrays
 import Base.Threads
 
 using ..CoreModules: AbstractCoeffField, RealField, QQField, QQ, coeff_type, field_from_eltype
+using ..Options: FiltrationSpec, ConstructionBudget, ConstructionOptions, DataFileOptions,
+                 PipelineOptions, EncodingOptions, ResolutionOptions, InvariantOptions,
+                 DerivedFunctorOptions, FiniteFringeOptions, ModuleOptions, _option_describe
+using ..DataTypes: PointCloud, GraphData, EmbeddedPlanarGraph2D, GradedComplex,
+                   MultiCriticalGradedComplex, SimplexTreeMulti, _datatype_describe
+using ..FiniteFringe: FinitePoset, ProductOfChainsPoset, GridPoset, ProductPoset, RegionsPoset,
+                      Upset, Downset, FringeModule, _fringe_describe
+using ..IndicatorTypes: UpsetPresentation, DownsetCopresentation, _indicator_describe
+using ..FlangeZn: Face, IndFlat, IndInj, Flange, _flange_describe
+using ..ZnEncoding: ZnEncodingMap, SignaturePoset, ZnEncodingCache, _znencoding_describe
+using ..PLPolyhedra: HPoly, PolyUnion, PLUpset, PLDownset, PLFringe, PLEncodingMap,
+                     PolyInBoxCache, _plpoly_describe
+using ..PLBackend: BoxUpset, BoxDownset, PLEncodingMapBoxes, _plbackend_describe
+using ..EncodingCore: CompiledEncoding, GridEncodingMap, _encoding_describe
+using ..Encoding: EncodingMap, UptightEncoding, PostcomposedEncodingMap, _encoding_sibling_describe
+using ..Results: EncodingResult, EncodedComplexResult, CohomologyDimsResult, ModuleTranslationResult, ResolutionResult, InvariantResult,
+                 _result_describe, _encoding_result_dimensions, _cohomology_dims_payload
+using ..RegionGeometry: RegionGeometrySummary, RegionPrincipalDirectionsSummary
+using ..IndicatorResolutions: ProjectiveCoverResult, InjectiveHullResult,
+                              UpsetResolutionResult, DownsetResolutionResult,
+                              IndicatorResolutionsResult, ProjectiveGenerators,
+                              InjectiveGenerators, _indicator_resolution_describe,
+                              _indicator_generator_describe
+import ..Modules: component
 using ..FieldLinAlg: SparseRow, _SparseRREFAugmented, _sparse_rref_push_augmented!
 using ..FieldLinAlg
+
+function dimensions end
+function basis end
+function representatives end
+function coordinates end
+function image_basis end
+function describe end
+function degree_range end
+function source end
+function target end
+function component_labels end
+function filtration_steps end
+function filtration_dimensions end
+function filtration_dimension end
+function graded_piece end
+function extension_pieces end
+function splitting_matrix end
+function piece_range end
+function sequence_dimensions end
+function sequence_maps end
+function sequence_entry end
+function complex_summary end
+function bicomplex_summary end
+function spectral_sequence_summary end
+function filtration_summary end
+function extension_summary end
+function long_exact_sequence_summary end
+
+"""
+    describe(opts::OptionsType) -> NamedTuple
+
+Return a compact semantic or mathematical summary of an inspectable object.
+
+For user-facing option objects, `describe(...)` is the preferred inspection
+entrypoint in notebooks and the REPL. It exposes the operational contract of an
+options object without requiring field archaeology. Other subsystems attach
+method-specific docstrings so `describe(...)` can also serve as the compact
+mathematical summary surface for modules, categorical constructions, workflow
+results, and region-geometry summaries.
+"""
+describe(b::ConstructionBudget) = _option_describe(b)
+describe(opts::ConstructionOptions) = _option_describe(opts)
+describe(opts::DataFileOptions) = _option_describe(opts)
+describe(opts::PipelineOptions) = _option_describe(opts)
+describe(opts::EncodingOptions) = _option_describe(opts)
+describe(opts::ResolutionOptions) = _option_describe(opts)
+describe(opts::InvariantOptions) = _option_describe(opts)
+describe(opts::DerivedFunctorOptions) = _option_describe(opts)
+describe(opts::FiniteFringeOptions) = _option_describe(opts)
+describe(opts::ModuleOptions) = _option_describe(opts)
+describe(data::PointCloud) = _datatype_describe(data)
+describe(data::GraphData) = _datatype_describe(data)
+describe(data::EmbeddedPlanarGraph2D) = _datatype_describe(data)
+describe(data::GradedComplex) = _datatype_describe(data)
+describe(data::MultiCriticalGradedComplex) = _datatype_describe(data)
+describe(data::SimplexTreeMulti) = _datatype_describe(data)
+"""
+    describe(P::FinitePoset) -> NamedTuple
+    describe(U::Upset) -> NamedTuple
+    describe(D::Downset) -> NamedTuple
+    describe(M::FringeModule) -> NamedTuple
+
+Return a compact semantic summary of a finite-fringe object.
+
+These summaries are the shared inspection surface for finite posets, upsets,
+downsets, and fringe modules. They expose mathematical information such as
+ambient size, support, presentation sizes, and cached summary quantities without
+requiring direct field inspection.
+"""
+describe(P::FinitePoset) = _fringe_describe(P)
+describe(P::ProductOfChainsPoset) = _fringe_describe(P)
+describe(P::GridPoset) = _fringe_describe(P)
+describe(P::ProductPoset) = _fringe_describe(P)
+describe(P::RegionsPoset) = _fringe_describe(P)
+describe(U::Upset) = _fringe_describe(U)
+describe(D::Downset) = _fringe_describe(D)
+describe(M::FringeModule) = _fringe_describe(M)
+"""
+    describe(F::UpsetPresentation) -> NamedTuple
+    describe(E::DownsetCopresentation) -> NamedTuple
+
+Return a compact semantic summary of a one-step indicator presentation or
+copresentation.
+
+These summaries expose the ambient poset size, coefficient field, label counts,
+matrix size, and attached-fringe availability without requiring direct field
+inspection.
+
+# Examples
+
+```jldoctest
+julia> using TamerOp
+
+julia> const FF = TamerOp.FiniteFringe;
+
+julia> const IT = TamerOp.IndicatorTypes;
+
+julia> P = FF.FinitePoset(Bool[1 1; 0 1]);
+
+julia> F = IT.UpsetPresentation{QQ}(P,
+                                   [FF.principal_upset(P, 1)],
+                                   [FF.principal_upset(P, 2)],
+                                   reshape(QQ[1], 1, 1),
+                                   nothing);
+
+julia> describe(F).matrix_size
+(1, 1)
+```
+"""
+describe(F::UpsetPresentation) = _indicator_describe(F)
+describe(E::DownsetCopresentation) = _indicator_describe(E)
+"""
+    describe(tau::Face) -> NamedTuple
+    describe(F::IndFlat) -> NamedTuple
+    describe(E::IndInj) -> NamedTuple
+    describe(FG::Flange) -> NamedTuple
+
+Return a compact semantic summary of a `FlangeZn` object.
+
+These summaries are the shared inspection surface for orthant faces, indexed
+flats, indexed injectives, and flanges. They expose ambient dimension,
+translation data, free-coordinate information, coefficient field, and matrix
+shape without requiring direct field inspection.
+"""
+describe(tau::Face) = _flange_describe(tau)
+describe(F::IndFlat) = _flange_describe(F)
+describe(E::IndInj) = _flange_describe(E)
+describe(FG::Flange) = _flange_describe(FG)
+"""
+    describe(hp::HPoly) -> NamedTuple
+    describe(U::PolyUnion) -> NamedTuple
+    describe(U::PLUpset) -> NamedTuple
+    describe(D::PLDownset) -> NamedTuple
+    describe(F::PLFringe) -> NamedTuple
+    describe(pi::PLEncodingMap) -> NamedTuple
+    describe(cache::PolyInBoxCache) -> NamedTuple
+
+Return a compact semantic summary of a `PLPolyhedra` object.
+
+These summaries expose ambient dimension, piece counts, region counts, matrix
+shape, spatial/bucket lookup availability, and cache metadata without requiring
+direct field inspection.
+"""
+describe(hp::HPoly) = _plpoly_describe(hp)
+describe(U::PolyUnion) = _plpoly_describe(U)
+describe(U::PLUpset) = _plpoly_describe(U)
+describe(D::PLDownset) = _plpoly_describe(D)
+describe(F::PLFringe) = _plpoly_describe(F)
+describe(pi::PLEncodingMap) = _plpoly_describe(pi)
+describe(cache::PolyInBoxCache) = _plpoly_describe(cache)
+"""
+    describe(U::BoxUpset) -> NamedTuple
+    describe(D::BoxDownset) -> NamedTuple
+    describe(pi::PLEncodingMapBoxes) -> NamedTuple
+
+Return a compact semantic summary of a `PLBackend` object.
+
+These summaries expose ambient dimension, generator counts, region count,
+cell-grid shape, direct-lookup availability, and per-axis uniformity without
+requiring direct field inspection.
+"""
+describe(U::BoxUpset) = _plbackend_describe(U)
+describe(D::BoxDownset) = _plbackend_describe(D)
+describe(pi::PLEncodingMapBoxes) = _plbackend_describe(pi)
+"""
+    describe(pi::ZnEncodingMap) -> NamedTuple
+    describe(P::SignaturePoset) -> NamedTuple
+    describe(cache::ZnEncodingCache) -> NamedTuple
+
+Return a compact semantic summary of a `ZnEncoding` object.
+
+These summaries expose the ambient dimension, region count, flat/injective
+counts, poset kind, direct-lookup availability, and critical-coordinate counts
+without requiring direct field inspection.
+"""
+describe(pi::ZnEncodingMap) = _znencoding_describe(pi)
+describe(P::SignaturePoset) = _znencoding_describe(P)
+describe(cache::ZnEncodingCache) = _znencoding_describe(cache)
+"""
+    describe(pi::EncodingMap) -> NamedTuple
+    describe(enc::UptightEncoding) -> NamedTuple
+    describe(pi::PostcomposedEncodingMap) -> NamedTuple
+
+Return a compact semantic summary of a finite encoding object owned by
+`TamerOp.Encoding`.
+
+The summary reports the finite source/target poset kinds and sizes, image size,
+and whether the relevant lazy caches are populated. Use it for quick REPL or
+notebook inspection instead of reading storage fields directly.
+
+```jldoctest
+julia> P = FF.FinitePoset(Bool[1 1; 0 1]);
+
+julia> pi = TamerOp.Encoding.EncodingMap(P, P, [1, 2]);
+
+julia> describe(pi).image_size
+2
+```
+"""
+describe(pi::EncodingMap) = _encoding_sibling_describe(pi)
+describe(enc::UptightEncoding) = _encoding_sibling_describe(enc)
+describe(pi::PostcomposedEncodingMap) = _encoding_sibling_describe(pi)
+@doc raw"""
+    describe(enc::TamerOp.EncodingCore.CompiledEncoding) -> NamedTuple
+    describe(pi::TamerOp.EncodingCore.GridEncodingMap) -> NamedTuple
+    describe(res::TamerOp.ChangeOfPosets.ProductPosetResult) -> NamedTuple
+    describe(res::TamerOp.ChangeOfPosets.CommonRefinementTranslationResult) -> NamedTuple
+    describe(H::TamerOp.ChangeOfPosets.CommonRefinementHomSpace) -> NamedTuple
+    describe(B::TamerOp.ChangeOfPosets.CommonRefinementHomBasis) -> NamedTuple
+    describe(res::TamerOp.Results.EncodingResult) -> NamedTuple
+    describe(res::TamerOp.Results.EncodedComplexResult) -> NamedTuple
+    describe(res::TamerOp.Results.CohomologyDimsResult) -> NamedTuple
+    describe(res::TamerOp.Results.ModuleTranslationResult) -> NamedTuple
+    describe(res::TamerOp.Results.ResolutionResult) -> NamedTuple
+    describe(res::TamerOp.Results.InvariantResult) -> NamedTuple
+
+Return a compact semantic summary of a helper, encoding, or workflow result
+object that participates in the shared `describe(...)` surface.
+
+- EncodingCore summaries report finite poset type, ambient/query dimension,
+  and whether optional axes or representatives are available.
+- ChangeOfPosets summaries report common-poset sizes, translated-module sizes,
+  cached Hom dimension, and materialization state.
+- Results summaries report workflow-result kind, backend/provenance shape, and
+  cheap scalar metadata such as dimensions or invariant names.
+
+Use owner-local helpers such as `encoding_summary(...)`,
+`common_refinement_summary(...)`, or `result_summary(...)` when you want to
+stay inside owner-module vocabulary before materializing heavier payloads.
+""" describe
+describe(enc::CompiledEncoding) = _encoding_describe(enc)
+describe(pi::GridEncodingMap) = _encoding_describe(pi)
+describe(res::EncodingResult) = _result_describe(res)
+describe(res::EncodedComplexResult) = _result_describe(res)
+describe(res::CohomologyDimsResult) = _result_describe(res)
+describe(res::ModuleTranslationResult) = _result_describe(res)
+describe(res::ResolutionResult) = _result_describe(res)
+describe(res::InvariantResult) = _result_describe(res)
+describe(res::ProjectiveCoverResult) = _indicator_resolution_describe(res)
+describe(res::InjectiveHullResult) = _indicator_resolution_describe(res)
+describe(res::UpsetResolutionResult) = _indicator_resolution_describe(res)
+describe(res::DownsetResolutionResult) = _indicator_resolution_describe(res)
+describe(res::IndicatorResolutionsResult) = _indicator_resolution_describe(res)
+describe(gens::ProjectiveGenerators) = _indicator_generator_describe(gens)
+describe(gens::InjectiveGenerators) = _indicator_generator_describe(gens)
+describe(summary::RegionGeometrySummary) = summary.report
+describe(summary::RegionPrincipalDirectionsSummary) = summary.report
+
+dimensions(res::EncodingResult) = _encoding_result_dimensions(res)
+dimensions(res::CohomologyDimsResult) = _cohomology_dims_payload(res)
+"""
+    dimensions(M::FringeModule) -> NamedTuple
+    dimensions(M::FringeModule, q::Int) -> NamedTuple
+
+Return pointwise fiber-dimension summaries for a fringe module.
+
+Use `dimensions(M)` for an all-vertices summary and `dimensions(M, q)` for the
+single fiber over vertex `q`.
+"""
+dimensions(M::FringeModule) = _fringe_dimensions(M)
+dimensions(M::FringeModule, q::Int) = _fringe_dimensions(M, q)
+cohomology_dims(res::CohomologyDimsResult) = _cohomology_dims_payload(res)
 
 # ----------------------------
 # Small, reliable linear solvers
@@ -230,6 +516,52 @@ function extend_to_basis(C::Matrix{K}) where {K}
     return B
 end
 
+function extend_to_basis_from_basis(Cbasis::Matrix{K}) where {K}
+    k = size(Cbasis, 1)
+    if k == 0
+        return zeros(K, 0, 0)
+    end
+    r = size(Cbasis, 2)
+    if r == k
+        return Cbasis
+    end
+    if r == 0
+        I = zeros(K, k, k)
+        @inbounds for i in 1:k
+            I[i, i] = one(K)
+        end
+        return I
+    end
+
+    field = field_from_eltype(K)
+    _, pivs = FieldLinAlg.rref(field, Matrix(transpose(Cbasis)); pivots=true)
+    pivot_mask = falses(k)
+    @inbounds for p in pivs
+        1 <= p <= k && (pivot_mask[p] = true)
+    end
+
+    comp_rows = Int[]
+    sizehint!(comp_rows, k - r)
+    @inbounds for i in 1:k
+        !pivot_mask[i] && push!(comp_rows, i)
+    end
+
+    Q = zeros(K, k, length(comp_rows))
+    @inbounds for (j, irow) in enumerate(comp_rows)
+        Q[irow, j] = one(K)
+    end
+    B = hcat(Cbasis, Q)
+    size(B, 2) == k || error("extend_to_basis_from_basis: could not extend to a full basis")
+    return B
+end
+
+@inline function _cohomology_completion_from_basis(Cbasis::Matrix{K}) where {K}
+    Bfull = extend_to_basis_from_basis(Cbasis)
+    r = size(Cbasis, 2)
+    Q = @view Bfull[:, (r + 1):end]
+    return Bfull, Matrix{K}(Q)
+end
+
 # ----------------------------
 # Cochain complexes
 # ----------------------------
@@ -338,9 +670,171 @@ function CochainComplex{K}(tmin::Int,
     return CochainComplex{K,annT}(tmin, tmax, dims, d, labs, anns)
 end
 
+@inline function _check_zero_matrix(M::SparseMatrixCSC{K,Int}) where {K}
+    if K <: AbstractFloat
+        tol = sqrt(eps(K))
+        @inbounds for x in nonzeros(M)
+            abs(x) <= tol || return false
+        end
+        return true
+    end
+    return nnz(M) == 0
+end
 
-# Holds cycle, boundary, and quotient data in a concrete basis.
-struct CohomologyData{K}
+@inline function _validation_error(fn::AbstractString, issues::Vector{String})
+    error("$(fn): validation failed:\n - " * join(issues, "\n - "))
+end
+
+"""
+    check_complex(C; throw=false) -> NamedTuple
+
+Validate a hand-built cochain complex without running any derived constructions.
+
+The returned report has fields:
+- `kind = :cochain_complex`
+- `valid::Bool`
+- `degree_range`
+- `dims`
+- `issues::Vector{String}`
+
+Set `throw=true` to raise an error when validation fails.
+"""
+function check_complex(C::CochainComplex{K}; throw::Bool=false) where {K}
+    issues = String[]
+    expected_len = C.tmax - C.tmin + 1
+    length(C.dims) == expected_len || push!(issues,
+        "expected dims to have length $(expected_len) for degrees $(C.tmin):$(C.tmax); got $(length(C.dims))")
+    length(C.d) == max(expected_len - 1, 0) || push!(issues,
+        "expected one differential per adjacent degree pair, so length(d) = $(max(expected_len - 1, 0)); got $(length(C.d))")
+    any(<(0), C.dims) && push!(issues, "expected all cochain-group dimensions to be nonnegative")
+    length(C.labels) == length(C.dims) || push!(issues,
+        "expected labels to have the same length as dims; got $(length(C.labels)) vs $(length(C.dims))")
+    if C.annotations !== nothing && length(C.annotations) != length(C.dims)
+        push!(issues, "expected annotations to have the same length as dims; got $(length(C.annotations)) vs $(length(C.dims))")
+    end
+
+    ndeg = min(length(C.dims), length(C.labels))
+    for i in 1:ndeg
+        (isempty(C.labels[i]) || length(C.labels[i]) == C.dims[i]) || push!(issues,
+            "expected labels for degree $(C.tmin + i - 1) to be empty or have length $(C.dims[i]); got $(length(C.labels[i]))")
+        if C.annotations !== nothing
+            (isempty(C.annotations[i]) || length(C.annotations[i]) == C.dims[i]) || push!(issues,
+                "expected annotations for degree $(C.tmin + i - 1) to be empty or have length $(C.dims[i]); got $(length(C.annotations[i]))")
+        end
+    end
+
+    ndiff = min(length(C.d), max(length(C.dims) - 1, 0))
+    for i in 1:ndiff
+        src = C.dims[i]
+        tgt = C.dims[i + 1]
+        size(C.d[i]) == (tgt, src) || push!(issues,
+            "expected d^$(C.tmin + i - 1) : C^$(C.tmin + i - 1) -> C^$(C.tmin + i) to have size ($(tgt), $(src)); got $(size(C.d[i]))")
+    end
+
+    for i in 1:max(ndiff - 1, 0)
+        try
+            _check_zero_matrix(C.d[i + 1] * C.d[i]) || push!(issues,
+                 "expected d^$(C.tmin + i) circ d^$(C.tmin + i - 1) = 0")
+        catch
+            push!(issues,
+                 "could not form d^$(C.tmin + i) circ d^$(C.tmin + i - 1) because the differential sizes are incompatible")
+        end
+    end
+
+    report = (
+        kind = :cochain_complex,
+        valid = isempty(issues),
+        degree_range = (C.tmin, C.tmax),
+        dims = copy(C.dims),
+        issues = issues,
+    )
+    throw && !report.valid && _validation_error("check_complex", issues)
+    return report
+end
+
+"""
+    degree_range(C::CochainComplex) -> UnitRange{Int}
+
+Return the stored cohomological degree window of a cochain complex.
+
+This is the canonical cheap inspection helper when you want to know where a
+complex lives before asking for specific components or differentials.
+"""
+@inline degree_range(C::CochainComplex) = C.tmin:C.tmax
+
+"""
+    component(C, t) -> NamedTuple
+
+Return a compact description of the cochain group `C^t`.
+
+The returned named tuple records the requested degree, the stored dimension,
+and the visible basis labels at that degree. Degrees outside the stored range
+are treated as zero components.
+"""
+function component(C::CochainComplex, t::Int)
+    return (
+        degree = t,
+        dimension = _dim_at(C, t),
+        labels = component_labels(C, t),
+    )
+end
+
+"""
+    differential(C, t) -> SparseMatrixCSC
+
+Return the cochain differential `d^t : C^t -> C^(t+1)`.
+
+Degrees outside the stored range return the correctly sized zero matrix, so the
+accessor is safe to use in exploratory notebook code and small hand-built
+examples.
+"""
+@inline differential(C::CochainComplex{K}, t::Int) where {K} = _diff_at(C, t)
+
+"""
+    component_labels(C, t) -> Vector
+
+Return the visible basis labels for the cochain group `C^t`.
+
+If the complex was built with heterogeneous user labels, those annotations are
+returned. Otherwise this falls back to the typed integer labels stored on the
+compute path. Degrees outside the stored range return an empty vector.
+"""
+function component_labels(C::CochainComplex, t::Int)
+    if t < C.tmin || t > C.tmax
+        return Any[]
+    end
+    idx = t - C.tmin + 1
+    if C.annotations !== nothing && !isempty(C.annotations[idx])
+        return copy(C.annotations[idx])
+    end
+    return copy(C.labels[idx])
+end
+
+"""
+    complex_summary(C) -> NamedTuple
+
+Owner-local summary alias for `describe(C)`.
+
+Use this for cheap first-pass inspection of a cochain complex before requesting
+particular components, differentials, or derived constructions.
+"""
+@inline complex_summary(C::CochainComplex) = describe(C)
+
+"""
+    CohomologyData{K}
+
+Explicit model of a cohomology group `H^t(C)` in cohomological degree `t`.
+
+This object stores:
+- a basis of cocycles `Z^t`,
+- a basis of coboundaries `B^t`,
+- a chosen basis of the quotient `H^t(C) = Z^t / B^t`,
+- explicit ambient representatives of that quotient basis.
+
+For ordinary use, start with `dimensions`, `basis`, `representatives`, and
+`coordinates` rather than inspecting the internal matrices directly.
+"""
+mutable struct CohomologyData{K}
     t::Int
     dimC::Int
     dimZ::Int
@@ -349,18 +843,30 @@ struct CohomologyData{K}
     K::Matrix{K}          # cycle basis in C^t
     B::Matrix{K}          # boundary basis in C^t
     Cx::Matrix{K}         # boundary subspace basis in K-coordinates
-    Q::Matrix{K}          # complement basis in K-coordinates
-    Bfull::Matrix{K}      # [Cx Q], square dimZ x dimZ, invertible
-    Hrep::Matrix{K}       # cocycle representatives: K * Q
+    _Q::Union{Nothing,Matrix{K}}      # complement basis in K-coordinates
+    _Bfull::Union{Nothing,Matrix{K}}  # [Cx Q], square dimZ x dimZ, invertible
+    _Hrep::Union{Nothing,Matrix{K}}   # cocycle representatives: K * Q
+    _coord_rows::Union{Nothing,Vector{Int}}
+    _coord_proj::Union{Nothing,Matrix{K}}
     Kfactor::Base.RefValue{Union{Nothing,FieldLinAlg.FullColumnFactor{QQ}}}
     Bfull_factor::Base.RefValue{Union{Nothing,FieldLinAlg.FullColumnFactor{QQ}}}
 end
+
+struct _CohomologyCoordPlan{K}
+    rows::Vector{Int}
+    proj::Matrix{K}
+end
+
+const _COHOMOLOGY_COORD_PLAN_LOCK = ReentrantLock()
 
 struct _DiffSummary{K}
     rank::Int
     ker::Matrix{K}
     img::Matrix{K}
 end
+
+const CHAIN_DIFF_SUMMARIES_THREADS_MIN_DIFFS = Ref(2)
+const CHAIN_DIFF_SUMMARIES_THREADS_MIN_WORK = Ref(0)
 
 @inline _empty_mat(::Type{K}, m::Int, n::Int) where {K} = zeros(K, m, n)
 @inline _eye_mat(::Type{K}, n::Int) where {K} = Matrix{K}(I, n, n)
@@ -377,7 +883,9 @@ end
 
 function _zero_cohomology_data(::Type{K}, t::Int) where {K}
     Z0 = _empty_mat(K, 0, 0)
-    return CohomologyData{K}(t, 0, 0, 0, 0, Z0, Z0, Z0, Z0, Z0, Z0, Ref{Union{Nothing,FieldLinAlg.FullColumnFactor{QQ}}}(nothing), Ref{Union{Nothing,FieldLinAlg.FullColumnFactor{QQ}}}(nothing))
+    return CohomologyData{K}(t, 0, 0, 0, 0, Z0, Z0, Z0, Z0, Z0, Z0, nothing, nothing,
+                             Ref{Union{Nothing,FieldLinAlg.FullColumnFactor{QQ}}}(nothing),
+                             Ref{Union{Nothing,FieldLinAlg.FullColumnFactor{QQ}}}(nothing))
 end
 
 @inline _fullcolumn_factor_ref() = Ref{Union{Nothing,FieldLinAlg.FullColumnFactor{QQ}}}(nothing)
@@ -392,31 +900,152 @@ end
     return factor
 end
 
+function _cohomology_coord_plan(H::CohomologyData{QQ})
+    rows = getfield(H, :_coord_rows)
+    proj = getfield(H, :_coord_proj)
+    if rows !== nothing && proj !== nothing
+        return _CohomologyCoordPlan{QQ}(rows::Vector{Int}, proj::Matrix{QQ})
+    end
+    lock(_COHOMOLOGY_COORD_PLAN_LOCK) do
+        rows = getfield(H, :_coord_rows)
+        proj = getfield(H, :_coord_proj)
+        if rows !== nothing && proj !== nothing
+            return _CohomologyCoordPlan{QQ}(rows::Vector{Int}, proj::Matrix{QQ})
+        end
+
+        kfac = _fullcolumn_factor!(QQField(), H.K, H.Kfactor)
+        bfac = _fullcolumn_factor!(QQField(), H.Bfull, H.Bfull_factor)
+        rows_new = copy(kfac.rows)
+        proj_new = Matrix{QQ}(undef, H.dimH, length(rows_new))
+        mul!(proj_new, Matrix{QQ}(@view(bfac.invB[H.dimB + 1:end, :])), kfac.invB)
+        setfield!(H, :_coord_rows, rows_new)
+        setfield!(H, :_coord_proj, proj_new)
+        return _CohomologyCoordPlan{QQ}(rows_new, proj_new)
+    end
+end
+
+@inline function _cohomology_coordinates_from_cocycles(H::CohomologyData{K},
+                                                       z::AbstractMatrix{K}) where {K}
+    return cohomology_coordinates(H, z)
+end
+
+function _cohomology_coordinates_from_cocycles(H::CohomologyData{QQ},
+                                               z::AbstractMatrix{QQ})
+    size(z, 1) == H.dimC || throw(DimensionMismatch(
+        "_cohomology_coordinates_from_cocycles: expected $(H.dimC) rows, got $(size(z, 1))"))
+    H.dimH == 0 && return zeros(QQ, 0, size(z, 2))
+    plan = _cohomology_coord_plan(H)
+    out = Matrix{QQ}(undef, H.dimH, size(z, 2))
+    mul!(out, plan.proj, view(z, plan.rows, :))
+    return out
+end
+
+@inline function _cohomology_coordinates_vector(H::CohomologyData{K},
+                                                z::AbstractVector{K}) where {K}
+    return vec(cohomology_coordinates(H, reshape(z, :, 1)))
+end
+
+function _cohomology_coordinates_vector(H::CohomologyData{QQ},
+                                        z::AbstractVector{QQ})
+    length(z) == H.dimC || throw(DimensionMismatch(
+        "_cohomology_coordinates_vector: expected length $(H.dimC), got $(length(z))"))
+    H.dimH == 0 && return zeros(QQ, 0)
+    plan = _cohomology_coord_plan(H)
+    return plan.proj * view(z, plan.rows)
+end
+
+function _ensure_cohomology_reps!(H::CohomologyData{K}) where {K}
+    Bfull = getfield(H, :_Bfull)
+    Q = getfield(H, :_Q)
+    Hrep = getfield(H, :_Hrep)
+    if Bfull !== nothing && Q !== nothing && Hrep !== nothing
+        return Bfull::Matrix{K}, Q::Matrix{K}, Hrep::Matrix{K}
+    end
+
+    dimZ = getfield(H, :dimZ)
+    dimB = getfield(H, :dimB)
+    dimC = getfield(H, :dimC)
+    Kbasis = getfield(H, :K)
+
+    if dimZ == 0
+        Bfull_new = _empty_mat(K, 0, 0)
+        Q_new = _empty_mat(K, 0, 0)
+        Hrep_new = _empty_mat(K, dimC, 0)
+    elseif dimB == 0
+        Bfull_new = _eye_mat(K, dimZ)
+        Q_new = Bfull_new
+        Hrep_new = Kbasis
+    else
+        Bfull_new, Q_new = _cohomology_completion_from_basis(getfield(H, :Cx))
+        Hrep_new = Kbasis * Q_new
+    end
+
+    setfield!(H, :_Bfull, Bfull_new)
+    setfield!(H, :_Q, Q_new)
+    setfield!(H, :_Hrep, Hrep_new)
+    return Bfull_new, Q_new, Hrep_new
+end
+
+@inline _cohomology_Bfull(H::CohomologyData{K}) where {K} = (_ensure_cohomology_reps!(H)[1]::Matrix{K})
+@inline _cohomology_Q(H::CohomologyData{K}) where {K} = (_ensure_cohomology_reps!(H)[2]::Matrix{K})
+@inline _cohomology_Hrep(H::CohomologyData{K}) where {K} = (_ensure_cohomology_reps!(H)[3]::Matrix{K})
+
+function Base.getproperty(H::CohomologyData{K}, s::Symbol) where {K}
+    if s === :Bfull
+        return _cohomology_Bfull(H)
+    elseif s === :Q
+        return _cohomology_Q(H)
+    elseif s === :Hrep
+        return _cohomology_Hrep(H)
+    end
+    return getfield(H, s)
+end
+
+Base.propertynames(::CohomologyData, private::Bool=false) =
+    private ? (:t, :dimC, :dimZ, :dimB, :dimH, :K, :B, :Cx, :_Q, :_Bfull, :_Hrep, :_coord_rows, :_coord_proj, :Kfactor, :Bfull_factor) :
+              (:t, :dimC, :dimZ, :dimB, :dimH, :K, :B, :Cx, :Q, :Bfull, :Hrep, :Kfactor, :Bfull_factor)
+
 function _diff_summary(field::AbstractCoeffField, d::AbstractMatrix{K}) where {K}
+    summary = FieldLinAlg._kernel_image_summary(field, d)
+    return _DiffSummary{K}(summary.rank, _concrete_mat(summary.ker), _concrete_mat(summary.img))
+end
+
+function _diff_summary(::AbstractCoeffField, d::SparseMatrixCSC{K,Int}) where {K}
     m, n = size(d)
-
-    ker = if n == 0
-        _empty_mat(K, 0, 0)
-    elseif m == 0
-        _eye_mat(K, n)
-    else
-        FieldLinAlg.nullspace(field, d)
+    if m == 0
+        return _DiffSummary{K}(0, _eye_mat(K, n), _empty_mat(K, 0, 0))
     end
-
-    img = if m == 0 || n == 0
-        _empty_mat(K, m, 0)
-    else
-        FieldLinAlg.colspace(field, d)
+    if n == 0
+        return _DiffSummary{K}(0, _empty_mat(K, 0, 0), _empty_mat(K, m, 0))
     end
+    if nnz(d) == 0
+        return _DiffSummary{K}(0, _eye_mat(K, n), _empty_mat(K, m, 0))
+    end
+    summary = FieldLinAlg._kernel_image_summary(field_from_eltype(K), d)
+    return _DiffSummary{K}(summary.rank, _concrete_mat(summary.ker), _concrete_mat(summary.img))
+end
 
-    return _DiffSummary{K}(size(img, 2), ker, img)
+@inline function _diff_summaries_threaded(C::CochainComplex)
+    nd = length(C.d)
+    nd >= CHAIN_DIFF_SUMMARIES_THREADS_MIN_DIFFS[] || return false
+    work = 0
+    @inbounds for d in C.d
+        work += size(d, 1) * size(d, 2)
+    end
+    return work >= CHAIN_DIFF_SUMMARIES_THREADS_MIN_WORK[]
 end
 
 function _diff_summaries(C::CochainComplex{K}) where {K}
     field = field_from_eltype(K)
     out = Vector{_DiffSummary{K}}(undef, length(C.d))
-    for i in eachindex(out)
-        out[i] = _diff_summary(field, C.d[i])
+    if Threads.nthreads() > 1 && _diff_summaries_threaded(C)
+        Threads.@threads for i in eachindex(out)
+            out[i] = _diff_summary(field, C.d[i])
+        end
+    else
+        for i in eachindex(out)
+            out[i] = _diff_summary(field, C.d[i])
+        end
     end
     return out
 end
@@ -425,7 +1054,8 @@ function _cohomology_data_from_bases(::Type{K},
                                      t::Int,
                                      dimCt::Int,
                                      Zin::AbstractMatrix{K},
-                                     Bin::AbstractMatrix{K}) where {K}
+                                     Bin::AbstractMatrix{K};
+                                     lazy_reps::Bool=true) where {K}
     Z = _concrete_mat(Zin)
     B = _concrete_mat(Bin)
     dimZ = size(Z, 2)
@@ -438,29 +1068,38 @@ function _cohomology_data_from_bases(::Type{K},
 
     if dimB == 0
         Bcoords = _empty_mat(K, dimZ, 0)
+        if lazy_reps
+            return CohomologyData{K}(t, dimCt, dimZ, 0, dimZ, Z, B, Bcoords, nothing, nothing, nothing, nothing, nothing,
+                                     _fullcolumn_factor_ref(),
+                                     _fullcolumn_factor_ref())
+        end
         Bfull = _eye_mat(K, dimZ)
-        Hrep = Z
-        return CohomologyData{K}(t, dimCt, dimZ, 0, dimZ, Z, B, Bcoords, Bfull, Bfull, Hrep,
+        return CohomologyData{K}(t, dimCt, dimZ, 0, dimZ, Z, B, Bcoords, Bfull, Bfull, Z, nothing, nothing,
                                  _fullcolumn_factor_ref(),
                                  _fullcolumn_factor_ref())
     end
 
-    X = _solve_fullcolumn_cached(field, Z, B)
-    Cx = size(X, 2) == 0 ? _empty_mat(K, dimZ, 0) : FieldLinAlg.colspace(field, X)
-
+    # Because Z and B are both bases and B subseteq span(Z), the coordinate matrix X in
+    # Z * X = B already has full column rank. Reusing it directly avoids an extra
+    # colspace pass on the hot exact-cohomology path.
+    Cx = _solve_fullcolumn_cached(field, Z, B)
     rB = size(Cx, 2)
     if rB == dimZ
-        return CohomologyData{K}(t, dimCt, dimZ, rB, 0, Z, B, Cx, _empty_mat(K, dimZ, 0), Cx, _empty_mat(K, dimCt, 0),
+        Bfull = extend_to_basis_from_basis(Cx)
+        return CohomologyData{K}(t, dimCt, dimZ, rB, 0, Z, B, Cx, _empty_mat(K, dimZ, 0), Bfull, _empty_mat(K, dimCt, 0), nothing, nothing,
                                  _fullcolumn_factor_ref(),
                                  _fullcolumn_factor_ref())
     end
 
-    Bfull = extend_to_basis(Cx)
-    Q = Bfull[:, rB+1:end]
+    dimH = dimZ - rB
+    if lazy_reps
+        return CohomologyData{K}(t, dimCt, dimZ, rB, dimH, Z, B, Cx, nothing, nothing, nothing, nothing, nothing,
+                                 _fullcolumn_factor_ref(),
+                                 _fullcolumn_factor_ref())
+    end
+    Bfull, Q = _cohomology_completion_from_basis(Cx)
     Hrep = Z * Q
-    dimH = size(Q, 2)
-
-    return CohomologyData{K}(t, dimCt, dimZ, rB, dimH, Z, B, Cx, Q, Bfull, Hrep,
+    return CohomologyData{K}(t, dimCt, dimZ, rB, dimH, Z, B, Cx, Q, Bfull, Hrep, nothing, nothing,
                              _fullcolumn_factor_ref(),
                              _fullcolumn_factor_ref())
 end
@@ -469,80 +1108,24 @@ function _cohomology_data_from_diffs(::Type{K},
                                      t::Int,
                                      dimCt::Int,
                                      d_prev::AbstractMatrix{K},
-                                     d_curr::AbstractMatrix{K}) where {K}
+                                     d_curr::AbstractMatrix{K};
+                                     lazy_reps::Bool=true) where {K}
     field = field_from_eltype(K)
+    dimCt == 0 && return _zero_cohomology_data(K, t)
 
-    if field isa QQField
-        Z = if dimCt == 0
-            _empty_mat(K, 0, 0)
-        elseif size(d_curr, 1) == 0
-            _eye_mat(K, dimCt)
-        else
-            FieldLinAlg.nullspace(field, d_curr)
-        end
-
-        B = if dimCt == 0
-            _empty_mat(K, 0, 0)
-        elseif size(d_prev, 2) == 0
-            _empty_mat(K, dimCt, 0)
-        else
-            FieldLinAlg.colspace(field, d_prev)
-        end
-
-        dimZ = size(Z, 2)
-        dimB = size(B, 2)
-
-        if dimCt == 0
-            return _zero_cohomology_data(K, t)
-        end
-
-        if dimB == 0
-            Bcoords = _empty_mat(K, dimZ, 0)
-            Bfull = _eye_mat(K, dimZ)
-            return CohomologyData{K}(t, dimCt, dimZ, 0, dimZ, Z, B, Bcoords, Bfull, Bfull, Z,
-                                     _fullcolumn_factor_ref(),
-                                     _fullcolumn_factor_ref())
-        end
-
-        X = _solve_fullcolumn_cached(field, Z, B)
-        Cx = size(X, 2) == 0 ? _empty_mat(K, dimZ, 0) : FieldLinAlg.colspace(field, X)
-
-        rB = size(Cx, 2)
-        if rB == dimZ
-            return CohomologyData{K}(t, dimCt, dimZ, rB, 0, Z, B, Cx, _empty_mat(K, dimZ, 0), Cx, _empty_mat(K, dimCt, 0),
-                                     _fullcolumn_factor_ref(),
-                                     _fullcolumn_factor_ref())
-        end
-        Bfull = extend_to_basis(Cx)
-        Q = Bfull[:, rB+1:end]
-        Hrep = Z * Q
-        dimH = size(Q, 2)
-        return CohomologyData{K}(t, dimCt, dimZ, rB, dimH, Z, B, Cx, Q, Bfull, Hrep,
-                                 _fullcolumn_factor_ref(),
-                                 _fullcolumn_factor_ref())
-    end
-
-    Z = if dimCt == 0
-        zeros(K, 0, 0)
-    elseif size(d_curr, 1) == 0
-        I = zeros(K, dimCt, dimCt)
-        for i in 1:dimCt
-            I[i, i] = one(K)
-        end
-        I
+    Z = if size(d_curr, 1) == 0
+        _eye_mat(K, dimCt)
     else
-        FieldLinAlg.nullspace(field, d_curr)
+        _diff_summary(field, d_curr).ker
     end
 
-    B = if dimCt == 0
-        zeros(K, 0, 0)
-    elseif size(d_prev, 2) == 0
-        zeros(K, dimCt, 0)
+    B = if size(d_prev, 2) == 0
+        _empty_mat(K, dimCt, 0)
     else
-        FieldLinAlg.colspace(field, d_prev)
+        _diff_summary(field, d_prev).img
     end
 
-    return _cohomology_data_from_bases(K, t, dimCt, Z, B)
+    return _cohomology_data_from_bases(K, t, dimCt, Z, B; lazy_reps=lazy_reps)
 end
 
 # Compute cohomology data at degree t:
@@ -556,15 +1139,18 @@ function _cohomology_data(C::CochainComplex{K},
     if summaries === nothing
         d_prev = (idx == 1) ? _empty_mat(K, dimCt, 0) : C.d[idx-1]
         d_curr = (idx > length(C.d)) ? _empty_mat(K, 0, dimCt) : C.d[idx]
-        return _cohomology_data_from_diffs(K, t, dimCt, d_prev, d_curr)
+        return _cohomology_data_from_diffs(K, t, dimCt, d_prev, d_curr; lazy_reps=false)
     end
 
     Z = idx > length(summaries) ? _eye_mat(K, dimCt) : summaries[idx].ker
     B = idx == 1 ? _empty_mat(K, dimCt, 0) : summaries[idx - 1].img
-    return _cohomology_data_from_bases(K, t, dimCt, Z, B)
+    return _cohomology_data_from_bases(K, t, dimCt, Z, B; lazy_reps=true)
 end
 
 function cohomology_data(C::CochainComplex{K}, t::Int) where {K}
+    if t < C.tmin || t > C.tmax
+        error("cohomology_data: requested degree $(t) lies outside the cochain-complex range [$(C.tmin), $(C.tmax)]")
+    end
     return _cohomology_data(C, degree_index(C, t))
 end
 
@@ -630,6 +1216,82 @@ function cohomology_dims(C::CochainComplex{K};
     return out
 end
 
+@inline function _validate_chain_degree(fn::AbstractString, degree)
+    if degree === :all || degree isa Int
+        return nothing
+    end
+    error("$(fn): degree must be :all or an integer cohomological degree")
+end
+
+@inline function _validate_chain_output(fn::AbstractString, output::Symbol, allowed::Tuple)
+    output in allowed && return nothing
+    error("$(fn): output must be one of $(collect(allowed))")
+end
+
+function _degree_dict(C::CochainComplex, vals::AbstractVector)
+    out = Dict{Int,eltype(vals)}()
+    for (i, val) in enumerate(vals)
+        out[C.tmin + i - 1] = val
+    end
+    return out
+end
+
+function _cohomology_basis_dict(H::AbstractVector{CohomologyData{K}}) where {K}
+    out = Dict{Int,Matrix{K}}()
+    for h in H
+        out[h.t] = h.Hrep
+    end
+    return out
+end
+
+"""
+    cohomology(C; degree=:all, output=:dims)
+
+Canonical public front door for cohomology of a cochain complex.
+
+Arguments
+- `degree=:all` returns all degrees; `degree=t` returns only degree `t`.
+- `output=:dims` returns cohomology dimensions.
+- `output=:basis` returns the chosen cocycle representative basis `Hrep`.
+- `output=:full` returns the full `CohomologyData` object(s).
+
+Return convention
+- `degree=:all, output=:dims`  -> `Dict{Int,Int}`
+- `degree=:all, output=:basis` -> `Dict{Int,Matrix}`
+- `degree=:all, output=:full`  -> `Vector{CohomologyData}`
+- `degree=t, output=:dims`     -> `Int`
+- `degree=t, output=:basis`    -> `Matrix`
+- `degree=t, output=:full`     -> `CohomologyData`
+
+For lower-level control, use `cohomology_dims`, `cohomology_data`,
+`cohomology_coordinates`, and `cohomology_representative` directly.
+"""
+function cohomology(C::CochainComplex{K};
+                    degree::Union{Int,Symbol}=:all,
+                    output::Symbol=:dims) where {K}
+    _validate_chain_degree("cohomology", degree)
+    _validate_chain_output("cohomology", output, (:dims, :basis, :full))
+
+    if degree === :all
+        if output === :dims
+            return _degree_dict(C, cohomology_dims(C))
+        elseif output === :basis
+            return _cohomology_basis_dict(cohomology_data(C))
+        end
+        return cohomology_data(C)
+    end
+
+    idx = degree_index(C, degree)
+    if output === :dims
+        return cohomology_dims(C)[idx]
+    end
+    H = cohomology_data(C, degree)
+    if output === :basis
+        return H.Hrep
+    end
+    return H
+end
+
 
 """
     homology_dims(C::CochainComplex{K}) -> Vector{Int}
@@ -652,7 +1314,7 @@ function cohomology_coordinates(H::CohomologyData{K}, z::AbstractMatrix{K}) wher
     # Allow a 1 times dimC row matrix to be treated as a vector input.
     if size(z, 1) != H.dimC
         if size(z, 1) == 1 && size(z, 2) == H.dimC
-            return cohomology_coordinates(H, vec(Matrix{K}(z)))
+            return cohomology_coordinates(H, vec(z))
         end
         error("cohomology_coordinates: wrong ambient dimension; got size $(size(z)), expected $(H.dimC) times k")
     end
@@ -668,7 +1330,7 @@ function cohomology_coordinates(H::CohomologyData{K}, z::AbstractMatrix{K}) wher
     # Enforce cocycle condition and compute Z-coordinates:
     # z in Z^t  iff  z in im(K), and then z = K * alpha for unique alpha.
     field = field_from_eltype(K)
-    alpha = _solve_fullcolumn_cached(field, H.K, Matrix{K}(z), H.Kfactor)
+    alpha = _solve_fullcolumn_cached(field, H.K, z, H.Kfactor)
 
     # If H^t = 0, every cocycle represents the zero class, but we already validated z in Z^t.
     if H.dimH == 0
@@ -684,7 +1346,7 @@ end
 
 # Vector overload: treat a vector cocycle as a single RHS column.
 function cohomology_coordinates(H::CohomologyData{K}, z::AbstractVector{K}) where {K}
-    return cohomology_coordinates(H, reshape(Vector{K}(z), :, 1))
+    return cohomology_coordinates(H, reshape(z, :, 1))
 end
 
 """
@@ -720,18 +1382,23 @@ end
 
 # Given a linear map f: C^t -> D^t and cohomology data for both sides, compute induced map on H^t.
 function induced_map_on_cohomology(src::CohomologyData{K}, tgt::CohomologyData{K}, f::AbstractMatrix{K}) where {K}
+    size(f, 1) == tgt.dimC && size(f, 2) == src.dimC || error(
+        "induced_map_on_cohomology: expected a linear map C^t -> D^t with size ($(tgt.dimC), $(src.dimC)); got $(size(f))",
+    )
     if src.dimH == 0 || tgt.dimH == 0
         return zeros(K, tgt.dimH, src.dimH)
     end
     if _use_batched_coordinate_solves(K, src.dimH, tgt.dimH) ||
        _use_exact_batched_coordinate_solves(K, src.dimH, tgt.dimH)
-        return cohomology_coordinates(tgt, f * src.Hrep)
+        Y = Matrix{K}(undef, tgt.dimC, src.dimH)
+        mul!(Y, f, src.Hrep)
+        return _cohomology_coordinates_from_cocycles(tgt, Y)
     end
     M = zeros(K, tgt.dimH, src.dimH)
+    y = Vector{K}(undef, tgt.dimC)
     for j in 1:src.dimH
-        y = f * src.Hrep[:, j]
-        coords = cohomology_coordinates(tgt, y)
-        M[:, j] = coords[:, 1]
+        mul!(y, f, @view src.Hrep[:, j])
+        M[:, j] = _cohomology_coordinates_vector(tgt, y)
     end
     return M
 end
@@ -740,7 +1407,17 @@ end
 # Homology (chain complexes) for Tor, etc.
 # ----------------------------
 
-struct HomologyData{K}
+"""
+    HomologyData{K}
+
+Explicit model of a homology group `H_s(C)` in homological degree `s`.
+
+This is the homological analogue of `CohomologyData`: it stores cycles,
+boundaries, a chosen quotient basis, and ambient representatives.
+For ordinary use, prefer `dimensions`, `basis`, `representatives`, and
+`coordinates`.
+"""
+mutable struct HomologyData{K}
     s::Int
     dimC::Int
     dimZ::Int
@@ -749,9 +1426,9 @@ struct HomologyData{K}
     Z::Matrix{K}          # cycles in C_s
     B::Matrix{K}          # boundaries in C_s
     Cx::Matrix{K}         # boundaries in Z-coordinates
-    Q::Matrix{K}          # complement in Z-coordinates
-    Bfull::Matrix{K}
-    Hrep::Matrix{K}       # cycle representatives in C_s
+    _Q::Union{Nothing,Matrix{K}}      # complement in Z-coordinates
+    _Bfull::Union{Nothing,Matrix{K}}
+    _Hrep::Union{Nothing,Matrix{K}}   # cycle representatives in C_s
     Zfactor::Base.RefValue{Union{Nothing,FieldLinAlg.FullColumnFactor{QQ}}}
     Bfull_factor::Base.RefValue{Union{Nothing,FieldLinAlg.FullColumnFactor{QQ}}}
 end
@@ -761,9 +1438,63 @@ function _zero_homology_data(::Type{K}, s::Int) where {K}
     return HomologyData{K}(s, 0, 0, 0, 0, Z0, Z0, Z0, Z0, Z0, Z0, _fullcolumn_factor_ref(), _fullcolumn_factor_ref())
 end
 
+function _ensure_homology_reps!(H::HomologyData{K}) where {K}
+    Bfull = getfield(H, :_Bfull)
+    Q = getfield(H, :_Q)
+    Hrep = getfield(H, :_Hrep)
+    if Bfull !== nothing && Q !== nothing && Hrep !== nothing
+        return Bfull::Matrix{K}, Q::Matrix{K}, Hrep::Matrix{K}
+    end
+
+    dimZ = getfield(H, :dimZ)
+    dimB = getfield(H, :dimB)
+    dimC = getfield(H, :dimC)
+    Zbasis = getfield(H, :Z)
+
+    if dimZ == 0
+        Bfull_new = _empty_mat(K, 0, 0)
+        Q_new = _empty_mat(K, 0, 0)
+        Hrep_new = _empty_mat(K, dimC, 0)
+    elseif dimB == 0
+        Bfull_new = _eye_mat(K, dimZ)
+        Q_new = Bfull_new
+        Hrep_new = Zbasis
+    else
+        Bfull_new, Q_new = _cohomology_completion_from_basis(getfield(H, :Cx))
+        Hrep_new = Zbasis * Q_new
+    end
+
+    setfield!(H, :_Bfull, Bfull_new)
+    setfield!(H, :_Q, Q_new)
+    setfield!(H, :_Hrep, Hrep_new)
+    return Bfull_new, Q_new, Hrep_new
+end
+
+@inline _homology_Bfull(H::HomologyData{K}) where {K} = (_ensure_homology_reps!(H)[1]::Matrix{K})
+@inline _homology_Q(H::HomologyData{K}) where {K} = (_ensure_homology_reps!(H)[2]::Matrix{K})
+@inline _homology_Hrep(H::HomologyData{K}) where {K} = (_ensure_homology_reps!(H)[3]::Matrix{K})
+
+function Base.getproperty(H::HomologyData{K}, s::Symbol) where {K}
+    if s === :Bfull
+        return _homology_Bfull(H)
+    elseif s === :Q
+        return _homology_Q(H)
+    elseif s === :Hrep
+        return _homology_Hrep(H)
+    end
+    return getfield(H, s)
+end
+
+Base.propertynames(::HomologyData, private::Bool=false) =
+    private ? (:s, :dimC, :dimZ, :dimB, :dimH, :Z, :B, :Cx, :_Q, :_Bfull, :_Hrep, :Zfactor, :Bfull_factor) :
+              (:s, :dimC, :dimZ, :dimB, :dimH, :Z, :B, :Cx, :Q, :Bfull, :Hrep, :Zfactor, :Bfull_factor)
+
 # Induced map on homology in a fixed degree.
 # src, tgt are HomologyData objects for that degree, and f is the chain map matrix in that degree.
 function induced_map_on_homology(src::HomologyData{K}, tgt::HomologyData{K}, f::AbstractMatrix{K}) where {K}
+    size(f, 1) == tgt.dimC && size(f, 2) == src.dimC || error(
+        "induced_map_on_homology: expected a linear map C_s -> D_s with size ($(tgt.dimC), $(src.dimC)); got $(size(f))",
+    )
     if src.dimH == 0 || tgt.dimH == 0
         return zeros(K, tgt.dimH, src.dimH)
     end
@@ -779,126 +1510,91 @@ function induced_map_on_homology(src::HomologyData{K}, tgt::HomologyData{K}, f::
     return H
 end
 
-# Homology at degree s uses:
-# cycles = ker(bd_s : C_s -> C_{s-1})
-# boundaries = im(bd_{s+1} : C_{s+1} -> C_s)
-function homology_data(bd_next::AbstractMatrix{K}, bd_curr::AbstractMatrix{K}, s::Int) where {K}
-    bdN = bd_next
-    bdC = bd_curr
-
-    dimCs = size(bdC, 2)
-    field = field_from_eltype(K)
-
-    if field isa QQField
-        Z = if dimCs == 0
-            _empty_mat(K, 0, 0)
-        elseif size(bdC, 1) == 0
-            _eye_mat(K, dimCs)
-        else
-            FieldLinAlg.nullspace(field, bdC)
-        end
-
-        B = if dimCs == 0
-            _empty_mat(K, 0, 0)
-        elseif size(bdN, 2) == 0
-            _empty_mat(K, dimCs, 0)
-        else
-            FieldLinAlg.colspace(field, bdN)
-        end
-
-        dimZ = size(Z, 2)
-        dimB = size(B, 2)
-
-        if dimCs == 0
-            return _zero_homology_data(K, s)
-        end
-
-        if dimB == 0
-            I = _eye_mat(K, dimZ)
-            return HomologyData{K}(s, dimCs, dimZ, 0, dimZ, Z, B, _empty_mat(K, dimZ, 0), I, I, Z,
-                                   _fullcolumn_factor_ref(),
-                                   _fullcolumn_factor_ref())
-        end
-
-        X = _solve_fullcolumn_cached(field, Z, B)
-        Cx = size(X, 2) == 0 ? _empty_mat(K, dimZ, 0) : FieldLinAlg.colspace(field, X)
-
-        rB = size(Cx, 2)
-        if rB == dimZ
-            return HomologyData{K}(s, dimCs, dimZ, rB, 0, Z, B, Cx, _empty_mat(K, dimZ, 0), Cx, _empty_mat(K, dimCs, 0),
-                                   _fullcolumn_factor_ref(),
-                                   _fullcolumn_factor_ref())
-        end
-        Bfull = extend_to_basis(Cx)
-        Q = Bfull[:, rB+1:end]
-        Hrep = Z * Q
-        dimH = size(Q, 2)
-
-        return HomologyData{K}(s, dimCs, dimZ, rB, dimH, Z, B, Cx, Q, Bfull, Hrep,
-                               _fullcolumn_factor_ref(),
-                               _fullcolumn_factor_ref())
-    end
-
-    Z = if dimCs == 0
-        zeros(K, 0, 0)
-    elseif size(bdC, 1) == 0
-        I = zeros(K, dimCs, dimCs)
-        for i in 1:dimCs
-            I[i, i] = one(K)
-        end
-        I
-    else
-        FieldLinAlg.nullspace(field, bdC)
-    end
-
-    B = if dimCs == 0
-        zeros(K, 0, 0)
-    elseif size(bdN, 2) == 0
-        zeros(K, dimCs, 0)
-    else
-        FieldLinAlg.colspace(field, bdN)
-    end
-
+function _homology_data_from_bases(::Type{K},
+                                   s::Int,
+                                   dimCs::Int,
+                                   Zin::AbstractMatrix{K},
+                                   Bin::AbstractMatrix{K};
+                                   lazy_reps::Bool=true) where {K}
+    Z = _concrete_mat(Zin)
+    B = _concrete_mat(Bin)
     dimZ = size(Z, 2)
     dimB = size(B, 2)
+    field = field_from_eltype(K)
 
     if dimCs == 0
         return _zero_homology_data(K, s)
     end
 
     if dimB == 0
-        I = _eye_mat(K, dimZ)
-        return HomologyData{K}(s, dimCs, dimZ, 0, dimZ, Z, B, zeros(K, dimZ, 0), I, I, Z,
+        Bcoords = _empty_mat(K, dimZ, 0)
+        if lazy_reps
+            return HomologyData{K}(s, dimCs, dimZ, 0, dimZ, Z, B, Bcoords, nothing, nothing, nothing,
+                                   _fullcolumn_factor_ref(),
+                                   _fullcolumn_factor_ref())
+        end
+        Bfull = _eye_mat(K, dimZ)
+        return HomologyData{K}(s, dimCs, dimZ, 0, dimZ, Z, B, Bcoords, Bfull, Bfull, Z,
                                _fullcolumn_factor_ref(),
                                _fullcolumn_factor_ref())
     end
 
-    X = if dimB == 0
-        zeros(K, dimZ, 0)
-    else
-        _solve_fullcolumn_cached(field, Z, B)
-    end
-
-    Cx = if size(X, 2) == 0
-        zeros(K, dimZ, 0)
-    else
-        FieldLinAlg.colspace(field, X)
-    end
-
+    # As in the cohomology path, the coordinate matrix X in Z * X = B already has
+    # full column rank because Z and B are bases and B subseteq span(Z).
+    Cx = _solve_fullcolumn_cached(field, Z, B)
     rB = size(Cx, 2)
     if rB == dimZ
-        return HomologyData{K}(s, dimCs, dimZ, rB, 0, Z, B, Cx, zeros(K, dimZ, 0), Cx, zeros(K, dimCs, 0),
+        Bfull = extend_to_basis_from_basis(Cx)
+        return HomologyData{K}(s, dimCs, dimZ, rB, 0, Z, B, Cx, _empty_mat(K, dimZ, 0), Bfull, _empty_mat(K, dimCs, 0),
                                _fullcolumn_factor_ref(),
                                _fullcolumn_factor_ref())
     end
-    Bfull = extend_to_basis(Cx)
-    Q = Bfull[:, rB+1:end]
-    Hrep = Z * Q
-    dimH = size(Q, 2)
 
+    dimH = dimZ - rB
+    if lazy_reps
+        return HomologyData{K}(s, dimCs, dimZ, rB, dimH, Z, B, Cx, nothing, nothing, nothing,
+                               _fullcolumn_factor_ref(),
+                               _fullcolumn_factor_ref())
+    end
+    Bfull, Q = _cohomology_completion_from_basis(Cx)
+    Hrep = Z * Q
     return HomologyData{K}(s, dimCs, dimZ, rB, dimH, Z, B, Cx, Q, Bfull, Hrep,
                            _fullcolumn_factor_ref(),
                            _fullcolumn_factor_ref())
+end
+
+function _homology_data_from_diffs(::Type{K},
+                                   s::Int,
+                                   dimCs::Int,
+                                   bd_next::AbstractMatrix{K},
+                                   bd_curr::AbstractMatrix{K};
+                                   lazy_reps::Bool=true) where {K}
+    field = field_from_eltype(K)
+    dimCs == 0 && return _zero_homology_data(K, s)
+
+    Z = if size(bd_curr, 1) == 0
+        _eye_mat(K, dimCs)
+    else
+        _diff_summary(field, bd_curr).ker
+    end
+
+    B = if size(bd_next, 2) == 0
+        _empty_mat(K, dimCs, 0)
+    else
+        _diff_summary(field, bd_next).img
+    end
+
+    return _homology_data_from_bases(K, s, dimCs, Z, B; lazy_reps=lazy_reps)
+end
+
+# Homology at degree s uses:
+# cycles = ker(bd_s : C_s -> C_{s-1})
+# boundaries = im(bd_{s+1} : C_{s+1} -> C_s)
+function homology_data(bd_next::AbstractMatrix{K}, bd_curr::AbstractMatrix{K}, s::Int) where {K}
+    bdN = bd_next
+    bdC = bd_curr
+    dimCs = size(bdC, 2)
+    return _homology_data_from_diffs(K, s, dimCs, bdN, bdC; lazy_reps=true)
 end
 
 # Reduce a cycle z in C_s to coordinates in H_s, using precomputed homology data.
@@ -926,6 +1622,92 @@ function homology_coordinates(data::HomologyData{K}, z::AbstractMatrix{K}) where
     rB = data.dimB
     return gamma[rB+1:end, :]
 end
+
+function homology_representative(H::HomologyData{K}, coords::AbstractVector{K}) where {K}
+    length(coords) == H.dimH || throw(DimensionMismatch(
+        "homology_representative: expected coords of length $(H.dimH), got $(length(coords))"))
+    return H.dimH == 0 ? zeros(K, H.dimC) : H.Hrep * coords
+end
+
+function homology_representative(H::HomologyData{K}, coords::AbstractMatrix{K}) where {K}
+    size(coords, 1) == H.dimH || throw(DimensionMismatch(
+        "homology_representative: expected coords with $(H.dimH) rows, got $(size(coords, 1))"))
+    return H.dimH == 0 ? zeros(K, H.dimC, size(coords, 2)) : H.Hrep * coords
+end
+
+
+# -----------------------------------------------------------------------------
+# Typed accessors for chain-level result objects
+# -----------------------------------------------------------------------------
+
+"""
+    dimensions(data)
+
+Return a compact dimension summary for a typed ChainComplexes result object.
+
+Conventions:
+- `CohomologyData` uses cohomological degree `t`,
+- `HomologyData` uses homological degree `s`,
+- `SubquotientData` reports numerator/denominator/quotient dimensions.
+"""
+dimensions(H::CohomologyData) = (ambient=H.dimC, cycles=H.dimZ, boundaries=H.dimB, cohomology=H.dimH)
+dimensions(H::HomologyData) = (ambient=H.dimC, cycles=H.dimZ, boundaries=H.dimB, homology=H.dimH)
+
+"""
+    basis(data)
+
+Return the chosen basis of the mathematical quotient object, represented by
+ambient vectors as columns.
+
+For `CohomologyData` and `HomologyData`, this is a basis of `H^t` or `H_s`
+written in the ambient chain/cochain basis.
+For `SubquotientData`, this is a basis of the quotient term written in its
+ambient vector space.
+"""
+basis(H::CohomologyData{K}) where {K} = H.Hrep
+basis(H::HomologyData{K}) where {K} = H.Hrep
+
+"""
+    representatives(data)
+
+Alias for `basis(data)`. The columns are explicit ambient representatives of
+the chosen quotient basis.
+
+This is the preferred public name when the mathematical meaning is "chosen
+representatives of quotient classes".
+"""
+representatives(H::CohomologyData{K}) where {K} = basis(H)
+representatives(H::HomologyData{K}) where {K} = basis(H)
+
+"""
+    coordinates(data, x)
+
+Return the coordinate vector(s) of `x` in the chosen quotient basis.
+
+Inputs are expected to be actual cocycles/cycles/numerator elements for the
+relevant quotient. If they are not, the function throws an error explaining
+which mathematical condition failed.
+"""
+coordinates(H::CohomologyData{K}, z::AbstractVector{K}) where {K} = cohomology_coordinates(H, z)
+coordinates(H::CohomologyData{K}, z::AbstractMatrix{K}) where {K} = cohomology_coordinates(H, z)
+coordinates(H::HomologyData{K}, z::AbstractVector{K}) where {K} = homology_coordinates(H, z)
+coordinates(H::HomologyData{K}, z::AbstractMatrix{K}) where {K} = homology_coordinates(H, z)
+
+"""
+    describe(data)
+
+Return a structured, compact mathematical summary of a ChainComplexes result
+object as a `NamedTuple`.
+
+This is intended for notebooks and programmatic inspection when `show(...)`
+would be too display-oriented. For option/specification objects, the same
+shared `describe(...)` surface exposes the operational contract without
+requiring field archaeology.
+"""
+describe(H::CohomologyData{K}) where {K} =
+    (kind=:cohomology, degree=H.t, field=_field_label(K), dimensions=dimensions(H))
+describe(H::HomologyData{K}) where {K} =
+    (kind=:homology, degree=H.s, field=_field_label(K), dimensions=dimensions(H))
 
 
 
@@ -1065,6 +1847,40 @@ function CochainMap(C::CochainComplex{K},
 end
 
 """
+    degree_range(f::CochainMap) -> UnitRange{Int}
+
+Return the stored degree window on which a cochain map is packaged.
+
+Outside this range, [`component(f, t)`](@ref) returns the correctly sized zero
+map.
+"""
+@inline degree_range(f::CochainMap) = f.tmin:f.tmax
+
+"""
+    source(f::CochainMap) -> CochainComplex
+
+Return the source complex of a cochain map.
+"""
+@inline source(f::CochainMap) = f.C
+
+"""
+    target(f::CochainMap) -> CochainComplex
+
+Return the target complex of a cochain map.
+"""
+@inline target(f::CochainMap) = f.D
+
+"""
+    component(f, t) -> SparseMatrixCSC
+
+Return the degree-`t` component of a cochain map.
+
+If `t` lies outside the stored degree window, this returns the correctly sized
+zero map `C^t -> D^t`.
+"""
+@inline component(f::CochainMap{K}, t::Int) where {K} = _map_at(f, t)
+
+"""
     mapping_cone(f) -> CochainComplex
 
 Return the mapping cone Cone(f) of a cochain map f : C -> D.
@@ -1164,6 +1980,17 @@ function mapping_cone_triangle(f::CochainMap{K}) where {K}
     return DistinguishedTriangle{K}(C, D, cone, Cshift, f, i, p)
 end
 
+"""
+    LongExactSequence{K}
+
+Explicit long exact sequence in cohomology, indexed by cohomological degree `t`.
+
+Each degree stores the groups `H^t(C)`, `H^t(D)`, `H^t(Cone)`, `H^t(C[1])`
+and the induced maps `f`, `i`, `p`, and `delta`.
+
+Use `long_exact_sequence(...; output=:dims)` for a cheap summary and request
+`output=:maps` or `output=:full` only when those heavier objects are needed.
+"""
 struct LongExactSequence{K}
     triangle::DistinguishedTriangle{K}
     tmin::Int
@@ -1178,17 +2005,7 @@ struct LongExactSequence{K}
     delta::Vector{Matrix{K}}  # H^t(Cone) -> H^{t+1}(C)
 end
 
-"""
-    long_exact_sequence(tri) -> LongExactSequence
-
-Given a distinguished triangle C -> D -> Cone -> C[1], compute the induced maps on cohomology
-and package the long exact sequence data, including the connecting morphisms
-delta : H^t(Cone) -> H^{t+1}(C).
-
-The returned object stores all degrees on the global range covering C, D, Cone, and C[1],
-treating missing degrees as zero.
-"""
-function long_exact_sequence(tri::DistinguishedTriangle{K}) where {K}
+function _long_exact_sequence_full(tri::DistinguishedTriangle{K}) where {K}
     C, D, cone, Cshift = tri.C, tri.D, tri.cone, tri.Cshift
     tmin = min(C.tmin, D.tmin, cone.tmin, Cshift.tmin)
     tmax = max(C.tmax, D.tmax, cone.tmax, Cshift.tmax)
@@ -1237,6 +2054,8 @@ function long_exact_sequence(tri::DistinguishedTriangle{K}) where {K}
                                            Hn.Q,
                                            Hn.Bfull,
                                            Hn.Hrep,
+                                           Hn._coord_rows,
+                                           Hn._coord_proj,
                                            Hn.Kfactor,
                                            Hn.Bfull_factor)
         else
@@ -1262,6 +2081,163 @@ function long_exact_sequence(tri::DistinguishedTriangle{K}) where {K}
     end
 
     return LongExactSequence{K}(tri, tmin, tmax, HC, HD, Hcone, HCshift, fH, iH, pH, delta)
+end
+
+@inline function _validate_les_degree(les::LongExactSequence, degree::Int)
+    les.tmin <= degree <= les.tmax || error(
+        "long_exact_sequence: degree $(degree) is outside the long exact sequence range [$(les.tmin), $(les.tmax)]",
+    )
+end
+
+@inline function _les_degree_index(les::LongExactSequence, degree::Int)
+    _validate_les_degree(les, degree)
+    return degree - les.tmin + 1
+end
+
+@inline function _les_dims_entry(les::LongExactSequence, degree::Int)
+    idx = _les_degree_index(les, degree)
+    return (C=les.HC[idx].dimH,
+            D=les.HD[idx].dimH,
+            cone=les.Hcone[idx].dimH,
+            Cshift=les.HCshift[idx].dimH)
+end
+
+@inline function _les_maps_entry(les::LongExactSequence{K}, degree::Int) where {K}
+    idx = _les_degree_index(les, degree)
+    return (f=les.fH[idx], i=les.iH[idx], p=les.pH[idx], delta=les.delta[idx])
+end
+
+@inline function _les_full_entry(les::LongExactSequence{K}, degree::Int) where {K}
+    idx = _les_degree_index(les, degree)
+    return (C=les.HC[idx],
+            D=les.HD[idx],
+            cone=les.Hcone[idx],
+            Cshift=les.HCshift[idx],
+            f=les.fH[idx],
+            i=les.iH[idx],
+            p=les.pH[idx],
+            delta=les.delta[idx])
+end
+
+function _les_dims_dict(les::LongExactSequence)
+    out = Dict{Int,NamedTuple{(:C,:D,:cone,:Cshift),Tuple{Int,Int,Int,Int}}}()
+    for degree in les.tmin:les.tmax
+        out[degree] = _les_dims_entry(les, degree)
+    end
+    return out
+end
+
+function _les_maps_dict(les::LongExactSequence{K}) where {K}
+    out = Dict{Int,NamedTuple{(:f,:i,:p,:delta),NTuple{4,Matrix{K}}}}()
+    for degree in les.tmin:les.tmax
+        out[degree] = _les_maps_entry(les, degree)
+    end
+    return out
+end
+
+describe(les::LongExactSequence{K}) where {K} = (
+    kind=:long_exact_sequence,
+    field=_field_label(K),
+    degree_range=(les.tmin, les.tmax),
+    dims_C=[H.dimH for H in les.HC],
+    dims_D=[H.dimH for H in les.HD],
+    dims_cone=[H.dimH for H in les.Hcone],
+    dims_shift=[H.dimH for H in les.HCshift],
+)
+
+"""
+    degree_range(les::LongExactSequence) -> UnitRange{Int}
+
+Return the cohomological degree window covered by a packaged long exact
+sequence.
+"""
+@inline degree_range(les::LongExactSequence) = les.tmin:les.tmax
+
+"""
+    sequence_dimensions(les, t)
+    sequence_dimensions(les; degree=t)
+
+Return the dimension-only entry of the long exact sequence in cohomological
+degree `t`.
+"""
+@inline sequence_dimensions(les::LongExactSequence, degree::Int) = _les_dims_entry(les, degree)
+@inline sequence_dimensions(les::LongExactSequence; degree::Int) = sequence_dimensions(les, degree)
+
+"""
+    sequence_maps(les, t)
+    sequence_maps(les; degree=t)
+
+Return the induced maps `(f, i, p, delta)` on the long exact sequence in degree
+`t`.
+"""
+@inline sequence_maps(les::LongExactSequence{K}, degree::Int) where {K} = _les_maps_entry(les, degree)
+@inline sequence_maps(les::LongExactSequence{K}; degree::Int) where {K} = sequence_maps(les, degree)
+
+"""
+    sequence_entry(les, t)
+    sequence_entry(les; degree=t)
+
+Return the full long-exact-sequence slice in degree `t`, including the four
+cohomology groups and the induced maps between them.
+"""
+@inline sequence_entry(les::LongExactSequence{K}, degree::Int) where {K} = _les_full_entry(les, degree)
+@inline sequence_entry(les::LongExactSequence{K}; degree::Int) where {K} = sequence_entry(les, degree)
+
+"""
+    long_exact_sequence_summary(les) -> NamedTuple
+
+Owner-local summary alias for `describe(les)`.
+
+Use this cheap summary to inspect degree range and group dimensions before
+requesting explicit sequence entries or induced maps.
+"""
+@inline long_exact_sequence_summary(les::LongExactSequence) = describe(les)
+
+"""
+    long_exact_sequence(f; degree=:all, output=:dims)
+    long_exact_sequence(tri; degree=:all, output=:dims)
+
+Canonical public front door for the long exact sequence on cohomology.
+
+Inputs
+- `f::CochainMap` uses the standard triangle `C --f--> D -> Cone(f) -> C[1]`.
+- `tri::DistinguishedTriangle` uses the supplied distinguished triangle directly.
+
+Arguments
+- `degree=:all` returns the whole long exact sequence; `degree=t` restricts to one degree.
+- `output=:dims` returns only cohomology dimensions.
+- `output=:maps` returns only the induced maps `(f, i, p, delta)`.
+- `output=:full` returns the full `LongExactSequence` object for `degree=:all`,
+  or the degree-`t` slice `(C, D, cone, Cshift, f, i, p, delta)` for `degree=t`.
+"""
+function long_exact_sequence(tri::DistinguishedTriangle{K};
+                             degree::Union{Int,Symbol}=:all,
+                             output::Symbol=:dims) where {K}
+    _validate_chain_degree("long_exact_sequence", degree)
+    _validate_chain_output("long_exact_sequence", output, (:dims, :maps, :full))
+
+    les = _long_exact_sequence_full(tri)
+    if degree === :all
+        if output === :dims
+            return _les_dims_dict(les)
+        elseif output === :maps
+            return _les_maps_dict(les)
+        end
+        return les
+    end
+
+    if output === :dims
+        return _les_dims_entry(les, degree)
+    elseif output === :maps
+        return _les_maps_entry(les, degree)
+    end
+    return _les_full_entry(les, degree)
+end
+
+function long_exact_sequence(f::CochainMap{K};
+                             degree::Union{Int,Symbol}=:all,
+                             output::Symbol=:dims) where {K}
+    return long_exact_sequence(mapping_cone_triangle(f); degree=degree, output=output)
 end
 
 # -------------------------------------------------------------------------------------
@@ -1296,6 +2272,276 @@ struct DoubleComplex{K}
     dh::Array{SparseMatrixCSC{K,Int},2}
 end
 
+"""
+    check_bicomplex(DC; throw=false) -> NamedTuple
+
+Validate a hand-built bicomplex.
+
+The returned report has fields:
+- `kind = :bicomplex`
+- `valid::Bool`
+- `a_range`
+- `b_range`
+- `total_degree_range`
+- `issues::Vector{String}`
+
+Set `throw=true` to raise an error when validation fails.
+"""
+function check_bicomplex(DC::DoubleComplex{K}; throw::Bool=false) where {K}
+    issues = String[]
+    expected_shape = (DC.amax - DC.amin + 1, DC.bmax - DC.bmin + 1)
+    size(DC.dims) == expected_shape || push!(issues,
+        "expected dims to have shape $(expected_shape) for a-range $(DC.amin):$(DC.amax) and b-range $(DC.bmin):$(DC.bmax); got $(size(DC.dims))")
+    size(DC.dv) == size(DC.dims) || push!(issues,
+        "expected dv blocks to have the same array shape as dims; got $(size(DC.dv)) vs $(size(DC.dims))")
+    size(DC.dh) == size(DC.dims) || push!(issues,
+        "expected dh blocks to have the same array shape as dims; got $(size(DC.dh)) vs $(size(DC.dims))")
+    any(<(0), DC.dims) && push!(issues, "expected all bicomplex component dimensions to be nonnegative")
+
+    na = min(size(DC.dims, 1), size(DC.dv, 1), size(DC.dh, 1))
+    nb = min(size(DC.dims, 2), size(DC.dv, 2), size(DC.dh, 2))
+    for ai in 1:na, bi in 1:nb
+        a = DC.amin + ai - 1
+        b = DC.bmin + bi - 1
+        src = DC.dims[ai, bi]
+        dv_tgt = bi < size(DC.dims, 2) ? DC.dims[ai, bi + 1] : 0
+        dh_tgt = ai < size(DC.dims, 1) ? DC.dims[ai + 1, bi] : 0
+        size(DC.dv[ai, bi]) == (dv_tgt, src) || push!(issues,
+            "expected d_v^($(a),$(b)) : C^($(a),$(b)) -> C^($(a),$(b + 1)) to have size ($(dv_tgt), $(src)); got $(size(DC.dv[ai, bi]))")
+        size(DC.dh[ai, bi]) == (dh_tgt, src) || push!(issues,
+            "expected d_h^($(a),$(b)) : C^($(a),$(b)) -> C^($(a + 1),$(b)) to have size ($(dh_tgt), $(src)); got $(size(DC.dh[ai, bi]))")
+    end
+
+    for ai in 1:na, bi in 1:nb
+        a = DC.amin + ai - 1
+        b = DC.bmin + bi - 1
+        if bi < nb
+            try
+                _check_zero_matrix(DC.dv[ai, bi + 1] * DC.dv[ai, bi]) || push!(issues,
+                    "expected d_v^($(a),$(b + 1)) circ d_v^($(a),$(b)) = 0")
+            catch
+                push!(issues, "could not form d_v^($(a),$(b + 1)) circ d_v^($(a),$(b)) because the block sizes are incompatible")
+            end
+        end
+        if ai < na
+            try
+                _check_zero_matrix(DC.dh[ai + 1, bi] * DC.dh[ai, bi]) || push!(issues,
+                    "expected d_h^($(a + 1),$(b)) circ d_h^($(a),$(b)) = 0")
+            catch
+                push!(issues, "could not form d_h^($(a + 1),$(b)) circ d_h^($(a),$(b)) because the block sizes are incompatible")
+            end
+        end
+        if ai < na && bi < nb
+            try
+                mixed = DC.dv[ai + 1, bi] * DC.dh[ai, bi] + DC.dh[ai, bi + 1] * DC.dv[ai, bi]
+                _check_zero_matrix(mixed) || push!(issues,
+                    "expected d_v d_h + d_h d_v = 0 at bidegree ($(a),$(b))")
+            catch
+                push!(issues, "could not form d_v d_h + d_h d_v at bidegree ($(a),$(b)) because the block sizes are incompatible")
+            end
+        end
+    end
+
+    report = (
+        kind = :bicomplex,
+        valid = isempty(issues),
+        a_range = (DC.amin, DC.amax),
+        b_range = (DC.bmin, DC.bmax),
+        total_degree_range = (DC.amin + DC.bmin, DC.amax + DC.bmax),
+        issues = issues,
+    )
+    throw && !report.valid && _validation_error("check_bicomplex", issues)
+    return report
+end
+
+"""
+    check_filtered_complex(F; first=:vertical, throw=false) -> NamedTuple
+
+Validate a filtered cochain complex presented in split bicomplex form.
+
+This checks the underlying bicomplex relations and records the induced
+filtration range for the chosen `first` convention.
+
+The returned report has fields:
+- `kind = :filtered_complex`
+- `valid::Bool`
+- `first`
+- `filtration_range`
+- `degree_range`
+- `issues::Vector{String}`
+
+Set `throw=true` to raise an error when validation fails.
+"""
+function check_filtered_complex(DC::DoubleComplex{K}; first::Symbol=:vertical, throw::Bool=false) where {K}
+    issues = String[]
+    try
+        _ss_check_first(first)
+    catch err
+        push!(issues, sprint(showerror, err))
+    end
+
+    base = check_bicomplex(DC)
+    append!(issues, base.issues)
+    filtration_range = first == :horizontal ? (DC.bmin, DC.bmax) : (DC.amin, DC.amax)
+    report = (
+        kind = :filtered_complex,
+        valid = isempty(issues),
+        first = first,
+        filtration_range = filtration_range,
+        degree_range = (DC.amin + DC.bmin, DC.amax + DC.bmax),
+        issues = issues,
+    )
+    throw && !report.valid && _validation_error("check_filtered_complex", issues)
+    return report
+end
+
+"""
+    ChainComplexValidationSummary
+
+Pretty-printable wrapper for raw reports returned by the owner-local
+`ChainComplexes` validation helpers.
+
+Use [`chain_complex_validation_summary`](@ref) to turn the raw report from
+[`check_complex`](@ref), [`check_bicomplex`](@ref), or
+[`check_filtered_complex`](@ref) into a notebook- and REPL-friendly object.
+"""
+struct ChainComplexValidationSummary{R}
+    report::R
+end
+
+"""
+    chain_complex_validation_summary(report) -> ChainComplexValidationSummary
+
+Wrap a raw chain-complex validation report in a display-oriented summary
+object.
+"""
+@inline chain_complex_validation_summary(report::NamedTuple) = ChainComplexValidationSummary(report)
+
+"""
+    filtered_cochain_complex(::Type{K};
+        first=:vertical,
+        pieces,
+        d0=Dict(),
+        d1=Dict(),
+        p_range=nothing,
+        t_range=nothing,
+        check=true) -> DoubleComplex{K}
+
+Build the split bicomplex attached to a filtered cochain complex from
+filtration/degree data.
+
+Input convention
+- `pieces[(p,t)] = dim Gr^p C^t`
+- `d0[(p,t)] : Gr^p C^t -> Gr^p C^{t+1}` preserves filtration
+- `d1[(p,t)] : Gr^p C^t -> Gr^{p+1} C^{t+1}` raises filtration by one
+
+The `first` keyword chooses how the filtration index is embedded into the
+bicomplex:
+- `first=:vertical`   uses `a = p`, `b = t - p`
+- `first=:horizontal` uses `b = p`, `a = t - p`
+
+This constructor is the canonical user-facing path when the spectral input is
+known in filtration/degree coordinates rather than raw bicomplex indices.
+"""
+function filtered_cochain_complex(::Type{K};
+                                  first::Symbol=:vertical,
+                                  pieces,
+                                  d0=Dict{Tuple{Int,Int},SparseMatrixCSC{K,Int}}(),
+                                  d1=Dict{Tuple{Int,Int},SparseMatrixCSC{K,Int}}(),
+                                  p_range=nothing,
+                                  t_range=nothing,
+                                  check::Bool=true) where {K}
+    _ss_check_first(first)
+
+    isempty(pieces) && error("filtered_cochain_complex: expected at least one graded piece `(p,t) => dim`")
+
+    key_to_ab(p::Int, t::Int) = first == :vertical ? (p, t - p) : (t - p, p)
+
+    if p_range === nothing
+        ps = [pt[1] for pt in keys(pieces)]
+        pvals = minimum(ps):maximum(ps)
+    else
+        pvals = p_range
+    end
+    if t_range === nothing
+        ts = [pt[2] for pt in keys(pieces)]
+        tvals = minimum(ts):maximum(ts)
+    else
+        tvals = t_range
+    end
+
+    ab_keys = [key_to_ab(p, t) for p in pvals for t in tvals]
+    avals = getindex.(ab_keys, 1)
+    bvals = getindex.(ab_keys, 2)
+    amin = minimum(avals)
+    amax = maximum(avals)
+    bmin = minimum(bvals)
+    bmax = maximum(bvals)
+
+    dims = zeros(Int, amax - amin + 1, bmax - bmin + 1)
+    for p in pvals, t in tvals
+        dim = get(pieces, (p, t), 0)
+        dim < 0 && error("filtered_cochain_complex: expected nonnegative dimensions for Gr^p C^t; got $(dim) at (p,t)=($(p),$(t))")
+        a, b = key_to_ab(p, t)
+        dims[a - amin + 1, b - bmin + 1] = dim
+    end
+
+    dv = Array{SparseMatrixCSC{K,Int},2}(undef, size(dims)...)
+    dh = Array{SparseMatrixCSC{K,Int},2}(undef, size(dims)...)
+
+    for a in amin:amax
+        for b in bmin:bmax
+            if first == :vertical
+                p = a
+                t = a + b
+            else
+                p = b
+                t = a + b
+            end
+
+            src_dim = dims[a - amin + 1, b - bmin + 1]
+            dv_tgt_dim = (b < bmax ? dims[a - amin + 1, b - bmin + 2] : 0)
+            dh_tgt_dim = (a < amax ? dims[a - amin + 2, b - bmin + 1] : 0)
+
+            dv_mat = sparse(get(d0, (p, t), spzeros(K, dv_tgt_dim, src_dim)))
+            dh_mat = sparse(get(d1, (p, t), spzeros(K, dh_tgt_dim, src_dim)))
+
+            size(dv_mat) == (dv_tgt_dim, src_dim) || error(
+                "filtered_cochain_complex: expected d0 at (p,t)=($(p),$(t)) to have size ($(dv_tgt_dim), $(src_dim)); got $(size(dv_mat))",
+            )
+            size(dh_mat) == (dh_tgt_dim, src_dim) || error(
+                "filtered_cochain_complex: expected d1 at (p,t)=($(p),$(t)) to have size ($(dh_tgt_dim), $(src_dim)); got $(size(dh_mat))",
+            )
+
+            dv[a - amin + 1, b - bmin + 1] = dv_mat
+            dh[a - amin + 1, b - bmin + 1] = dh_mat
+        end
+    end
+
+    DC = DoubleComplex{K}(amin, amax, bmin, bmax, dims, dv, dh)
+    check || return DC
+
+    for a in amin:amax
+        for b in bmin:bmax
+            ai = a - amin + 1
+            bi = b - bmin + 1
+            if b < bmax && b + 1 <= bmax
+                dv2 = dv[ai, bi + 1] * dv[ai, bi]
+                nnz(dv2) == 0 || error("filtered_cochain_complex: expected d0^(t+1) circ d0^t = 0 on Gr^$(first == :vertical ? a : b) C^$(a + b)")
+            end
+            if a < amax && a + 1 <= amax
+                dh2 = dh[ai + 1, bi] * dh[ai, bi]
+                nnz(dh2) == 0 || error("filtered_cochain_complex: expected d1^(p+1,t+1) circ d1^(p,t) = 0 on filtered graded pieces")
+            end
+            if a < amax && b < bmax
+                mixed = dv[ai + 1, bi] * dh[ai, bi] + dh[ai, bi + 1] * dv[ai, bi]
+                nnz(mixed) == 0 || error("filtered_cochain_complex: expected d0*d1 + d1*d0 = 0 (a filtered bicomplex relation)")
+            end
+        end
+    end
+    return DC
+end
+
 # Max total degree stored in a bounded double complex.
 maxdeg_of_complex(DC::DoubleComplex) = DC.amax + DC.bmax
 
@@ -1317,6 +2563,68 @@ function _dh_at(DC::DoubleComplex{K}, a::Int, b::Int) where {K}
     end
     return DC.dh[a - DC.amin + 1, b - DC.bmin + 1]
 end
+
+"""
+    a_range(DC::DoubleComplex) -> UnitRange{Int}
+
+Return the stored horizontal bidegree window of a bicomplex.
+"""
+@inline a_range(DC::DoubleComplex) = DC.amin:DC.amax
+
+"""
+    b_range(DC::DoubleComplex) -> UnitRange{Int}
+
+Return the stored vertical bidegree window of a bicomplex.
+"""
+@inline b_range(DC::DoubleComplex) = DC.bmin:DC.bmax
+
+@inline function _block_dim_at(DC::DoubleComplex, a::Int, b::Int)
+    if a < DC.amin || a > DC.amax || b < DC.bmin || b > DC.bmax
+        return 0
+    end
+    return DC.dims[a - DC.amin + 1, b - DC.bmin + 1]
+end
+
+"""
+    block(DC, a, b) -> NamedTuple
+
+Return a compact description of the bicomplex block `C^(a,b)`.
+
+The result records the bidegree, the total degree `a+b`, and the stored block
+dimension. Out-of-range bidegrees are treated as zero blocks.
+"""
+function block(DC::DoubleComplex, a::Int, b::Int)
+    return (
+        a = a,
+        b = b,
+        total_degree = a + b,
+        dimension = _block_dim_at(DC, a, b),
+    )
+end
+
+"""
+    vertical_differential(DC, a, b) -> SparseMatrixCSC
+
+Return the vertical differential `d_v^(a,b) : C^(a,b) -> C^(a,b+1)`.
+"""
+@inline vertical_differential(DC::DoubleComplex{K}, a::Int, b::Int) where {K} = _dv_at(DC, a, b)
+
+"""
+    horizontal_differential(DC, a, b) -> SparseMatrixCSC
+
+Return the horizontal differential `d_h^(a,b) : C^(a,b) -> C^(a+1,b)`.
+"""
+@inline horizontal_differential(DC::DoubleComplex{K}, a::Int, b::Int) where {K} = _dh_at(DC, a, b)
+
+"""
+    bicomplex_summary(DC) -> NamedTuple
+
+Owner-local summary alias for `describe(DC)`.
+
+This is the cheapest way to inspect the bidegree window, total degree range,
+and aggregate block sizes of a bicomplex.
+"""
+@inline bicomplex_summary(DC::DoubleComplex) = describe(DC)
 
 
 """
@@ -1347,7 +2655,7 @@ end
 """
     SubquotientData{K}
 
-An explicit subquotient space `Z / B` inside a fixed ambient vector space `V`.
+Explicit subquotient space `Z / B` inside a fixed ambient vector space `V`.
 
 The ambient space is identified with `K^N` for `N = ambient_dim`, and the data
 is stored using explicit bases:
@@ -1356,10 +2664,11 @@ is stored using explicit bases:
   * denominator basis `Bbasis` (matrix with columns spanning B, with B subset Z)
   * a chosen complement basis, giving representatives of a basis of `Z/B`
 
-This is designed so that we can:
-  * read off `dim(Z/B)`,
-  * get explicit representatives of basis elements,
-  * compute induced maps by acting on representatives and taking coordinates.
+In the spectral-sequence API, each term `E_r^{p,q}` is represented by a
+`SubquotientData`, with public bidegree notation `(p,q)`.
+
+For ordinary use, prefer `dimensions`, `basis`, `representatives`, and
+`coordinates` instead of reading these fields directly.
 """
 struct SubquotientData{K}
     ambient_dim::Int
@@ -1441,10 +2750,10 @@ function _subquotient_data_from_coords(Zbasis::AbstractMatrix{K},
     dimB = size(Bcoords, 2)
     Bbasis = Zmat * Bcoords
 
-    Bfull = extend_to_basis(Bcoords)
+    Bfull = extend_to_basis_from_basis(Bcoords)
     Hcoords = Bfull[:, (dimB+1):dimZ]
-    dimH = size(Hcoords, 2)
     Hrep = Zmat * Hcoords
+    dimH = size(Hcoords, 2)
 
     return SubquotientData{K}(ambient_dim, dimZ, dimB, dimH,
                               Zmat, Bbasis, Bcoords, Bfull, Hcoords, Hrep,
@@ -1454,13 +2763,20 @@ function _subquotient_data_from_coords(Zbasis::AbstractMatrix{K},
 end
 
 function subquotient_data(Zbasis::AbstractMatrix{K}, Bgens::AbstractMatrix{K}) where {K}
+    size(Bgens, 1) == size(Zbasis, 1) || error(
+        "subquotient_data: expected numerator and denominator generators in the same ambient dimension; got $(size(Zbasis, 1)) and $(size(Bgens, 1))",
+    )
     field = field_from_eltype(K)
     Zmat = _concrete_mat(Zbasis)
     dimZ = size(Zmat, 2)
     Bcoords = if size(Bgens, 2) == 0 || dimZ == 0
         _empty_mat(K, dimZ, 0)
     else
-        _solve_fullcolumn_cached(field, Zmat, Bgens)
+        try
+            _solve_fullcolumn_cached(field, Zmat, Bgens)
+        catch err
+            error("subquotient_data: expected denominator generators to lie in the span of the numerator basis")
+        end
     end
     return _subquotient_data_from_coords(Zmat, Bcoords; Zsolve_rows=1:size(Zmat, 1), Zsolve_basis=Zmat)
 end
@@ -1492,6 +2808,26 @@ end
 
 subquotient_coordinates(SQ::SubquotientData{K}, z::Vector{K}) where {K} =
     subquotient_coordinates(SQ, reshape(z, :, 1))
+
+function subquotient_representative(SQ::SubquotientData{K}, coords::AbstractVector{K}) where {K}
+    length(coords) == SQ.dimH || throw(DimensionMismatch(
+        "subquotient_representative: expected coords of length $(SQ.dimH), got $(length(coords))"))
+    return SQ.dimH == 0 ? zeros(K, SQ.ambient_dim) : SQ.Hrep * coords
+end
+
+function subquotient_representative(SQ::SubquotientData{K}, coords::AbstractMatrix{K}) where {K}
+    size(coords, 1) == SQ.dimH || throw(DimensionMismatch(
+        "subquotient_representative: expected coords with $(SQ.dimH) rows, got $(size(coords, 1))"))
+    return SQ.dimH == 0 ? zeros(K, SQ.ambient_dim, size(coords, 2)) : SQ.Hrep * coords
+end
+
+dimensions(SQ::SubquotientData) = (ambient=SQ.ambient_dim, numerator=SQ.dimZ, denominator=SQ.dimB, quotient=SQ.dimH)
+basis(SQ::SubquotientData{K}) where {K} = SQ.Hrep
+representatives(SQ::SubquotientData{K}) where {K} = basis(SQ)
+coordinates(SQ::SubquotientData{K}, z::AbstractVector{K}) where {K} = subquotient_coordinates(SQ, z)
+coordinates(SQ::SubquotientData{K}, z::AbstractMatrix{K}) where {K} = subquotient_coordinates(SQ, z)
+describe(SQ::SubquotientData{K}) where {K} =
+    (kind=:subquotient, field=_field_label(K), dimensions=dimensions(SQ))
 
 function _subquotient_pushforward_coords(src::SubquotientData{K},
                                          tgt::SubquotientData{K},
@@ -1551,24 +2887,39 @@ end
 """
     SpectralSequence{K}
 
-v2 spectral sequence object.
+Explicit spectral sequence attached to a filtered cochain complex or a bounded
+bicomplex.
 
-Key features:
-  * page(ss,r) for all r>=1 and :inf/:infty
-  * differential(ss,r) for all r>=1
-  * explicit subquotient models for each term
-  * explicit filtration and edge maps
-  * collapse/convergence utilities
+Public notation:
+- cohomological total degree is written `t`,
+- spectral bidegrees are written `(p,q)`,
+- pages are written `E_r^{p,q}`.
 
-Indexing note:
-`page(ss,r)` and `term(ss,r,(a,b))` use the double-complex bidegree `(a,b)`
-with `a` in the first axis and `b` in the second axis. If you need the
-filtration/total-degree view, use `ss_key(first,a,b)` or `ss_key(ss,a,b)` to
-map `(a,b)` to `(p,t)` where `p` is the filtration index and `t = a + b`.
+Cheap exploration first:
+- `page_dims(ss, r)` or `term_dims(ss, r)` for dimensions,
+- `nonzero_terms(ss, r)` for support,
+- `convergence_page(ss)` for dimension-level stabilization.
+
+Heavier opt-in:
+- `page_terms(ss, r)` for explicit term objects,
+- `page_differentials(ss, r)` for explicit differentials,
+- `filtration_basis(ss; filtration=p, degree=t)` or `image_basis(...)` for filtration data.
+
+Implementation note:
+the stored bicomplex axes are still indexed internally in matrix order, but the
+public-facing accessors use spectral notation `(p,q)`.
 """
 mutable struct _LazyValue{T}
     value::Union{Nothing,T}
 end
+
+const _QQEliminationSummary = Union{
+    FieldLinAlg.DenseQQEliminationSummary,
+    FieldLinAlg.SparseQQEliminationSummary,
+}
+
+@inline _ss_filtimg_summary_cache(tlen::Int) =
+    [Dict{NTuple{6,Int},_QQEliminationSummary}() for _ in 1:tlen]
 
 struct SpectralSequence{K}
     DC::DoubleComplex{K}
@@ -1592,6 +2943,7 @@ struct SpectralSequence{K}
     filt_img_dims::Matrix{Int}
     filt_img::_LazyValue{Array{Matrix{K},2}}
     filt_img_cols::Vector{_LazyValue{Vector{Matrix{K}}}}
+    filt_img_summary_cache::Vector{Dict{NTuple{6,Int},_QQEliminationSummary}}
     Einf_spaces::_LazyValue{Array{SubquotientData{K},2}}
 
     page_cache::Dict{Int,SSPageData{K}}
@@ -1605,7 +2957,7 @@ end
 User-facing wrapper for E_r dimension tables.
 Supports:
   * matrix indexing P[i,j]
-  * bidegree indexing P[(a,b)]
+  * spectral bidegree indexing P[(p,q)]
 """
 struct SpectralPage{K} <: AbstractMatrix{Int}
     ss::SpectralSequence{K}
@@ -1647,12 +2999,22 @@ end
 const _spectral_exact_diff_mode = Ref{Symbol}(:coords)
 const _spectral_exact_filtimg_cache_mode = Ref{Symbol}(:auto)
 const _spectral_exact_filtimg_basis_mode = Ref{Symbol}(:auto)
+const _spectral_exact_filtimg_summary_reuse = Ref(true)
 
 @inline function _use_exact_diff_coords()
     mode = _spectral_exact_diff_mode[]
     mode === :coords && return true
     mode === :ambient && return false
     error("_spectral_exact_diff_mode must be :coords or :ambient")
+end
+
+@inline _use_exact_filtimg_summary_reuse() = _spectral_exact_filtimg_summary_reuse[]
+
+function _ss_clear_filtimg_summary_cache!(ss::SpectralSequence)
+    for cache in ss.filt_img_summary_cache
+        empty!(cache)
+    end
+    return ss
 end
 
 Base.size(P::SpectralTermsPage) = size(P.terms)
@@ -1675,7 +3037,7 @@ end
 
 function _ss_check_first(first::Symbol)
     if !(first == :vertical || first == :horizontal)
-        error("spectral_sequence: first must be :vertical or :horizontal")
+        error("spectral_sequence: expected first=:vertical or first=:horizontal; horizontal-first spectral sequence requires a filtered bicomplex with the same bicomplex conventions")
     end
 end
 
@@ -2353,48 +3715,6 @@ function _ss_inclusion_coords(tgt::CohomologyData{K},
     return cohomology_coordinates(tgt, Y)
 end
 
-const _spectral_exact_horizontal_filtimg_mode = Ref{Symbol}(:auto)
-const _spectral_exact_vertical_filtimg_mode = Ref{Symbol}(:auto)
-
-@inline function _exact_horizontal_filtimg_auto(::Type{K},
-                                                first::Symbol,
-                                                Htot_dims::AbstractVector{Int},
-                                                fp_ranges::AbstractMatrix{UnitRange{Int}}) where {K}
-    if first != :horizontal || !(field_from_eltype(K) isa QQField)
-        return false
-    end
-    plen, tlen = size(fp_ranges)
-    total_hdim = sum(Htot_dims)
-    repeated = any(_ss_exact_filtimg_cache_plan(fp_ranges; prefer_cache=false))
-    return repeated && (plen * tlen >= 32 || total_hdim >= 72)
-end
-
-@inline function _use_exact_horizontal_filtimg(::Type{K},
-                                               first::Symbol,
-                                               Htot_dims::AbstractVector{Int},
-                                               fp_ranges::AbstractMatrix{UnitRange{Int}}) where {K}
-    mode = _spectral_exact_horizontal_filtimg_mode[]
-    if mode === :optimized
-        return false
-    elseif mode === :legacy
-        return first == :horizontal && (field_from_eltype(K) isa QQField)
-    elseif mode === :auto
-        return _exact_horizontal_filtimg_auto(K, first, Htot_dims, fp_ranges)
-    end
-    error("_spectral_exact_horizontal_filtimg_mode must be :auto, :optimized, or :legacy")
-end
-
-@inline function _use_exact_vertical_filtimg_batched(::Type{K}, first::Symbol) where {K}
-    if first != :vertical || !(field_from_eltype(K) isa QQField)
-        return false
-    end
-    mode = _spectral_exact_vertical_filtimg_mode[]
-    mode === :batched && return true
-    mode === :direct && return false
-    mode === :auto && return false
-    error("_spectral_exact_vertical_filtimg_mode must be :auto, :batched, or :direct")
-end
-
 @inline function _use_exact_filtimg_cache(repeats::Bool)
     mode = _spectral_exact_filtimg_cache_mode[]
     mode === :on && return true
@@ -2479,7 +3799,12 @@ end
     mode = _spectral_exact_filtimg_basis_mode[]
     mode === :columnwise && return true
     mode === :full && return false
-    mode === :auto && return _exact_columnwise_filtimg_auto(ss, tidx)
+    if mode === :auto
+        # Horizontal exact Einf materialization is consistently better on the
+        # full-basis path in current QQ benchmarks; keep auto conservative here.
+        ss.first == :horizontal && return false
+        return _exact_columnwise_filtimg_auto(ss, tidx)
+    end
     error("_spectral_exact_filtimg_basis_mode must be :auto, :columnwise, or :full")
 end
 
@@ -2495,11 +3820,64 @@ end
     return FieldLinAlg.rank(field, _ss_inclusion_coords(Htot_t, Ht, ambient_dim, r_t))
 end
 
+@inline function _ss_filtimg_summary(
+    field::QQField,
+    Htot_t::CohomologyData{K},
+    dimHtot_t::Int,
+    Ht::CohomologyData{K},
+    ambient_dim::Int,
+    r_t::UnitRange{Int},
+) where {K}
+    if dimHtot_t == 0 || Ht.dimH == 0
+        return nothing
+    end
+    return FieldLinAlg.elimination_summary(field, _ss_inclusion_coords(Htot_t, Ht, ambient_dim, r_t))
+end
+
+@inline function _ss_filtimg_dim(
+    field::QQField,
+    Htot_t::CohomologyData{K},
+    dimHtot_t::Int,
+    Ht::CohomologyData{K},
+    ambient_dim::Int,
+    r_t::UnitRange{Int},
+    cache::Dict{NTuple{6,Int},_QQEliminationSummary},
+    sig::NTuple{6,Int},
+) where {K}
+    if dimHtot_t == 0 || Ht.dimH == 0
+        return 0
+    end
+    summary = get!(cache, sig) do
+        _ss_filtimg_summary(field, Htot_t, dimHtot_t, Ht, ambient_dim, r_t)::FieldLinAlg.AbstractQQEliminationSummary
+    end
+    return FieldLinAlg.rank(summary)
+end
+
+@inline function _ss_filtimg_basis(
+    field::QQField,
+    Htot_t::CohomologyData{K},
+    dimHtot_t::Int,
+    Ht::CohomologyData{K},
+    ambient_dim::Int,
+    r_t::UnitRange{Int},
+    cache::Dict{NTuple{6,Int},_QQEliminationSummary},
+    sig::NTuple{6,Int},
+) where {K}
+    if dimHtot_t == 0 || Ht.dimH == 0
+        return zeros(K, dimHtot_t, 0)
+    end
+    summary = get!(cache, sig) do
+        _ss_filtimg_summary(field, Htot_t, dimHtot_t, Ht, ambient_dim, r_t)::FieldLinAlg.AbstractQQEliminationSummary
+    end
+    return FieldLinAlg.colspace(summary)
+end
+
 function _ss_build_filt_img_exact_dims(Tot::CochainComplex{K},
                                        Htot::Vector{CohomologyData{K}},
                                        Htot_dims::Vector{Int},
                                        fp_ranges::AbstractMatrix{UnitRange{Int}};
-                                       prefer_cache::Bool=false) where {K}
+                                       prefer_cache::Bool=false,
+                                       summary_cache::Union{Nothing,Vector{Dict{NTuple{6,Int},_QQEliminationSummary}}}=nothing) where {K}
     field = field_from_eltype(K)
     tmin = Tot.tmin
     tmax = Tot.tmax
@@ -2532,10 +3910,18 @@ function _ss_build_filt_img_exact_dims(Tot::CochainComplex{K},
             end
             if use_cache[tidx]
                 dims[ip, tidx] = get!(imgdim_cache[tidx], sig) do
-                    _ss_filtimg_dim(field, Htot[tidx], Htot_dims[tidx], Ht, Tot.dims[tidx], fp_ranges[ip, tidx])
+                    if summary_cache === nothing || !_use_exact_filtimg_summary_reuse()
+                        _ss_filtimg_dim(field, Htot[tidx], Htot_dims[tidx], Ht, Tot.dims[tidx], fp_ranges[ip, tidx])
+                    else
+                        _ss_filtimg_dim(field, Htot[tidx], Htot_dims[tidx], Ht, Tot.dims[tidx], fp_ranges[ip, tidx], summary_cache[tidx], sig)
+                    end
                 end
             else
-                dims[ip, tidx] = _ss_filtimg_dim(field, Htot[tidx], Htot_dims[tidx], Ht, Tot.dims[tidx], fp_ranges[ip, tidx])
+                dims[ip, tidx] = if summary_cache === nothing || !_use_exact_filtimg_summary_reuse()
+                    _ss_filtimg_dim(field, Htot[tidx], Htot_dims[tidx], Ht, Tot.dims[tidx], fp_ranges[ip, tidx])
+                else
+                    _ss_filtimg_dim(field, Htot[tidx], Htot_dims[tidx], Ht, Tot.dims[tidx], fp_ranges[ip, tidx], summary_cache[tidx], sig)
+                end
             end
         end
     end
@@ -2543,45 +3929,12 @@ function _ss_build_filt_img_exact_dims(Tot::CochainComplex{K},
     return dims
 end
 
-function _ss_filtered_complex(Tot::CochainComplex{K},
-                              fp_ranges::AbstractMatrix{UnitRange{Int}},
-                              ip::Int) where {K}
-    tlen = size(fp_ranges, 2)
-    dims = Vector{Int}(undef, tlen)
-    d = Vector{SparseMatrixCSC{K,Int}}(undef, max(0, tlen - 1))
-    for tidx in 1:tlen
-        r_t = fp_ranges[ip, tidx]
-        dims[tidx] = length(r_t)
-        if tidx < tlen
-            r_tp1 = fp_ranges[ip, tidx + 1]
-            d[tidx] = Tot.d[tidx][r_tp1, r_t]
-        end
-    end
-    return CochainComplex{K}(Tot.tmin, Tot.tmax, dims, d)
-end
-
-function _ss_build_filt_img_exact_dims_batched(Tot::CochainComplex{K},
-                                               Htot::Vector{CohomologyData{K}},
-                                               Htot_dims::Vector{Int},
-                                               fp_ranges::AbstractMatrix{UnitRange{Int}}) where {K}
-    field = field_from_eltype(K)
-    tlen = Tot.tmax - Tot.tmin + 1
-    plen = size(fp_ranges, 1)
-    dims = zeros(Int, plen, tlen)
-    for ip in 1:plen
-        HFp = cohomology_data(_ss_filtered_complex(Tot, fp_ranges, ip))
-        for tidx in 1:tlen
-            dims[ip, tidx] = _ss_filtimg_dim(field, Htot[tidx], Htot_dims[tidx], HFp[tidx], Tot.dims[tidx], fp_ranges[ip, tidx])
-        end
-    end
-    return dims
-end
-
 function _ss_build_filt_img_exact_bases(Tot::CochainComplex{K},
                                         Htot::Vector{CohomologyData{K}},
                                         Htot_dims::Vector{Int},
                                         fp_ranges::AbstractMatrix{UnitRange{Int}};
-                                        prefer_cache::Bool=false) where {K}
+                                        prefer_cache::Bool=false,
+                                        summary_cache::Union{Nothing,Vector{Dict{NTuple{6,Int},_QQEliminationSummary}}}=nothing) where {K}
     field = field_from_eltype(K)
     tmin = Tot.tmin
     tmax = Tot.tmax
@@ -2614,18 +3967,26 @@ function _ss_build_filt_img_exact_bases(Tot::CochainComplex{K},
             end
             if use_cache[tidx]
                 filt_img[ip, tidx] = get!(img_cache[tidx], sig) do
-                    if Htot_dims[tidx] == 0 || Ht.dimH == 0
-                        zeros(K, Htot_dims[tidx], 0)
+                    if summary_cache === nothing || !_use_exact_filtimg_summary_reuse()
+                        if Htot_dims[tidx] == 0 || Ht.dimH == 0
+                            zeros(K, Htot_dims[tidx], 0)
+                        else
+                            FieldLinAlg.colspace(field, _ss_inclusion_coords(Htot[tidx], Ht, Tot.dims[tidx], fp_ranges[ip, tidx]))
+                        end
                     else
-                        FieldLinAlg.colspace(field, _ss_inclusion_coords(Htot[tidx], Ht, Tot.dims[tidx], fp_ranges[ip, tidx]))
+                        _ss_filtimg_basis(field, Htot[tidx], Htot_dims[tidx], Ht, Tot.dims[tidx], fp_ranges[ip, tidx], summary_cache[tidx], sig)
                     end
                 end
             else
                 filt_img[ip, tidx] =
-                    if Htot_dims[tidx] == 0 || Ht.dimH == 0
-                        zeros(K, Htot_dims[tidx], 0)
+                    if summary_cache === nothing || !_use_exact_filtimg_summary_reuse()
+                        if Htot_dims[tidx] == 0 || Ht.dimH == 0
+                            zeros(K, Htot_dims[tidx], 0)
+                        else
+                            FieldLinAlg.colspace(field, _ss_inclusion_coords(Htot[tidx], Ht, Tot.dims[tidx], fp_ranges[ip, tidx]))
+                        end
                     else
-                        FieldLinAlg.colspace(field, _ss_inclusion_coords(Htot[tidx], Ht, Tot.dims[tidx], fp_ranges[ip, tidx]))
+                        _ss_filtimg_basis(field, Htot[tidx], Htot_dims[tidx], Ht, Tot.dims[tidx], fp_ranges[ip, tidx], summary_cache[tidx], sig)
                     end
             end
         end
@@ -2634,34 +3995,13 @@ function _ss_build_filt_img_exact_bases(Tot::CochainComplex{K},
     return filt_img
 end
 
-function _ss_build_filt_img_exact_bases_batched(Tot::CochainComplex{K},
-                                                Htot::Vector{CohomologyData{K}},
-                                                Htot_dims::Vector{Int},
-                                                fp_ranges::AbstractMatrix{UnitRange{Int}}) where {K}
-    field = field_from_eltype(K)
-    tlen = Tot.tmax - Tot.tmin + 1
-    plen = size(fp_ranges, 1)
-    filt_img = Array{Matrix{K},2}(undef, plen, tlen)
-    for ip in 1:plen
-        HFp = cohomology_data(_ss_filtered_complex(Tot, fp_ranges, ip))
-        for tidx in 1:tlen
-            filt_img[ip, tidx] =
-                if Htot_dims[tidx] == 0 || HFp[tidx].dimH == 0
-                    zeros(K, Htot_dims[tidx], 0)
-                else
-                    FieldLinAlg.colspace(field, _ss_inclusion_coords(Htot[tidx], HFp[tidx], Tot.dims[tidx], fp_ranges[ip, tidx]))
-                end
-        end
-    end
-    return filt_img
-end
-
 function _ss_build_filt_img_exact_bases_t(Tot::CochainComplex{K},
                                           Htot::Vector{CohomologyData{K}},
                                           Htot_dims::Vector{Int},
                                           fp_ranges::AbstractMatrix{UnitRange{Int}},
                                           tidx::Int;
-                                          prefer_cache::Bool=false) where {K}
+                                          prefer_cache::Bool=false,
+                                          summary_cache::Union{Nothing,Vector{Dict{NTuple{6,Int},_QQEliminationSummary}}}=nothing) where {K}
     field = field_from_eltype(K)
     plen = size(fp_ranges, 1)
     bases = Vector{Matrix{K}}(undef, plen)
@@ -2699,18 +4039,26 @@ function _ss_build_filt_img_exact_bases_t(Tot::CochainComplex{K},
         end
         if use_cache
             bases[ip] = get!(img_cache, sig) do
-                if Htot_dims[tidx] == 0 || Ht.dimH == 0
-                    zeros(K, Htot_dims[tidx], 0)
+                if summary_cache === nothing || !_use_exact_filtimg_summary_reuse()
+                    if Htot_dims[tidx] == 0 || Ht.dimH == 0
+                        zeros(K, Htot_dims[tidx], 0)
+                    else
+                        FieldLinAlg.colspace(field, _ss_inclusion_coords(Htot[tidx], Ht, Tot.dims[tidx], r_t))
+                    end
                 else
-                    FieldLinAlg.colspace(field, _ss_inclusion_coords(Htot[tidx], Ht, Tot.dims[tidx], r_t))
+                    _ss_filtimg_basis(field, Htot[tidx], Htot_dims[tidx], Ht, Tot.dims[tidx], r_t, summary_cache[tidx], sig)
                 end
             end
         else
             bases[ip] =
-                if Htot_dims[tidx] == 0 || Ht.dimH == 0
-                    zeros(K, Htot_dims[tidx], 0)
+                if summary_cache === nothing || !_use_exact_filtimg_summary_reuse()
+                    if Htot_dims[tidx] == 0 || Ht.dimH == 0
+                        zeros(K, Htot_dims[tidx], 0)
+                    else
+                        FieldLinAlg.colspace(field, _ss_inclusion_coords(Htot[tidx], Ht, Tot.dims[tidx], r_t))
+                    end
                 else
-                    FieldLinAlg.colspace(field, _ss_inclusion_coords(Htot[tidx], Ht, Tot.dims[tidx], r_t))
+                    _ss_filtimg_basis(field, Htot[tidx], Htot_dims[tidx], Ht, Tot.dims[tidx], r_t, summary_cache[tidx], sig)
                 end
         end
     end
@@ -2722,7 +4070,7 @@ end
 # Public constructor
 # -----------------------------------------------------------------------------
 
-function spectral_sequence(DC::DoubleComplex{K}; first::Symbol = :vertical) where {K}
+function _spectral_sequence_full(DC::DoubleComplex{K}; first::Symbol = :vertical) where {K}
     _ss_check_first(first)
 
     Tot, blocks = _total_complex_with_blocks(DC)
@@ -2745,14 +4093,17 @@ function spectral_sequence(DC::DoubleComplex{K}; first::Symbol = :vertical) wher
     tlen = tmax - tmin + 1
     plen = pmax - pmin + 1
     fp_ranges = _ss_fp_ranges(Tot, blocks, first, pmin, pmax)
-    use_lazy_exact_filtimg = field isa QQField && (first == :vertical || _use_exact_horizontal_filtimg(K, first, Htot_dims, fp_ranges))
+    # The vertical exact filtered-image route remains canonical for QQ; the
+    # horizontal exact lazy route was removed after staying off by default and
+    # failing to justify itself in benchmarks.
+    use_lazy_exact_filtimg = field isa QQField && first == :vertical
     prefer_exact_filtimg_cache = field isa QQField && first == :horizontal
-    use_batched_vertical_filtimg = _use_exact_vertical_filtimg_batched(K, first)
+    filt_img_summary_cache = _ss_filtimg_summary_cache(tlen)
 
     filt_img_dims, filt_img = if use_lazy_exact_filtimg
-        ((use_batched_vertical_filtimg ?
-          _ss_build_filt_img_exact_dims_batched(Tot, Htot, Htot_dims, fp_ranges) :
-          _ss_build_filt_img_exact_dims(Tot, Htot, Htot_dims, fp_ranges; prefer_cache=prefer_exact_filtimg_cache)),
+        (_ss_build_filt_img_exact_dims(Tot, Htot, Htot_dims, fp_ranges;
+                                       prefer_cache=prefer_exact_filtimg_cache,
+                                       summary_cache=filt_img_summary_cache),
          _LazyValue{Array{Matrix{K},2}}(nothing))
     else
         tmp = Array{Matrix{K},2}(undef, plen, tlen)
@@ -2829,18 +4180,114 @@ function spectral_sequence(DC::DoubleComplex{K}; first::Symbol = :vertical) wher
                                pmin, pmax, rmax_possible,
                                blocks, fp_ranges, filt_img_dims, filt_img,
                                [_LazyValue{Vector{Matrix{K}}}(nothing) for _ in 1:tlen],
+                               filt_img_summary_cache,
                                _LazyValue{Array{SubquotientData{K},2}}(nothing),
                                page_cache, diff_cache, split_cache)
+end
+
+function _page_differentials_dict(ss::SpectralSequence{K},
+                                  r::Union{Int,Symbol};
+                                  nonzero_only::Bool=true) where {K}
+    rout = if r isa Int
+        r
+    elseif r == :inf || r == :infty
+        ss.rmax_possible
+    else
+        error("_page_differentials_dict: unsupported page selector")
+    end
+    rout >= 1 || error("_page_differentials_dict: page must be >= 1")
+
+    dr = differential(ss, rout)
+    out = Dict{Tuple{Int,Int},SparseMatrixCSC{K,Int}}()
+    for a in ss.DC.amin:ss.DC.amax
+        for b in ss.DC.bmin:ss.DC.bmax
+            ai = a - ss.DC.amin + 1
+            bi = b - ss.DC.bmin + 1
+            mat = dr[ai, bi]
+            if nonzero_only
+                src_dim = term(ss, r, (a, b)).dimH
+                tgt = dr_target(ss, rout, (a, b))
+                tgt_dim = tgt === nothing ? 0 : term(ss, r, tgt).dimH
+                if src_dim == 0 && tgt_dim == 0 && nnz(mat) == 0
+                    continue
+                end
+            end
+            out[(a, b)] = mat
+        end
+    end
+    return out
+end
+
+"""
+    page_differentials(ss, r; nonzero_only=true)
+    page_differentials(ss; page=1, nonzero_only=true)
+
+Return the explicit `d_r` differentials on page `r`, keyed by source spectral
+bidegree `(p,q)`.
+
+This is heavier than `page_dims` or `term_dims`, because the differential
+matrices are materialized explicitly.
+"""
+function page_differentials(ss::SpectralSequence{K}, r::Union{Int,Symbol}; nonzero_only::Bool=true) where {K}
+    return _page_differentials_dict(ss, r; nonzero_only=nonzero_only)
+end
+
+function page_differentials(ss::SpectralSequence{K}; page::Union{Int,Symbol}=1, nonzero_only::Bool=true) where {K}
+    return page_differentials(ss, page; nonzero_only=nonzero_only)
+end
+
+"""
+    spectral_sequence(F; page=2, output=:dims, first=:vertical)
+
+Canonical public front door for spectral-sequence computations on a double complex.
+
+If your input is naturally described by filtration index and total cohomological
+degree, first build a bicomplex with `filtered_cochain_complex(...)`.
+
+Arguments
+- `page` selects which page to inspect (`1`, `2`, ..., `:inf`).
+- `output=:dims` returns page dimensions keyed by spectral bidegree `(p,q)`.
+- `output=:terms` returns page terms keyed by spectral bidegree `(p,q)`.
+- `output=:differentials` returns page differentials keyed by source spectral bidegree `(p,q)`.
+- `output=:full` returns the full `SpectralSequence` object.
+
+The full object remains the low-level access point for `page`, `term`,
+`differential`, filtration data, and convergence helpers.
+
+For first-pass exploration, prefer the cheap dimension-only helpers
+`page_dims`, `term_dims`, and `nonzero_terms`. Request `output=:terms` or
+`output=:differentials` only when explicit term or map objects are needed.
+"""
+function spectral_sequence(DC::DoubleComplex{K};
+                           page::Union{Int,Symbol}=2,
+                           output::Symbol=:dims,
+                           first::Symbol=:vertical) where {K}
+    _validate_chain_output("spectral_sequence", output, (:dims, :terms, :differentials, :full))
+    if !(page isa Int || page === :inf || page === :infty)
+        error("spectral_sequence: page must be an integer page or :inf")
+    end
+    if page isa Int && page < 1
+        error("spectral_sequence: page must be >= 1")
+    end
+
+    ss = _spectral_sequence_full(DC; first=first)
+    if output === :dims
+        return page_dims_dict(ss, page)
+    elseif output === :terms
+        return page_terms_dict(ss, page)
+    elseif output === :differentials
+        return _page_differentials_dict(ss, page)
+    end
+    return ss
 end
 
 function _ss_filt_img_bases!(ss::SpectralSequence{K}) where {K}
     bases = ss.filt_img.value
     bases !== nothing && return bases
     prefer_cache = field_from_eltype(K) isa QQField && ss.first == :horizontal
-    use_batched_vertical_filtimg = _use_exact_vertical_filtimg_batched(K, ss.first)
-    bases = use_batched_vertical_filtimg ?
-        _ss_build_filt_img_exact_bases_batched(ss.Tot, ss.Htot, ss.Htot_dims, ss.fp_ranges) :
-        _ss_build_filt_img_exact_bases(ss.Tot, ss.Htot, ss.Htot_dims, ss.fp_ranges; prefer_cache=prefer_cache)
+    bases = _ss_build_filt_img_exact_bases(ss.Tot, ss.Htot, ss.Htot_dims, ss.fp_ranges;
+                                           prefer_cache=prefer_cache,
+                                           summary_cache=ss.filt_img_summary_cache)
     ss.filt_img.value = bases
     for tidx in 1:size(bases, 2)
         ss.filt_img_cols[tidx].value = collect(@view bases[:, tidx])
@@ -2861,7 +4308,9 @@ function _ss_filt_img_basis_col!(ss::SpectralSequence{K}, tidx::Int) where {K}
     col = ss.filt_img_cols[tidx].value
     col !== nothing && return col
     prefer_cache = field_from_eltype(K) isa QQField && ss.first == :horizontal
-    col = _ss_build_filt_img_exact_bases_t(ss.Tot, ss.Htot, ss.Htot_dims, ss.fp_ranges, tidx; prefer_cache=prefer_cache)
+    col = _ss_build_filt_img_exact_bases_t(ss.Tot, ss.Htot, ss.Htot_dims, ss.fp_ranges, tidx;
+                                           prefer_cache=prefer_cache,
+                                           summary_cache=ss.filt_img_summary_cache)
     ss.filt_img_cols[tidx].value = col
     return col
 end
@@ -2927,6 +4376,16 @@ end
 # Public API: pages, terms, differentials
 # -----------------------------------------------------------------------------
 
+@inline _page_label(r::Int) = string(r)
+@inline _page_label(r::Symbol) = (r == :inf || r == :infty) ? "\\infty" : string(r)
+
+function _ss_validate_bidegree(ss::SpectralSequence, r::Union{Int,Symbol}, a::Int, b::Int; fn::AbstractString)
+    if a < ss.DC.amin || a > ss.DC.amax || b < ss.DC.bmin || b > ss.DC.bmax
+        error("$(fn): requested term E_$(_page_label(r))^($(a),$(b)) is outside the supported bidegree window a in [$(ss.DC.amin), $(ss.DC.amax)], b in [$(ss.DC.bmin), $(ss.DC.bmax)]")
+    end
+    return nothing
+end
+
 function page(ss::SpectralSequence{K}, r::Int) where {K}
     if r < 1
         error("page(ss,r): r must be >= 1")
@@ -2950,8 +4409,20 @@ function page(ss::SpectralSequence{K}, r::Symbol) where {K}
     error("page(ss,r): unsupported symbol")
 end
 
+"""
+    page(ss; page=2)
+
+Named-keyword access to a spectral-sequence page.
+
+This is equivalent to `page(ss, page)`.
+"""
+function page(ss::SpectralSequence{K}; page::Union{Int,Symbol}=2) where {K}
+    return ChainComplexes.page(ss, page)
+end
+
 function term(ss::SpectralSequence{K}, r::Int, ab::Tuple{Int,Int}) where {K}
     a, b = ab
+    _ss_validate_bidegree(ss, r, a, b; fn="term")
     if r >= ss.rmax_possible
         return term(ss, :inf, ab)
     end
@@ -2966,8 +4437,24 @@ end
 
 function term(ss::SpectralSequence{K}, r::Symbol, ab::Tuple{Int,Int}) where {K}
     a, b = ab
+    _ss_validate_bidegree(ss, r, a, b; fn="term")
     spaces = _ss_einf_spaces!(ss)
     return spaces[a - ss.DC.amin + 1, b - ss.DC.bmin + 1]
+end
+
+"""
+    term(ss; page=2, p, q)
+
+Named-keyword access to a single spectral-sequence term.
+
+This is equivalent to `term(ss, page, (p, q))`, but is easier to read in
+mathematical notation.
+"""
+function term(ss::SpectralSequence{K};
+              page::Union{Int,Symbol}=2,
+              p::Int,
+              q::Int) where {K}
+    return term(ss, page, (p, q))
 end
 
 function _ss_compute_page_and_differential(DC::DoubleComplex{K},
@@ -3011,8 +4498,30 @@ end
 
 function differential(ss::SpectralSequence{K}, r::Int, ab::Tuple{Int,Int}) where {K}
     a, b = ab
+    _ss_validate_bidegree(ss, r, a, b; fn="differential")
     dr = differential(ss, r)
     return dr[a - ss.DC.amin + 1, b - ss.DC.bmin + 1]
+end
+
+function differential(ss::SpectralSequence{K}, r::Symbol, ab::Tuple{Int,Int}) where {K}
+    a, b = ab
+    _ss_validate_bidegree(ss, r, a, b; fn="differential")
+    dr = differential(ss, r)
+    return dr[a - ss.DC.amin + 1, b - ss.DC.bmin + 1]
+end
+
+"""
+    differential(ss; page=1, p, q)
+
+Named-keyword access to a single spectral-sequence differential component.
+
+This is equivalent to `differential(ss, page, (p, q))`.
+"""
+function differential(ss::SpectralSequence{K};
+                      page::Union{Int,Symbol}=1,
+                      p::Int,
+                      q::Int) where {K}
+    return differential(ss, page, (p, q))
 end
 
 # -----------------------------------------------------------------------------
@@ -3027,16 +4536,27 @@ Alias for `page(ss, r)`. This matches the common notation `E_r`.
 E_r(ss::SpectralSequence{K}, r::Union{Int,Symbol}) where {K} = page(ss, r)
 
 """
+    E_r(ss; page=2)
+
+Named-keyword alias for `page(ss; page=page)`.
+"""
+E_r(ss::SpectralSequence{K}; page::Union{Int,Symbol}=2) where {K} = ChainComplexes.E_r(ss, page)
+
+"""
     page_terms(ss, r) -> Array{SubquotientData{K},2}
 
-Return explicit `SubquotientData` models for all bidegrees on page `r`.
+Return explicit `SubquotientData` models for all spectral bidegrees `(p,q)` on
+page `r`.
 
 - For `r::Int < ss.rmax_possible`, this returns the cached/constructed page data.
 - For `r >= ss.rmax_possible` and for `r == :inf/:infty`, this returns the `E_infty`
   terms (the graded pieces of the induced filtration on total cohomology).
 
-This is useful when you want to iterate over all (a,b) and not just access
-dimensions via `page(ss,r)`.
+This is useful when you want to iterate over all `(p,q)` and not just access
+dimensions via `page_dims(ss, r)` or `term_dims(ss, r)`.
+
+This is a heavier operation than `page_dims` because it materializes explicit
+quotient objects.
 """
 function page_terms(ss::SpectralSequence{K}, r::Int) where {K}
     if r < 1
@@ -3059,6 +4579,15 @@ function page_terms(ss::SpectralSequence{K}, r::Symbol) where {K}
         return _ss_einf_spaces!(ss)
     end
     error("page_terms(ss,r): unsupported symbol")
+end
+
+"""
+    page_terms(ss; page=2)
+
+Named-keyword access to the explicit term models on page `page`.
+"""
+function page_terms(ss::SpectralSequence{K}; page::Union{Int,Symbol}=2) where {K}
+    return ChainComplexes.page_terms(ss, page)
 end
 
 # Internal helper used by page_terms_dict/page_dims_dict and higher-level wrappers.
@@ -3106,6 +4635,8 @@ end
 
 dr_target(ss::SpectralSequence{K}, r::Int, a::Int, b::Int) where {K} = dr_target(ss, r, (a, b))
 
+dr_target(ss::SpectralSequence{K}; page::Int, p::Int, q::Int) where {K} = dr_target(ss, page, (p, q))
+
 """
     dr_source(ss, r, (a,b)) -> Union{Tuple{Int,Int},Nothing}
 
@@ -3131,6 +4662,8 @@ function dr_source(ss::SpectralSequence{K}, r::Int, ab::Tuple{Int,Int}) where {K
 end
 
 dr_source(ss::SpectralSequence{K}, r::Int, a::Int, b::Int) where {K} = dr_source(ss, r, (a, b))
+
+dr_source(ss::SpectralSequence{K}; page::Int, p::Int, q::Int) where {K} = dr_source(ss, page, (p, q))
 
 # Allow `ss[r]` and `ss[r,(a,b)]` for quick interactive exploration.
 Base.getindex(ss::SpectralSequence{K}, r::Union{Int,Symbol}) where {K} = page(ss, r)
@@ -3287,6 +4820,24 @@ end
 # Filtration and edge maps
 # -----------------------------------------------------------------------------
 
+"""
+    filtration_dims(ss, t) -> Dict{Int,Int}
+    filtration_dims(ss, p, t) -> Int
+    filtration_dims(ss; degree=t) -> Dict{Int,Int}
+    filtration_dims(ss; filtration=p, degree=t) -> Int
+
+Return dimensions of the induced filtration on total cohomology.
+
+Public notation:
+- `t` is the cohomology degree,
+- `p` is the filtration index,
+- `F^p H^t` denotes the `p`th filtration step on `H^t`.
+
+Use the keyword forms in public-facing code when clarity matters:
+- `filtration_dims(ss; degree=t)` returns the whole dictionary `p => dim F^p H^t`,
+- `filtration_dims(ss; filtration=p, degree=t)` returns the single dimension
+  `dim F^p H^t`.
+"""
 function filtration_dims(ss::SpectralSequence{K}, t::Int) where {K}
     if t < ss.Tot.tmin || t > ss.Tot.tmax
         return Dict{Int,Int}()
@@ -3314,6 +4865,24 @@ function filtration_dims(ss::SpectralSequence{K}, p::Int, t::Int) where {K}
     end
 end
 
+function filtration_dims(ss::SpectralSequence{K}; filtration::Union{Nothing,Int}=nothing, degree::Int) where {K}
+    return filtration === nothing ? filtration_dims(ss, degree) : filtration_dims(ss, filtration, degree)
+end
+
+"""
+    filtration_basis(ss, p, t) -> Matrix
+    filtration_basis(ss; filtration=p, degree=t) -> Matrix
+
+Return a basis for the filtration step `F^p H^t` inside the chosen coordinate
+space for `H^t`.
+
+Public notation:
+- `t` is the cohomology degree,
+- `p` is the filtration index.
+
+Prefer the keyword form in public-facing code:
+`filtration_basis(ss; filtration=p, degree=t)`.
+"""
 function filtration_basis(ss::SpectralSequence{K}, p::Int, t::Int) where {K}
     if t < ss.Tot.tmin || t > ss.Tot.tmax
         return zeros(K, 0, 0)
@@ -3334,6 +4903,39 @@ function filtration_basis(ss::SpectralSequence{K}, p::Int, t::Int) where {K}
     end
 end
 
+function filtration_basis(ss::SpectralSequence{K}; filtration::Int, degree::Int) where {K}
+    return filtration_basis(ss, filtration, degree)
+end
+
+"""
+    image_basis(ss, p, q)
+    image_basis(ss; filtration=p, degree=t)
+    image_basis(ss; p, q)
+
+Return a basis for the filtration image corresponding to the `E_inf^{p,q}` piece,
+or explicitly for the filtration step `F^p H^t`.
+"""
+function image_basis(ss::SpectralSequence{K}, p::Int, q::Int) where {K}
+    filtration = _ss_p(ss.first, p, q)
+    return filtration_basis(ss, filtration, p + q)
+end
+
+function image_basis(ss::SpectralSequence{K};
+                     filtration::Union{Nothing,Int}=nothing,
+                     degree::Union{Nothing,Int}=nothing,
+                     p::Union{Nothing,Int}=nothing,
+                     q::Union{Nothing,Int}=nothing) where {K}
+    if filtration !== nothing || degree !== nothing
+        filtration === nothing && error("image_basis: expected both filtration and degree")
+        degree === nothing && error("image_basis: expected both filtration and degree")
+        (p === nothing && q === nothing) || error("image_basis: use either (filtration, degree) or (p, q), not both")
+        return filtration_basis(ss, filtration, degree)
+    end
+    p === nothing && error("image_basis: expected both p and q")
+    q === nothing && error("image_basis: expected both p and q")
+    return image_basis(ss, p, q)
+end
+
 # -----------------------------------------------------------------------------
 # E_infty edge maps and explicit splittings (vector-space case)
 # -----------------------------------------------------------------------------
@@ -3348,6 +4950,7 @@ end
 
 """
     filtration_subquotient(ss, p, t) -> SubquotientData{K}
+    filtration_subquotient(ss; filtration=p, degree=t) -> SubquotientData{K}
 
 Return the graded piece `gr^p H^t = F^p H^t / F^{p+1} H^t` as an explicit subquotient.
 
@@ -3359,6 +4962,9 @@ Notes:
 - When `t` is out of range, an empty (0-dim) object is returned.
 - When the corresponding bidegree lies outside the double complex window, the
   graded piece is zero and we return a 0-dimensional quotient in ambient_dim = dim H^t.
+
+Prefer the keyword form in public-facing code:
+`filtration_subquotient(ss; filtration=p, degree=t)`.
 """
 function filtration_subquotient(ss::SpectralSequence{K}, p::Int, t::Int) where {K}
     if t < ss.Tot.tmin || t > ss.Tot.tmax
@@ -3381,6 +4987,10 @@ function filtration_subquotient(ss::SpectralSequence{K}, p::Int, t::Int) where {
     end
 
     return term(ss, :inf, (a, b))
+end
+
+function filtration_subquotient(ss::SpectralSequence{K}; filtration::Int, degree::Int) where {K}
+    return filtration_subquotient(ss, filtration, degree)
 end
 
 # Small helper for identity matrices over K.
@@ -3457,6 +5067,7 @@ end
 
 """
     split_total_cohomology(ss, t) -> NamedTuple
+    split_total_cohomology(ss; degree=t) -> NamedTuple
 
 Return a noncanonical splitting of `H^t(Tot)` into the direct sum of its `E_infty`
 pieces along the diagonal `a+b=t`.
@@ -3480,6 +5091,9 @@ function split_total_cohomology(ss::SpectralSequence{K}, t::Int) where {K}
     return (B=sd.B, Binv=sd.Binv, ranges=sd.ranges)
 end
 
+split_total_cohomology(ss::SpectralSequence{K}; degree::Int) where {K} =
+    split_total_cohomology(ss, degree)
+
 # ---------------------------------------------------------------------------
 # Spectral sequence workflow helpers (term-level pages, filtrations, extensions)
 # ---------------------------------------------------------------------------
@@ -3499,6 +5113,13 @@ function E_r_terms(ss::SpectralSequence{K}, r::Union{Int,Symbol}) where {K}
 end
 
 """
+    E_r_terms(ss; page=2)
+
+Named-keyword access to explicit page terms.
+"""
+E_r_terms(ss::SpectralSequence{K}; page::Union{Int,Symbol}=2) where {K} = ChainComplexes.E_r_terms(ss, page)
+
+"""
     E2_terms(ss) -> SpectralTermsPage
 
 Convenience wrapper for the E2 page as subquotient objects.
@@ -3509,12 +5130,13 @@ E2_terms(ss::SpectralSequence{K}) where {K} = E_r_terms(ss, 2)
     page_terms_dict(ss, r; nonzero_only=true)
         -> Dict{Tuple{Int,Int},SubquotientData{K}}
 
-Return a dictionary keyed by bidegree `(a,b)` whose values are the term models
-on the `E_r` page.
+Return a dictionary keyed by spectral bidegree `(p,q)` whose values are the
+term models on the `E_r` page.
 
 Speed note:
 - If `nonzero_only=true` (default), iteration is restricted to `ss.support`.
   This avoids scanning the full rectangular bounding box.
+- If you only need dimensions, use `page_dims_dict` or `term_dims` instead.
 """
 function page_terms_dict(ss::SpectralSequence{K}, r::Union{Int,Symbol}; nonzero_only::Bool=true) where {K}
     pd = _ss_page_data(ss, r)
@@ -3545,12 +5167,23 @@ function page_terms_dict(ss::SpectralSequence{K}, r::Union{Int,Symbol}; nonzero_
 end
 
 """
+    page_terms_dict(ss; page=2, nonzero_only=true)
+
+Named-keyword dictionary view of explicit page terms.
+"""
+function page_terms_dict(ss::SpectralSequence{K};
+                         page::Union{Int,Symbol}=2,
+                         nonzero_only::Bool=true) where {K}
+    return ChainComplexes.page_terms_dict(ss, page; nonzero_only=nonzero_only)
+end
+
+"""
     page_dims_dict(ss, r; nonzero_only=true) -> Dict{Tuple{Int,Int},Int}
 
-Return a dictionary keyed by bidegree `(a,b)` whose values are the dimensions
-on the `E_r` page.
+Return a dictionary keyed by spectral bidegree `(p,q)` whose values are the
+dimensions on the `E_r` page.
 
-This complements `page_terms_dict` and mirrors `page(ss,r)` but in a map form.
+This is the cheap dimension-only companion to `page_terms_dict`.
 """
 function page_dims_dict(ss::SpectralSequence{K}, r::Union{Int,Symbol}; nonzero_only::Bool=true) where {K}
     dims = if r isa Int
@@ -3572,7 +5205,10 @@ function page_dims_dict(ss::SpectralSequence{K}, r::Union{Int,Symbol}; nonzero_o
         else
             for a in ss.DC.amin:ss.DC.amax
                 for b in ss.DC.bmin:ss.DC.bmax
-                    out[(a,b)] = dims[a - ss.DC.amin + 1, b - ss.DC.bmin + 1]
+                    d = dims[a - ss.DC.amin + 1, b - ss.DC.bmin + 1]
+                    if d != 0
+                        out[(a,b)] = d
+                    end
                 end
             end
         end
@@ -3587,6 +5223,17 @@ function page_dims_dict(ss::SpectralSequence{K}, r::Union{Int,Symbol}; nonzero_o
 end
 
 """
+    page_dims_dict(ss; page=2, nonzero_only=true)
+
+Named-keyword dictionary view of page dimensions.
+"""
+function page_dims_dict(ss::SpectralSequence{K};
+                        page::Union{Int,Symbol}=2,
+                        nonzero_only::Bool=true) where {K}
+    return ChainComplexes.page_dims_dict(ss, page; nonzero_only=nonzero_only)
+end
+
+"""
     page_dict(ss, r; nonzero_only=true) -> Dict{Tuple{Int,Int},Int}
 
 Alias for `page_dims_dict`; returns E_r dimensions keyed by bidegree `(a,b)`.
@@ -3595,8 +5242,90 @@ page_dict(ss::SpectralSequence{K}, r::Union{Int,Symbol}; nonzero_only::Bool=true
     page_dims_dict(ss, r; nonzero_only=nonzero_only)
 
 """
+    page_dict(ss; page=2, nonzero_only=true)
+
+Named-keyword alias for `page_dims_dict(ss; page=page, ...)`.
+"""
+page_dict(ss::SpectralSequence{K}; page::Union{Int,Symbol}=2, nonzero_only::Bool=true) where {K} =
+    ChainComplexes.page_dict(ss, page; nonzero_only=nonzero_only)
+
+"""
+    page_dims(ss, r)
+    page_dims(ss; page=2)
+
+Return the raw dimension matrix of page `E_r`.
+"""
+page_dims(ss::SpectralSequence{K}, r::Union{Int,Symbol}) where {K} = page(ss, r).dims
+page_dims(ss::SpectralSequence{K}; page::Union{Int,Symbol}=2) where {K} = page_dims(ss, page)
+
+"""
+    term_dims(ss, r; nonzero_only=true)
+    term_dims(ss; page=2, nonzero_only=true)
+
+Return page dimensions keyed by bidegree.
+"""
+term_dims(ss::SpectralSequence{K}, r::Union{Int,Symbol}; nonzero_only::Bool=true) where {K} =
+    page_dims_dict(ss, r; nonzero_only=nonzero_only)
+term_dims(ss::SpectralSequence{K}; page::Union{Int,Symbol}=2, nonzero_only::Bool=true) where {K} =
+    term_dims(ss, page; nonzero_only=nonzero_only)
+
+"""
+    nonzero_terms(ss, r)
+    nonzero_terms(ss; page=2)
+
+Return the nonzero bidegrees on page `E_r`, sorted lexicographically.
+"""
+function nonzero_terms(ss::SpectralSequence{K}, r::Union{Int,Symbol}) where {K}
+    ks = collect(keys(page_dims_dict(ss, r; nonzero_only=true)))
+    sort!(ks)
+    return ks
+end
+nonzero_terms(ss::SpectralSequence{K}; page::Union{Int,Symbol}=2) where {K} = nonzero_terms(ss, page)
+
+"""
+    convergence_page(ss) -> Int
+
+Return the first page on which the dimension tables stabilize.
+"""
+convergence_page(ss::SpectralSequence{K}) where {K} = collapse_page(ss)
+
+describe(ss::SpectralSequence{K}) where {K} = (
+    kind=:spectral_sequence,
+    field=_field_label(K),
+    first=ss.first,
+    p_range=(ss.pmin, ss.pmax),
+    total_degree_range=(ss.Tot.tmin, ss.Tot.tmax),
+    convergence_page=convergence_page(ss),
+    cached_pages=sort!(collect(keys(ss.page_cache))),
+    cached_differentials=sort!(collect(keys(ss.diff_cache))),
+    total_cohomology_dims=ss.Htot_dims,
+)
+
+"""
+    spectral_sequence_summary(ss) -> NamedTuple
+
+Owner-local summary alias for the cheap inspection surface of a spectral
+sequence.
+
+For first-pass exploration, prefer
+
+```julia
+ss_dims = spectral_sequence(DC; output=:dims)
+ss = spectral_sequence(DC; output=:full)
+spectral_sequence_summary(ss)
+page_dims(ss, 2)
+term_dims(ss; page=2)
+convergence_page(ss)
+```
+
+before asking for explicit page terms, filtration data, or extension problems.
+"""
+@inline spectral_sequence_summary(ss::SpectralSequence) = describe(ss)
+
+"""
     diagonal_criterion(ss; r=:inf) -> Bool
     diagonal_criterion(ss, t; r=:inf) -> Bool
+    diagonal_criterion(ss; degree=t, page=:inf) -> Bool
 
 Dimension-only diagonal check for convergence.
 
@@ -3625,13 +5354,22 @@ function diagonal_criterion(ss::SpectralSequence{K}, t::Int; r::Union{Int,Symbol
     return s == hdim
 end
 
-function diagonal_criterion(ss::SpectralSequence{K}; r::Union{Int,Symbol}=:inf) where {K}
-    for t in ss.Tot.tmin:ss.Tot.tmax
-        if !diagonal_criterion(ss, t; r=r)
-            return false
+function diagonal_criterion(ss::SpectralSequence{K};
+                            degree::Union{Nothing,Int}=nothing,
+                            page::Union{Nothing,Int,Symbol}=nothing,
+                            r::Union{Nothing,Int,Symbol}=nothing) where {K}
+    page !== nothing && r !== nothing &&
+        error("diagonal_criterion: use either page=... or r=..., not both")
+    target = page === nothing ? (r === nothing ? :inf : r) : page
+    if degree === nothing
+        for t in ss.Tot.tmin:ss.Tot.tmax
+            if !diagonal_criterion(ss, t; r=target)
+                return false
+            end
         end
+        return true
     end
-    return true
+    return diagonal_criterion(ss, degree; r=target)
 end
 
 """
@@ -3658,6 +5396,7 @@ end
 
 """
     filtration_data(ss, t) -> FiltrationData
+    filtration_data(ss; degree=t) -> FiltrationData
 
 Build explicit filtration data for the total cohomology group H^t(Tot):
 - dimensions of all filtration steps
@@ -3683,12 +5422,8 @@ function filtration_data(ss::SpectralSequence{K}, t::Int) where {K}
     return FiltrationData(t, ss.pmin, ss.pmax, dims, bases, graded)
 end
 
-"""
-    filtration_data(ss) -> Dict{Int,FiltrationData}
-
-Compute filtration data for every total degree `t` in the range of `ss`.
-"""
-function filtration_data(ss::SpectralSequence{K}) where {K}
+function filtration_data(ss::SpectralSequence{K}; degree::Union{Nothing,Int}=nothing) where {K}
+    degree !== nothing && return filtration_data(ss, degree)
     out = Dict{Int,FiltrationData}()
     for t in ss.Tot.tmin:ss.Tot.tmax
         out[t] = filtration_data(ss, t)
@@ -3697,7 +5432,61 @@ function filtration_data(ss::SpectralSequence{K}) where {K}
 end
 
 """
+    filtration_steps(fd::FiltrationData) -> UnitRange{Int}
+
+Return the packaged filtration indices `p` for which `F^p H^t` data is stored.
+"""
+@inline filtration_steps(fd::FiltrationData) = fd.pmin:fd.pmax
+
+"""
+    filtration_dimensions(fd) -> Dict{Int,Int}
+
+Return the stored dimensions of the filtration steps `F^p H^t`.
+"""
+@inline filtration_dimensions(fd::FiltrationData) = Dict(fd.dims)
+
+"""
+    filtration_dimension(fd, p) -> Int
+
+Return `dim(F^p H^t)` for a packaged filtration object.
+
+Indices outside the stored filtration range return `0`.
+"""
+@inline filtration_dimension(fd::FiltrationData, p::Int) = get(fd.dims, p, 0)
+
+"""
+    filtration_basis(fd, p) -> Matrix
+
+Return the chosen basis matrix for the filtration step `F^p H^t`.
+"""
+function filtration_basis(fd::FiltrationData{K}, p::Int) where {K}
+    haskey(fd.bases, p) || throw(DomainError(p, "p must lie in filtration_steps(fd) = $(fd.pmin):$(fd.pmax)."))
+    return fd.bases[p]
+end
+
+"""
+    graded_piece(fd, p) -> SubquotientData
+
+Return the packaged graded piece `gr^p H^t = F^p / F^(p+1)`.
+"""
+function graded_piece(fd::FiltrationData{K}, p::Int) where {K}
+    haskey(fd.graded, p) || throw(DomainError(p, "p must index a stored graded piece in $(collect(keys(fd.graded)))."))
+    return fd.graded[p]
+end
+
+"""
+    filtration_summary(fd) -> NamedTuple
+
+Owner-local summary alias for `describe(fd)`.
+
+This is the cheap-first inspection entrypoint for packaged filtration data:
+start here before asking for explicit bases or graded-piece models.
+"""
+@inline filtration_summary(fd::FiltrationData) = describe(fd)
+
+"""
     collapse_data(ss; r=collapse_page(ss)) -> NamedTuple
+    collapse_data(ss; page=collapse_page(ss)) -> NamedTuple
 
 Machine-friendly convergence summary.
 
@@ -3706,10 +5495,14 @@ Returns a named tuple with:
 - `diagonal_ok` : diagonal criterion check on that page
 - `filtrations` : explicit filtrations for all total degrees (as `FiltrationData`)
 """
-function collapse_data(ss::SpectralSequence{K}; r::Int=collapse_page(ss)) where {K}
+function collapse_data(ss::SpectralSequence{K};
+                       page::Union{Nothing,Int}=nothing,
+                       r::Union{Nothing,Int}=nothing) where {K}
+    page !== nothing && r !== nothing && error("collapse_data: use either page=... or r=..., not both")
+    target = page === nothing ? (r === nothing ? collapse_page(ss) : r) : page
     return (
-        collapse_r = r,
-        diagonal_ok = diagonal_criterion(ss; r=r),
+        collapse_r = target,
+        diagonal_ok = diagonal_criterion(ss; page=target),
         filtrations = filtration_data(ss),
     )
 end
@@ -3740,6 +5533,7 @@ end
 
 """
     extension_problem(ss, t) -> ExtensionProblem{K}
+    extension_problem(ss; degree=t) -> ExtensionProblem{K}
 
 Return the E_infty diagonal pieces with total degree t and an explicit splitting
 of H^t(Tot) as a direct sum of those pieces.
@@ -3783,12 +5577,8 @@ function extension_problem(ss::SpectralSequence{K}, t::Int) where {K}
     return ExtensionProblem(t, pieces, spl.B, spl.Binv, spl.ranges)
 end
 
-"""
-    extension_problem(ss) -> Dict{Int,ExtensionProblem{K}}
-
-Compute extension problem packages for all total degrees t.
-"""
-function extension_problem(ss::SpectralSequence{K}) where {K}
+function extension_problem(ss::SpectralSequence{K}; degree::Union{Nothing,Int}=nothing) where {K}
+    degree !== nothing && return extension_problem(ss, degree)
     out = Dict{Int,ExtensionProblem{K}}()
     for t in ss.Tot.tmin:ss.Tot.tmax
         out[t] = extension_problem(ss, t)
@@ -3796,9 +5586,54 @@ function extension_problem(ss::SpectralSequence{K}) where {K}
     return out
 end
 
+"""
+    extension_pieces(ep) -> Vector
+
+Return the ordered diagonal `E_infty` pieces participating in an extension
+problem package.
+
+Each entry records the bidegree `(a,b)`, the filtration index `p`, and the
+explicit `SubquotientData` model of that graded piece.
+"""
+@inline extension_pieces(ep::ExtensionProblem) = copy(ep.pieces)
+
+"""
+    splitting_matrix(ep) -> Matrix
+
+Return the explicit splitting matrix whose columns embed the diagonal graded
+pieces into `H^t(Tot)`.
+
+This is the heavy linear-algebra object in an `ExtensionProblem`. Start with
+`extension_summary(ep)` or `extension_pieces(ep)` unless you actually need the
+ambient-coordinate embedding.
+"""
+@inline splitting_matrix(ep::ExtensionProblem) = ep.B
+
+"""
+    piece_range(ep, (a,b)) -> Union{UnitRange{Int},Nothing}
+
+Return the column range of the diagonal piece `(a,b)` inside the splitting
+matrix, or `nothing` if that piece is absent.
+
+This is useful when you want to locate one graded piece inside the columns of
+[`splitting_matrix(ep)`](@ref) without manually reconstructing offsets.
+"""
+@inline piece_range(ep::ExtensionProblem, ab::Tuple{Int,Int}) = get(ep.ranges, ab, nothing)
+
+"""
+    extension_summary(ep) -> NamedTuple
+
+Owner-local summary alias for `describe(ep)`.
+
+Use this to inspect the diagonal-piece layout and splitting size of an
+extension problem before requesting the full splitting matrix.
+"""
+@inline extension_summary(ep::ExtensionProblem) = describe(ep)
+
 
 """
     edge_inclusion(ss, (a,b)) -> Matrix{K}
+    edge_inclusion(ss; p, q) -> Matrix{K}
 
 Return the inclusion map
 
@@ -3811,8 +5646,11 @@ vectors in `H^{a+b}(Tot)` representing a basis of the graded piece.
 """
 edge_inclusion(ss::SpectralSequence{K}, ab::Tuple{Int,Int}) where {K} = term(ss, :inf, ab).Hrep
 
+edge_inclusion(ss::SpectralSequence{K}; p::Int, q::Int) where {K} = edge_inclusion(ss, (p, q))
+
 """
     edge_projection(ss, (a,b)) -> Matrix{K}
+    edge_projection(ss; p, q) -> Matrix{K}
 
 Return a (noncanonical) projection
 
@@ -3841,6 +5679,8 @@ function edge_projection(ss::SpectralSequence{K}, ab::Tuple{Int,Int}) where {K}
     rng = sd.ranges[ab]
     return sd.Binv[rng, :]
 end
+
+edge_projection(ss::SpectralSequence{K}; p::Int, q::Int) where {K} = edge_projection(ss, (p, q))
 
 
 function collapse_page(ss::SpectralSequence{K}) where {K}
@@ -3917,14 +5757,192 @@ function convergence_report(ss::SpectralSequence{K}; verbose::Bool=false) where 
     return String(take!(io))
 end
 
+describe(C::CochainComplex{K,A}) where {K,A} = (
+    kind = :cochain_complex,
+    field = _field_label(K),
+    degree_range = (C.tmin, C.tmax),
+    dimensions = copy(C.dims),
+    stored_differentials = length(C.d),
+    has_annotations = C.annotations !== nothing,
+)
+
+describe(f::CochainMap{K}) where {K} = (
+    kind = :cochain_map,
+    field = _field_label(K),
+    degree_range = (f.tmin, f.tmax),
+    source_degree_range = (f.C.tmin, f.C.tmax),
+    target_degree_range = (f.D.tmin, f.D.tmax),
+    stored_components = length(f.maps),
+)
+
+describe(tri::DistinguishedTriangle{K}) where {K} = (
+    kind = :distinguished_triangle,
+    field = _field_label(K),
+    source_degree_range = (tri.C.tmin, tri.C.tmax),
+    target_degree_range = (tri.D.tmin, tri.D.tmax),
+    cone_degree_range = (tri.cone.tmin, tri.cone.tmax),
+    shift_degree_range = (tri.Cshift.tmin, tri.Cshift.tmax),
+)
+
+describe(DC::DoubleComplex{K}) where {K} = (
+    kind = :bicomplex,
+    field = _field_label(K),
+    a_range = (DC.amin, DC.amax),
+    b_range = (DC.bmin, DC.bmax),
+    total_degree_range = (DC.amin + DC.bmin, DC.amax + DC.bmax),
+    shape = size(DC.dims),
+    total_dimension = sum(DC.dims),
+    nonzero_blocks = count(x -> x != 0, DC.dims),
+)
+
+describe(fd::FiltrationData{K}) where {K} = (
+    kind = :filtration_data,
+    field = _field_label(K),
+    degree = fd.t,
+    filtration_range = (fd.pmin, fd.pmax),
+    step_dimensions = filtration_dimensions(fd),
+    graded_steps = sort!(collect(keys(fd.graded))),
+)
+
+describe(ep::ExtensionProblem{K}) where {K} = (
+    kind = :extension_problem,
+    field = _field_label(K),
+    degree = ep.t,
+    npieces = length(ep.pieces),
+    piece_bidegrees = [(piece.a, piece.b) for piece in ep.pieces],
+    splitting_size = size(ep.B),
+)
+
 # -----------------------------------------------------------------------------
 # Pretty-printing (ASCII)
 # -----------------------------------------------------------------------------
+
+@inline _field_label(::Type{K}) where {K} = string(K)
+
+function Base.show(io::IO, C::CochainComplex{K,A}) where {K,A}
+    print(io, "CochainComplex(field=", _field_label(K), ", degrees=", C.tmin, ":", C.tmax, ")")
+end
+
+function Base.show(io::IO, ::MIME"text/plain", C::CochainComplex{K,A}) where {K,A}
+    println(io, "CochainComplex")
+    println(io, "  field = ", _field_label(K))
+    println(io, "  degree range = [", C.tmin, ", ", C.tmax, "]")
+    println(io, "  dimensions = ", C.dims)
+    println(io, "  stored differentials = ", length(C.d))
+    println(io, "  annotations = ", C.annotations === nothing ? "none" : "present")
+end
+
+function Base.show(io::IO, f::CochainMap{K}) where {K}
+    print(io, "CochainMap(field=", _field_label(K), ", degrees=", f.tmin, ":", f.tmax, ")")
+end
+
+function Base.show(io::IO, ::MIME"text/plain", f::CochainMap{K}) where {K}
+    println(io, "CochainMap")
+    println(io, "  field = ", _field_label(K))
+    println(io, "  degree range = [", f.tmin, ", ", f.tmax, "]")
+    println(io, "  source degrees = [", f.C.tmin, ", ", f.C.tmax, "]")
+    println(io, "  target degrees = [", f.D.tmin, ", ", f.D.tmax, "]")
+    println(io, "  stored components = ", length(f.maps))
+end
+
+function Base.show(io::IO, tri::DistinguishedTriangle{K}) where {K}
+    print(io, "DistinguishedTriangle(field=", _field_label(K), ", source=", tri.C.tmin, ":", tri.C.tmax, ")")
+end
+
+function Base.show(io::IO, ::MIME"text/plain", tri::DistinguishedTriangle{K}) where {K}
+    println(io, "DistinguishedTriangle")
+    println(io, "  field = ", _field_label(K))
+    println(io, "  source degrees = [", tri.C.tmin, ", ", tri.C.tmax, "]")
+    println(io, "  target degrees = [", tri.D.tmin, ", ", tri.D.tmax, "]")
+    println(io, "  cone degrees = [", tri.cone.tmin, ", ", tri.cone.tmax, "]")
+    println(io, "  shift degrees = [", tri.Cshift.tmin, ", ", tri.Cshift.tmax, "]")
+end
+
+function Base.show(io::IO, DC::DoubleComplex{K}) where {K}
+    print(io,
+          "DoubleComplex(field=",
+          _field_label(K),
+          ", a=",
+          DC.amin,
+          ":",
+          DC.amax,
+          ", b=",
+          DC.bmin,
+          ":",
+          DC.bmax,
+          ")")
+end
+
+function Base.show(io::IO, ::MIME"text/plain", DC::DoubleComplex{K}) where {K}
+    println(io, "DoubleComplex")
+    println(io, "  field = ", _field_label(K))
+    println(io, "  a range = [", DC.amin, ", ", DC.amax, "]")
+    println(io, "  b range = [", DC.bmin, ", ", DC.bmax, "]")
+    println(io, "  shape = ", size(DC.dims))
+    println(io, "  total degree range = [", DC.amin + DC.bmin, ", ", DC.amax + DC.bmax, "]")
+    println(io, "  total dimension = ", sum(DC.dims))
+end
+
+function Base.show(io::IO, summary::ChainComplexValidationSummary)
+    r = summary.report
+    print(io, "ChainComplexValidationSummary(kind=", r.kind,
+          ", valid=", r.valid,
+          ", issues=", length(r.issues), ")")
+end
+
+function Base.show(io::IO, ::MIME"text/plain", summary::ChainComplexValidationSummary)
+    r = summary.report
+    println(io, "ChainComplexValidationSummary")
+    println(io, "  kind: ", r.kind)
+    println(io, "  valid: ", r.valid)
+    for key in propertynames(r)
+        key in (:kind, :valid, :issues) && continue
+        println(io, "  ", key, ": ", repr(getproperty(r, key)))
+    end
+    if isempty(r.issues)
+        print(io, "  issues: []")
+    else
+        println(io, "  issues:")
+        for issue in r.issues
+            println(io, "    - ", issue)
+        end
+    end
+end
+
+function Base.show(io::IO, H::CohomologyData{K}) where {K}
+    print(io, "CohomologyData(t=", H.t, ", dimH=", H.dimH, ")")
+end
+
+function Base.show(io::IO, ::MIME"text/plain", H::CohomologyData{K}) where {K}
+    println(io, "CohomologyData")
+    println(io, "  degree = ", H.t)
+    println(io, "  field = ", _field_label(K))
+    println(io, "  ambient_dim = ", H.dimC)
+    println(io, "  dimZ = ", H.dimZ)
+    println(io, "  dimB = ", H.dimB)
+    println(io, "  dimH = ", H.dimH)
+end
+
+function Base.show(io::IO, H::HomologyData{K}) where {K}
+    print(io, "HomologyData(s=", H.s, ", dimH=", H.dimH, ")")
+end
+
+function Base.show(io::IO, ::MIME"text/plain", H::HomologyData{K}) where {K}
+    println(io, "HomologyData")
+    println(io, "  degree = ", H.s)
+    println(io, "  field = ", _field_label(K))
+    println(io, "  ambient_dim = ", H.dimC)
+    println(io, "  dimZ = ", H.dimZ)
+    println(io, "  dimB = ", H.dimB)
+    println(io, "  dimH = ", H.dimH)
+end
 
 function Base.show(io::IO, ss::SpectralSequence{K}) where {K}
     print(io,
           "SpectralSequence(first=",
           ss.first,
+          ", field=",
+          _field_label(K),
           ", a=",
           ss.DC.amin,
           ":",
@@ -3938,12 +5956,16 @@ end
 
 function Base.show(io::IO, ::MIME"text/plain", ss::SpectralSequence{K}) where {K}
     println(io, "SpectralSequence")
+    println(io, "  field = ", _field_label(K))
     println(io, "  first = ", ss.first)
     println(io, "  a in [", ss.DC.amin, ", ", ss.DC.amax, "]")
     println(io, "  b in [", ss.DC.bmin, ", ", ss.DC.bmax, "]")
+    println(io, "  total degrees = [", ss.Tot.tmin, ", ", ss.Tot.tmax, "]")
     println(io, "  rmax_possible = ", ss.rmax_possible)
-    println(io, "  collapse_page (dims) = ", collapse_page(ss))
+    println(io, "  convergence_page (dims) = ", convergence_page(ss))
     println(io, "  total cohomology dims = ", ss.Htot_dims)
+    println(io, "  cached pages = ", sort!(collect(keys(ss.page_cache))))
+    println(io, "  cached differentials = ", sort!(collect(keys(ss.diff_cache))))
 end
 
 function Base.show(io::IO, P::SpectralPage{K}) where {K}
@@ -3990,10 +6012,49 @@ end
 
 function Base.show(io::IO, ::MIME"text/plain", SQ::SubquotientData{K}) where {K}
     println(io, "SubquotientData (explicit Z/B model)")
+    println(io, "  field = ", _field_label(K))
     println(io, "  ambient_dim = ", SQ.ambient_dim)
     println(io, "  dimZ = ", SQ.dimZ)
     println(io, "  dimB = ", SQ.dimB)
     println(io, "  dimH = ", SQ.dimH)
+end
+
+function Base.show(io::IO, les::LongExactSequence{K}) where {K}
+    print(io, "LongExactSequence(field=", _field_label(K), ", degrees=", les.tmin, ":", les.tmax, ")")
+end
+
+function Base.show(io::IO, ::MIME"text/plain", les::LongExactSequence{K}) where {K}
+    println(io, "LongExactSequence")
+    println(io, "  field = ", _field_label(K))
+    println(io, "  degree range = [", les.tmin, ", ", les.tmax, "]")
+    println(io, "  dims C = ", [H.dimH for H in les.HC])
+    println(io, "  dims D = ", [H.dimH for H in les.HD])
+    println(io, "  dims cone = ", [H.dimH for H in les.Hcone])
+end
+
+function Base.show(io::IO, fd::FiltrationData{K}) where {K}
+    print(io, "FiltrationData(t=", fd.t, ", steps=", fd.pmin, ":", fd.pmax, ")")
+end
+
+function Base.show(io::IO, ::MIME"text/plain", fd::FiltrationData{K}) where {K}
+    println(io, "FiltrationData")
+    println(io, "  field = ", _field_label(K))
+    println(io, "  total degree = ", fd.t)
+    println(io, "  filtration range = [", fd.pmin, ", ", fd.pmax, "]")
+    println(io, "  step dimensions = ", filtration_dimensions(fd))
+    println(io, "  graded steps = ", sort!(collect(keys(fd.graded))))
+end
+
+function Base.show(io::IO, ep::ExtensionProblem{K}) where {K}
+    print(io, "ExtensionProblem(t=", ep.t, ", pieces=", length(ep.pieces), ")")
+end
+
+function Base.show(io::IO, ::MIME"text/plain", ep::ExtensionProblem{K}) where {K}
+    println(io, "ExtensionProblem")
+    println(io, "  field = ", _field_label(K))
+    println(io, "  total degree = ", ep.t)
+    println(io, "  pieces = ", [(piece.a, piece.b) for piece in ep.pieces])
+    println(io, "  splitting matrix size = ", size(ep.B))
 end
 
 

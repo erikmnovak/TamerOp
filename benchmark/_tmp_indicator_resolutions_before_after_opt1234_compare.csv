@@ -1,9 +1,0 @@
-before_probe,after_probe,before_ms,after_ms,speedup_before_over_after,before_kib,after_kib,alloc_ratio_after_over_before
-ir pmodule_from_fringe,ir pmodule_from_fringe,18.011861,11.19996,1.6082076185986378,9245.15625,9246.25,1.000118305193598
-ir projective_cover,ir projective_cover,0.46621,0.28107400000000005,1.6586735165828215,287.65625,288.453125,1.0027702335687128
-ir injective_hull,ir injective_hull,0.747561,0.8338030000000001,0.8965678943347529,709.0546875,709.8046875,1.001057746339206
-ir upset_resolution pmodule,ir upset_resolution pmodule,6.55047,4.886612,1.3404931678635421,6556.625,6540.09375,0.9974786952128573
-ir downset_resolution pmodule,ir downset_resolution pmodule,9.520034,5.698519,1.6706154704406533,7192.8046875,7178.2734375,0.9979797519004995
-ir indicator_resolutions uncached,ir indicator_resolutions uncached,163.627065,138.90847300000001,1.1779487706268283,83342.8984375,83316.1171875,0.9996786618835907
-ir indicator_resolutions cache_miss,ir indicator_resolutions cache_miss_after_clear,124.58037700000001,99.670536,1.2499218124000058,83343.3984375,83316.0546875,0.9996719146265615
-ir indicator_resolutions cache_hit,ir indicator_resolutions cache_hit,0.000714,0.000583,1.2246998284734134,0.046875,0.046875,1.0

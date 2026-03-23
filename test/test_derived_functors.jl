@@ -2,9 +2,33 @@ using Test
 
 using LinearAlgebra
 using InteractiveUtils
+using Random
+using SparseArrays
 import Base.Threads
 
-const FL = PosetModules.FieldLinAlg
+if !@isdefined(CM)
+    const CM = TamerOp.CoreModules
+end
+if !@isdefined(FF)
+    const FF = TamerOp.FiniteFringe
+end
+if !@isdefined(IR)
+    const IR = TamerOp.IndicatorResolutions
+end
+if !@isdefined(MD)
+    const MD = TamerOp.Modules
+end
+if !@isdefined(DF)
+    const DF = TamerOp.DerivedFunctors
+end
+if !@isdefined(TO)
+    const TO = TamerOp
+end
+if !@isdefined(OPT)
+    const OPT = TamerOp.Options
+end
+
+const FL = TamerOp.FieldLinAlg
 
 # This file assumes the helper constructors defined in runtests.jl:
 # - chain_poset(n)
@@ -19,6 +43,77 @@ end
 function _field_tol(field)
     field isa CM.RealField || return 0.0
     return field.atol + field.rtol
+end
+
+@testset "Modules UX surface" begin
+    field = CM.QQField()
+    K = CM.coeff_type(field)
+    P = chain_poset(2)
+    edge = Dict((1, 2) => sparse([1], [1], [one(K)], 1, 1))
+    M = MD.PModule{K}(P, [1, 1], edge; field=field)
+    f = MD.PMorphism(M, M, [sparse([1], [1], [one(K)], 1, 1), sparse([1], [1], [one(K)], 1, 1)])
+
+    @test MD.check_module(M).valid
+    @test MD.check_morphism(f).valid
+    @test TOA.check_module === MD.check_module
+    @test TOA.check_morphism === MD.check_morphism
+    @test TOA.dim_at === MD.dim_at
+    @test TOA.structure_map === MD.structure_map
+    @test TOA.component === MD.component
+    @test TOA.support === MD.support
+    @test TOA.support_dims === MD.support_dims
+    @test TOA.check_module_data === MD.check_module_data
+    @test TOA.check_morphism_data === MD.check_morphism_data
+
+    mdims = TOA.dimensions(M)
+    @test mdims.vertices == 2
+    @test mdims.total == 2
+    @test TOA.dim_at(M, 2) == 1
+    @test TOA.dimensions(M, 1).stalk == 1
+    @test TOA.describe(M).kind == :pmodule
+    @test TOA.describe(f).kind == :pmorphism
+    @test TOA.basis(M, 1) == CM.eye(field, 1)
+    @test TOA.coordinates(M, 1, K[one(K)]) == K[one(K)]
+    @test TOA.structure_map(M; source=1, target=2) == sparse([1], [1], [one(K)], 1, 1)
+    @test TOA.component(f, 2) == sparse([1], [1], [one(K)], 1, 1)
+    @test TOA.support(M) == [1, 2]
+    @test TOA.nonzero_vertices(M) == [1, 2]
+    @test TOA.support_dims(M) == (vertices=[1, 2], dims=[1, 1])
+    @test occursin("Best practices", string(@doc MD.check_module))
+    @test occursin("Best practices", string(@doc MD.check_morphism))
+    @test occursin("functor `Q -> Vec_K`", string(@doc MD.PModule))
+    @test occursin("morphism of modules", lowercase(string(@doc MD.PMorphism)))
+    @test occursin("stalk-dimension query", string(@doc MD.dim_at))
+    @test occursin("named-keyword companion", string(@doc MD.structure_map))
+    @test occursin("one component map per vertex", string(@doc MD.check_morphism_data))
+    @test occursin("dimension summaries", string(@doc TOA.dimensions(M)))
+    @test occursin("canonical basis", string(@doc TOA.basis(M, 1)))
+    @test occursin("compact mathematical summary", string(@doc TOA.describe(M)))
+    @test occursin("identity coordinate convention", string(@doc TOA.coordinates(M, 1, K[one(K)])))
+    @test occursin("PModule", sprint(show, MIME"text/plain"(), M))
+    @test occursin("PMorphism", sprint(show, MIME"text/plain"(), f))
+
+    Mbad = MD.PModule{K}(P, [1, 1], Dict((1, 2) => spzeros(K, 2, 1)); check_sizes=false, field=field)
+    mreport = MD.check_module(Mbad)
+    @test !mreport.valid
+    @test any(occursin("expected map 1 <= 2", msg) for msg in mreport.issues)
+    @test_throws ErrorException MD.check_module(Mbad; throw=true)
+    mdata_bad = MD.check_module_data(P, [1, 1], Dict((1, 2) => spzeros(K, 2, 1)))
+    @test !mdata_bad.valid
+    @test any(occursin("expected map 1 <= 2", msg) for msg in mdata_bad.issues)
+    @test_throws ErrorException MD.check_module_data(P, [1, 1], Dict((1, 2) => spzeros(K, 2, 1)); throw=true)
+
+    fbad = MD.PMorphism{K,typeof(field),SparseMatrixCSC{K,Int}}(
+        M, M, [spzeros(K, 1, 1), sparse([1], [1], [one(K)], 2, 1)]
+    )
+    freport = MD.check_morphism(fbad)
+    @test !freport.valid
+    @test any(occursin("component 2", msg) for msg in freport.issues)
+    @test_throws ErrorException MD.check_morphism(fbad; throw=true)
+    fdata_bad = MD.check_morphism_data(M, M, [spzeros(K, 1, 1), sparse([1], [1], [one(K)], 2, 1)])
+    @test !fdata_bad.valid
+    @test any(occursin("component 2", msg) for msg in fdata_bad.issues)
+    @test_throws ErrorException MD.check_morphism_data(M, M, [spzeros(K, 1, 1), sparse([1], [1], [one(K)], 2, 1)]; throw=true)
 end
 
 @testset "Derived functors across fields (A2)" begin
@@ -73,15 +168,15 @@ end
         FQ = CM.QQField()
         H = one_by_one_fringe(P, U, D; scalar=CM.coerce(FQ, 1), field=FQ)
         M = IR.pmodule_from_fringe(H)
-        res = PM.ResolutionOptions(maxlen=2)
+        res = TO.ResolutionOptions(maxlen=2)
 
-        R_serial = PM.projective_resolution(M, res; threads=false)
-        R_thread = PM.projective_resolution(M, res; threads=true)
+        R_serial = TO.projective_resolution(M, res; threads=false)
+        R_thread = TO.projective_resolution(M, res; threads=true)
         @test R_thread.gens == R_serial.gens
         @test R_thread.d_mat == R_serial.d_mat
 
-        E_serial = PM.injective_resolution(M, res; threads=false)
-        E_thread = PM.injective_resolution(M, res; threads=true)
+        E_serial = TO.injective_resolution(M, res; threads=false)
+        E_thread = TO.injective_resolution(M, res; threads=true)
         @test E_thread.gens == E_serial.gens
         @test length(E_thread.d_mor) == length(E_serial.d_mor)
         for i in eachindex(E_thread.d_mor)
@@ -118,6 +213,46 @@ end
         @test DC_tor_t.dh == DC_tor_s.dh
     end
 
+    hom_trip_old = DF.HomExtEngine._HOM_ASSEMBLY_USE_TRIPLETS[]
+    hom_off_old = DF.HomExtEngine._HOM_ASSEMBLY_CACHE_OFFSETS[]
+    tor_off_old = DF.SpectralSequences._TOR_DOUBLE_COMPLEX_CACHE_TENSOR_OFFSETS[]
+    try
+        F, dF = IR.upset_resolution(M; maxlen=2)
+        E, dE = IR.downset_resolution(N; maxlen=2)
+
+        DF.HomExtEngine._HOM_ASSEMBLY_USE_TRIPLETS[] = false
+        DF.HomExtEngine._HOM_ASSEMBLY_CACHE_OFFSETS[] = false
+        DF.SpectralSequences._TOR_DOUBLE_COMPLEX_CACHE_TENSOR_OFFSETS[] = false
+        dimsCt_off, dts_off = DF.HomExtEngine.build_hom_tot_complex(F, dF, E, dE; threads=false)
+        dims_off, dv_off, dh_off = DF.HomExtEngine.build_hom_bicomplex_data(F, dF, E, dE; threads=false)
+        DC_ext_off = DF.ExtDoubleComplex(M, N; maxlen=2, threads=false)
+        DC_tor_off = DF.TorDoubleComplex(M, N; maxlen=2, threads=false)
+
+        DF.HomExtEngine._HOM_ASSEMBLY_USE_TRIPLETS[] = true
+        DF.HomExtEngine._HOM_ASSEMBLY_CACHE_OFFSETS[] = true
+        DF.SpectralSequences._TOR_DOUBLE_COMPLEX_CACHE_TENSOR_OFFSETS[] = true
+        dimsCt_on, dts_on = DF.HomExtEngine.build_hom_tot_complex(F, dF, E, dE; threads=false)
+        dims_on, dv_on, dh_on = DF.HomExtEngine.build_hom_bicomplex_data(F, dF, E, dE; threads=false)
+        DC_ext_on = DF.ExtDoubleComplex(M, N; maxlen=2, threads=false)
+        DC_tor_on = DF.TorDoubleComplex(M, N; maxlen=2, threads=false)
+
+        @test dimsCt_on == dimsCt_off
+        @test dts_on == dts_off
+        @test dims_on == dims_off
+        @test dv_on == dv_off
+        @test dh_on == dh_off
+        @test DC_ext_on.dims == DC_ext_off.dims
+        @test DC_ext_on.dv == DC_ext_off.dv
+        @test DC_ext_on.dh == DC_ext_off.dh
+        @test DC_tor_on.dims == DC_tor_off.dims
+        @test DC_tor_on.dv == DC_tor_off.dv
+        @test DC_tor_on.dh == DC_tor_off.dh
+    finally
+        DF.HomExtEngine._HOM_ASSEMBLY_USE_TRIPLETS[] = hom_trip_old
+        DF.HomExtEngine._HOM_ASSEMBLY_CACHE_OFFSETS[] = hom_off_old
+        DF.SpectralSequences._TOR_DOUBLE_COMPLEX_CACHE_TENSOR_OFFSETS[] = tor_off_old
+    end
+
     # Warm + allocation budgets on fixed tiny fixtures.
     DF.ExtDoubleComplex(M, N; maxlen=2, threads=false)
     alloc_extdc = @allocated DF.ExtDoubleComplex(M, N; maxlen=2, threads=false)
@@ -132,6 +267,21 @@ end
     DF.ext_dimensions_via_indicator_resolutions(Hm, Hn; maxlen=2, verify=false)
     alloc_extdims = @allocated DF.ext_dimensions_via_indicator_resolutions(Hm, Hn; maxlen=2, verify=false)
     @test alloc_extdims < 80_000_000
+
+    cache = CM.ResolutionCache()
+    Fcache, dFcache = IR.upset_resolution(M; maxlen=2)
+    Ecache, dEcache = IR.downset_resolution(N; maxlen=2)
+    hom_data_1 = DF.HomExtEngine.build_hom_bicomplex_data(Fcache, dFcache, Ecache, dEcache; threads=false, cache=cache)
+    hom_data_2 = DF.HomExtEngine.build_hom_bicomplex_data(Fcache, dFcache, Ecache, dEcache; threads=false, cache=cache)
+    @test hom_data_2 === hom_data_1
+
+    DC_ext_cache_1 = DF.ExtDoubleComplex(M, N; maxlen=2, threads=false, cache=cache)
+    DC_ext_cache_2 = DF.ExtDoubleComplex(M, N; maxlen=2, threads=false, cache=cache)
+    @test DC_ext_cache_2 === DC_ext_cache_1
+
+    DC_tor_cache_1 = DF.TorDoubleComplex(M, N; maxlen=2, threads=false, cache=cache)
+    DC_tor_cache_2 = DF.TorDoubleComplex(M, N; maxlen=2, threads=false, cache=cache)
+    @test DC_tor_cache_2 === DC_tor_cache_1
 end
 
 @testset "Ext/Tor core threaded parity" begin
@@ -145,19 +295,19 @@ end
         M = IR.pmodule_from_fringe(Hm)
         N = IR.pmodule_from_fringe(Hn)
 
-        resM = DF.projective_resolution(M, PM.ResolutionOptions(maxlen=2); threads=false)
+        resM = DF.projective_resolution(M, TO.ResolutionOptions(maxlen=2); threads=false)
         E_serial = DF.Ext(resM, N; threads=false)
         E_thread = DF.Ext(resM, N; threads=true)
         @test E_thread.complex.d == E_serial.complex.d
         @test [DF.dim(E_thread, t) for t in 0:2] == [DF.dim(E_serial, t) for t in 0:2]
 
         Pop = FF.FinitePoset(transpose(FF.leq_matrix(P)); check=false)
-        RopH = one_by_one_fringe(Pop, FF.principal_upset(Pop, 2), FF.principal_downset(Pop, 2); scalar=one(K), field=field)
-        LH = one_by_one_fringe(P, FF.principal_upset(P, 1), FF.principal_downset(P, 1); scalar=one(K), field=field)
+        RopH = one_by_one_fringe(Pop, FF.principal_upset(Pop, 2), FF.principal_downset(Pop, 2), one(K); field=field)
+        LH = one_by_one_fringe(P, FF.principal_upset(P, 1), FF.principal_downset(P, 1), one(K); field=field)
         Rop = IR.pmodule_from_fringe(RopH)
         L = IR.pmodule_from_fringe(LH)
 
-        resR = DF.projective_resolution(Rop, PM.ResolutionOptions(maxlen=2); threads=false)
+        resR = DF.projective_resolution(Rop, TO.ResolutionOptions(maxlen=2); threads=false)
         T_serial = DF.ExtTorSpaces._Tor_resolve_first(Rop, L; maxdeg=2, threads=false, res=resR)
         T_thread = DF.ExtTorSpaces._Tor_resolve_first(Rop, L; maxdeg=2, threads=true, res=resR)
         @test T_thread.bd == T_serial.bd
@@ -165,9 +315,30 @@ end
     end
 end
 
+@testset "Ext resolution parity" begin
+    field = CM.QQField()
+    K = CM.coeff_type(field)
+    P = chain_poset(3)
+
+    Hm = one_by_one_fringe(P, FF.principal_upset(P, 1), FF.principal_downset(P, 2), one(K); field=field)
+    Hn = one_by_one_fringe(P, FF.principal_upset(P, 2), FF.principal_downset(P, 3), one(K); field=field)
+    M = IR.pmodule_from_fringe(Hm)
+    N = IR.pmodule_from_fringe(Hn)
+
+    resM = DF.projective_resolution(M, TO.ResolutionOptions(maxlen=2); threads=false)
+    E_from_res = DF.Ext(resM, N; threads=false)
+    E_projective = DF.Ext(M, N, TO.DerivedFunctorOptions(maxdeg=2, model=:projective))
+    @test [DF.dim(E_from_res, t) for t in 0:2] == [DF.dim(E_projective, t) for t in 0:2]
+
+    resN = DF.injective_resolution(N, TO.ResolutionOptions(maxlen=2); threads=false)
+    Einj_from_res = DF.ExtInjective(M, resN; threads=false)
+    Einj_direct = DF.ExtInjective(M, N, TO.DerivedFunctorOptions(maxdeg=2, model=:injective))
+    @test [DF.dim(Einj_from_res, t) for t in 0:2] == [DF.dim(Einj_direct, t) for t in 0:2]
+end
+
 @testset "Resolution cache plumbing" begin
     P, S1, S2 = simple_modules_chain2()
-    opts = PM.ResolutionOptions(maxlen=2)
+    opts = TO.ResolutionOptions(maxlen=2)
     cache = CM.ResolutionCache()
 
     RP1 = DF.projective_resolution(S1, opts; cache=cache)
@@ -194,6 +365,51 @@ end
     @test DF.Resolutions._cache_injective_store!(cache, other_ikey, 23) == 23
     @test DF.Resolutions._cache_injective_get(cache, other_ikey, Int) == 23
 
+    M = IR.pmodule_from_fringe(S1)
+    N = IR.pmodule_from_fringe(S2)
+    df_proj = TO.DerivedFunctorOptions(maxdeg=2, model=:projective)
+    df_inj = TO.DerivedFunctorOptions(maxdeg=2, model=:injective)
+    df_uni = TO.DerivedFunctorOptions(maxdeg=2, model=:unified, canon=:projective)
+    EP1 = DF.Ext(M, N, df_proj; cache=cache)
+    EP2 = DF.Ext(M, N, df_proj; cache=cache)
+    @test EP1 === EP2
+    EI1 = DF.Ext(M, N, df_inj; cache=cache)
+    EI2 = DF.Ext(M, N, df_inj; cache=cache)
+    @test EI1 === EI2
+    EU1 = DF.Ext(M, N, df_uni; cache=cache)
+    EU2 = DF.Ext(M, N, df_uni; cache=cache)
+    @test EU1 === EU2
+    cmp = getfield(EU1, :comparison)
+    @test all(isnothing, cmp.P2I)
+    @test all(isnothing, cmp.I2P)
+    _ = DF.comparison_isomorphism(EU1, 1; from=:projective, to=:injective)
+    @test cmp.P2I[2] !== nothing
+    @test cmp.I2P[2] !== nothing
+    @test cmp.P2I[1] === nothing
+    @test cmp.I2P[1] === nothing
+    @test !cmp.complete
+
+    Pop = FF.FinitePoset(transpose(FF.leq_matrix(P)); check=false)
+    Uop = FF.principal_upset(Pop, 2)
+    Dop = FF.principal_downset(Pop, 2)
+    Hop = one_by_one_fringe(Pop, Uop, Dop; scalar=CM.coerce(S1.field, 1), field=S1.field)
+    Rop = IR.pmodule_from_fringe(Hop)
+    df_tor_first = TO.DerivedFunctorOptions(maxdeg=2, model=:first)
+    df_tor_second = TO.DerivedFunctorOptions(maxdeg=2, model=:second)
+    TF1 = DF.Tor(Rop, M, df_tor_first; cache=cache)
+    TF2 = DF.Tor(Rop, M, df_tor_first; cache=cache)
+    @test TF1 === TF2
+    TS1 = DF.Tor(Rop, M, df_tor_second; cache=cache)
+    TS2 = DF.Tor(Rop, M, df_tor_second; cache=cache)
+    @test TS1 === TS2
+
+    DCE1 = DF.ExtDoubleComplex(M, N; maxlen=2, threads=false, cache=cache)
+    DCE2 = DF.ExtDoubleComplex(M, N; maxlen=2, threads=false, cache=cache)
+    @test DCE1 === DCE2
+    DCT1 = DF.TorDoubleComplex(Rop, M; maxlen=2, threads=false, cache=cache)
+    DCT2 = DF.TorDoubleComplex(Rop, M; maxlen=2, threads=false, cache=cache)
+    @test DCT1 === DCT2
+
     T1 = IR.indicator_resolutions(S1, S2; maxlen=2, cache=cache)
     T2 = IR.indicator_resolutions(S1, S2; maxlen=2, cache=cache)
     @test T1 === T2
@@ -204,80 +420,96 @@ end
     @test cache.injective_primary_type === typeof(RI1)
     @test isempty(cache.injective_primary)
     @test cache.indicator_primary_type === nothing
+    @test isempty(cache.ext_projective)
+    @test isempty(cache.ext_injective)
+    @test isempty(cache.ext_unified)
+    @test isempty(cache.tor_first)
+    @test isempty(cache.tor_second)
+    @test isempty(cache.hom_bicomplex)
+    @test isempty(cache.ext_doublecomplex)
+    @test isempty(cache.tor_doublecomplex_plan)
+    @test isempty(cache.tor_doublecomplex)
 
     sc = CM.SessionCache()
 
-    M = IR.pmodule_from_fringe(S1)
     enc = RES.EncodingResult(P, M, nothing; H=S1, opts=OPT.EncodingOptions(field=S1.field), backend=:test)
-    WR1 = PM.resolve(enc; kind=:projective, opts=opts, cache=sc)
-    WR2 = PM.resolve(enc; kind=:projective, opts=opts, cache=sc)
+    WR1 = TO.resolve(enc; kind=:projective, opts=opts, cache=sc)
+    WR2 = TO.resolve(enc; kind=:projective, opts=opts, cache=sc)
     @test WR1.res === WR2.res
 
     # Workflow-level ext/tor should reuse cached resolutions automatically.
     N = IR.pmodule_from_fringe(S2)
     encN = RES.EncodingResult(P, N, nothing; H=S2, opts=OPT.EncodingOptions(field=S2.field), backend=:test)
-    E1 = PM.ext(enc, encN; maxdeg=2, model=:projective, cache=sc)
-    E2 = PM.ext(enc, encN; maxdeg=2, model=:projective, cache=sc)
+    E1 = TO.ext(enc, encN; maxdeg=2, model=:projective, cache=sc)
+    E2 = TO.ext(enc, encN; maxdeg=2, model=:projective, cache=sc)
     @test E1.res === E2.res
-    H1 = PM.hom(enc, encN; cache=sc)
-    H2 = PM.hom(enc, encN; cache=sc)
+    H1 = TO.hom(enc, encN; cache=sc)
+    H2 = TO.hom(enc, encN; cache=sc)
     @test DF.dim(H1) == DF.dim(H2)
-    d_fast_h = PM.hom_dimension(enc, encN; cache=sc)
+    d_fast_h = TO.hom_dimension(enc, encN; cache=sc)
     @test d_fast_h == DF.dim(H1)
-    Epm1 = PM.ext(enc.M, encN.M; maxdeg=2, model=:projective, cache=sc)
-    Epm2 = PM.ext(enc.M, encN.M; maxdeg=2, model=:projective, cache=sc)
+    Epm1 = TO.ext(enc.M, encN.M; maxdeg=2, model=:projective, cache=sc)
+    Epm2 = TO.ext(enc.M, encN.M; maxdeg=2, model=:projective, cache=sc)
     @test Epm1.res === Epm2.res
-    Hpm1 = PM.hom(enc.M, encN.M; cache=sc)
-    Hpm2 = PM.hom(enc.M, encN.M; cache=sc)
+    Hpm1 = TO.hom(enc.M, encN.M; cache=sc)
+    Hpm2 = TO.hom(enc.M, encN.M; cache=sc)
     @test DF.dim(Hpm1) == DF.dim(Hpm2)
-    @test_throws MethodError PM.hom(enc, encN.M; cache=sc)
-    @test_throws MethodError PM.hom(enc.M, encN; cache=sc)
-    @test_throws MethodError PM.ext(enc, encN.M; maxdeg=2, model=:projective, cache=sc)
+    @test_throws MethodError TO.hom(enc, encN.M; cache=sc)
+    @test_throws MethodError TO.hom(enc.M, encN; cache=sc)
+    @test_throws MethodError TO.ext(enc, encN.M; maxdeg=2, model=:projective, cache=sc)
 
-    C0 = PM.ModuleCochainComplex([enc.M], PM.PMorphism[]; tmin=0, check=true)
-    RH1 = PM.rhom(C0, encN.M; cache=sc)
-    RH2 = PM.rhom(C0, encN.M; cache=sc)
+    C0 = TO.ModuleCochainComplex([enc.M], TO.PMorphism[]; tmin=0, check=true)
+    encC0 = RES.EncodedComplexResult(P, C0, nothing; field=field)
+    RH1 = TO.rhom(C0, encN.M; cache=sc)
+    RH2 = TO.rhom(C0, encN.M; cache=sc)
+    RH3 = TO.rhom(encC0, encN.M; cache=sc)
     @test RH1.tmin == RH2.tmin
     @test RH1.tmax == RH2.tmax
     @test length(RH1.d) == length(RH2.d)
-    HX1 = PM.hyperext(C0, encN.M; maxdeg=2, cache=sc)
-    HX2 = PM.hyperext(C0, encN.M; maxdeg=2, cache=sc)
+    @test RH3.tmin == RH1.tmin
+    @test RH3.tmax == RH1.tmax
+    @test length(RH3.d) == length(RH1.d)
+    HX1 = TO.hyperext(C0, encN.M; maxdeg=2, cache=sc)
+    HX2 = TO.hyperext(C0, encN.M; maxdeg=2, cache=sc)
+    HX3 = TO.hyperext(encC0, encN.M; maxdeg=2, cache=sc)
     @test DF.dim(HX1, 0) == DF.dim(HX2, 0)
-    @test_throws MethodError PM.rhom(C0, encN; cache=sc)
-    @test_throws MethodError PM.hyperext(C0, encN; maxdeg=2, cache=sc)
+    @test DF.dim(HX3, 0) == DF.dim(HX1, 0)
+    @test_throws MethodError TO.rhom(C0, encN; cache=sc)
+    @test_throws MethodError TO.hyperext(C0, encN; maxdeg=2, cache=sc)
 
-    Pop = FF.FinitePoset(transpose(FF.leq_matrix(P)); check=false)
-    Uop = FF.principal_upset(Pop, 2)
-    Dop = FF.principal_downset(Pop, 2)
-    Hop = one_by_one_fringe(Pop, Uop, Dop; scalar=CM.coerce(S1.field, 1), field=S1.field)
-    Rop = IR.pmodule_from_fringe(Hop)
     encRop = RES.EncodingResult(Pop, Rop, nothing; H=Hop, opts=OPT.EncodingOptions(field=Hop.field), backend=:test)
-    @test_throws ErrorException PM.hom_dimension(enc, encRop; cache=sc)
+    @test_throws ErrorException TO.hom_dimension(enc, encRop; cache=sc)
 
-    T1 = PM.tor(encRop, enc; maxdeg=2, model=:first, cache=sc)
-    T2 = PM.tor(encRop, enc; maxdeg=2, model=:first, cache=sc)
+    T1 = TO.tor(encRop, enc; maxdeg=2, model=:first, cache=sc)
+    T2 = TO.tor(encRop, enc; maxdeg=2, model=:first, cache=sc)
     @test T1.resRop === T2.resRop
 
-    T3 = PM.tor(encRop, enc; maxdeg=2, model=:second, cache=sc)
-    T4 = PM.tor(encRop, enc; maxdeg=2, model=:second, cache=sc)
+    T3 = TO.tor(encRop, enc; maxdeg=2, model=:second, cache=sc)
+    T4 = TO.tor(encRop, enc; maxdeg=2, model=:second, cache=sc)
     @test T3.resL === T4.resL
-    Tpm1 = PM.tor(encRop.M, enc.M; maxdeg=2, model=:first, cache=sc)
-    Tpm2 = PM.tor(encRop.M, enc.M; maxdeg=2, model=:first, cache=sc)
+    Tpm1 = TO.tor(encRop.M, enc.M; maxdeg=2, model=:first, cache=sc)
+    Tpm2 = TO.tor(encRop.M, enc.M; maxdeg=2, model=:first, cache=sc)
     @test Tpm1.resRop === Tpm2.resRop
-    @test_throws MethodError PM.tor(encRop, enc.M; maxdeg=2, model=:first, cache=sc)
-    @test_throws MethodError PM.tor(encRop.M, enc; maxdeg=2, model=:first, cache=sc)
+    DT1 = TO.derived_tensor(encRop, C0)
+    DT2 = TO.derived_tensor(encRop, encC0)
+    @test CC.describe(DT2).degree_range == CC.describe(DT1).degree_range
+    HT1 = TO.hypertor(encRop, C0; maxdeg=2)
+    HT2 = TO.hypertor(encRop, encC0; maxdeg=2)
+    @test DF.dim(HT2, 0) == DF.dim(HT1, 0)
+    @test_throws MethodError TO.tor(encRop, enc.M; maxdeg=2, model=:first, cache=sc)
+    @test_throws MethodError TO.tor(encRop.M, enc; maxdeg=2, model=:first, cache=sc)
 
     # hom_dimension should cache computed fringes when enc.H is absent.
     enc_noH = RES.EncodingResult(P, M, nothing; H=nothing, opts=OPT.EncodingOptions(field=S1.field), backend=:test)
     encN_noH = RES.EncodingResult(P, N, nothing; H=nothing, opts=OPT.EncodingOptions(field=S2.field), backend=:test)
     ec = CM._workflow_encoding_cache(sc)
     g0 = length(ec.geometry)
-    d1 = PM.hom_dimension(enc_noH, encN_noH; cache=sc)
+    d1 = TO.hom_dimension(enc_noH, encN_noH; cache=sc)
     g1 = length(ec.geometry)
-    d2 = PM.hom_dimension(enc_noH, encN_noH; cache=sc)
+    d2 = TO.hom_dimension(enc_noH, encN_noH; cache=sc)
     g2 = length(ec.geometry)
     @test d1 == d2
-    @test d1 == DF.dim(PM.hom(enc_noH, encN_noH; cache=sc))
+    @test d1 == DF.dim(TO.hom(enc_noH, encN_noH; cache=sc))
     @test g1 >= g0 + 2
     @test g2 == g1
 
@@ -285,16 +517,16 @@ end
     RP3 = DF.projective_resolution(S1, opts; cache=cache)
     @test RP3 !== RP1
 
-    WRS1 = PM.resolve(enc; kind=:projective, opts=opts, cache=sc)
-    WRS2 = PM.resolve(enc; kind=:projective, opts=opts, cache=sc)
+    WRS1 = TO.resolve(enc; kind=:projective, opts=opts, cache=sc)
+    WRS2 = TO.resolve(enc; kind=:projective, opts=opts, cache=sc)
     @test WRS1.res === WRS2.res
 
-    ES1 = PM.ext(enc, encN; maxdeg=2, model=:projective, cache=sc)
-    ES2 = PM.ext(enc, encN; maxdeg=2, model=:projective, cache=sc)
+    ES1 = TO.ext(enc, encN; maxdeg=2, model=:projective, cache=sc)
+    ES2 = TO.ext(enc, encN; maxdeg=2, model=:projective, cache=sc)
     @test ES1.res === ES2.res
 
-    TS1 = PM.tor(encRop, enc; maxdeg=2, model=:first, cache=sc)
-    TS2 = PM.tor(encRop, enc; maxdeg=2, model=:first, cache=sc)
+    TS1 = TO.tor(encRop, enc; maxdeg=2, model=:first, cache=sc)
+    TS2 = TO.tor(encRop, enc; maxdeg=2, model=:first, cache=sc)
     @test TS1.resRop === TS2.resRop
 
     # Module cache keys include field identity: changing field should route to a
@@ -307,10 +539,190 @@ end
     @test mc3 !== mc1
 
     CM._clear_session_cache!(sc)
-    WRS3 = PM.resolve(enc; kind=:projective, opts=opts, cache=sc)
+    WRS3 = TO.resolve(enc; kind=:projective, opts=opts, cache=sc)
     @test WRS3.res !== WRS1.res
-    @test_throws ErrorException PM.resolve(enc; kind=:proj, opts=opts, cache=sc)
-    @test_throws ErrorException PM.resolve(enc; kind=:inj, opts=opts, cache=sc)
+    @test_throws ErrorException TO.resolve(enc; kind=:proj, opts=opts, cache=sc)
+    @test_throws ErrorException TO.resolve(enc; kind=:inj, opts=opts, cache=sc)
+end
+
+@testset "Tor boundary assembly parity" begin
+    field = CM.QQField()
+    K = CM.coeff_type(field)
+    oneK = one(K)
+
+    P = chain_poset(3)
+    Pop = FF.FinitePoset(transpose(FF.leq_matrix(P)); check=false)
+
+    HL = FF.FringeModule{K}(
+        P,
+        [FF.principal_upset(P, 1), FF.principal_upset(P, 2)],
+        [FF.principal_downset(P, 2), FF.principal_downset(P, 3)],
+        sparse([1, 2, 1], [1, 1, 2], [oneK, oneK, oneK], 2, 2);
+        field=field,
+    )
+    HRop = FF.FringeModule{K}(
+        Pop,
+        [FF.principal_upset(Pop, 2), FF.principal_upset(Pop, 3)],
+        [FF.principal_downset(Pop, 1), FF.principal_downset(Pop, 2)],
+        sparse([1, 2, 2], [1, 1, 2], [oneK, oneK, oneK], 2, 2);
+        field=field,
+    )
+
+    L = IR.pmodule_from_fringe(HL)
+    Rop = IR.pmodule_from_fringe(HRop)
+    opts = TO.ResolutionOptions(maxlen=2)
+    resRop = DF.projective_resolution(Rop, opts; threads=false)
+    resL = DF.projective_resolution(L, opts; threads=false)
+    df_first = TO.DerivedFunctorOptions(maxdeg=2, model=:first)
+    df_second = TO.DerivedFunctorOptions(maxdeg=2, model=:second)
+
+    gate = DF.ExtTorSpaces._TOR_USE_TRIPLET_BOUNDARY_ASSEMBLY[]
+    direct_gate = DF.ExtTorSpaces._TOR_USE_DIRECT_MAP_TRIPLET_ASSEMBLY[]
+    max_nnz = DF.ExtTorSpaces._TOR_DIRECT_MAP_TRIPLET_MAX_PLAN_NNZ[]
+    max_work = DF.ExtTorSpaces._TOR_DIRECT_MAP_TRIPLET_MAX_BLOCK_WORK[]
+    max_bic_nnz = DF.ExtTorSpaces._TOR_DIRECT_MAP_TRIPLET_MAX_BICOMPLEX_PLAN_NNZ[]
+    max_bic_work = DF.ExtTorSpaces._TOR_DIRECT_MAP_TRIPLET_MAX_BICOMPLEX_BLOCK_WORK[]
+    cache_fast = DF.SpectralSequences._TOR_DOUBLE_COMPLEX_CACHE_FASTPATH[]
+    try
+        DF.ExtTorSpaces._TOR_USE_TRIPLET_BOUNDARY_ASSEMBLY[] = false
+        DF.ExtTorSpaces._TOR_USE_DIRECT_MAP_TRIPLET_ASSEMBLY[] = false
+        Tfirst_off = DF.Tor(Rop, L, df_first; res=resRop)
+        Tsecond_off = DF.Tor(Rop, L, df_second; res=resL)
+        DC_off = DF.TorDoubleComplex(Rop, L; maxlen=2, threads=false)
+
+        DF.ExtTorSpaces._TOR_USE_TRIPLET_BOUNDARY_ASSEMBLY[] = true
+        DF.ExtTorSpaces._TOR_USE_DIRECT_MAP_TRIPLET_ASSEMBLY[] = true
+        Tfirst_on = DF.Tor(Rop, L, df_first; res=resRop)
+        Tsecond_on = DF.Tor(Rop, L, df_second; res=resL)
+        DC_on = DF.TorDoubleComplex(Rop, L; maxlen=2, threads=false)
+
+        @test Tfirst_on.dims == Tfirst_off.dims
+        @test length(Tfirst_on.bd) == length(Tfirst_off.bd)
+        @test all(Tfirst_on.bd[i] == Tfirst_off.bd[i] for i in eachindex(Tfirst_on.bd))
+        @test all(DF.dim(Tfirst_on, s) == DF.dim(Tfirst_off, s) for s in DF.degree_range(Tfirst_on))
+
+        @test Tsecond_on.dims == Tsecond_off.dims
+        @test length(Tsecond_on.bd) == length(Tsecond_off.bd)
+        @test all(Tsecond_on.bd[i] == Tsecond_off.bd[i] for i in eachindex(Tsecond_on.bd))
+        @test all(DF.dim(Tsecond_on, s) == DF.dim(Tsecond_off, s) for s in DF.degree_range(Tsecond_on))
+
+        @test DC_on.dims == DC_off.dims
+        @test all(DC_on.dv[i] == DC_off.dv[i] for i in eachindex(DC_on.dv))
+        @test all(DC_on.dh[i] == DC_off.dh[i] for i in eachindex(DC_on.dh))
+
+        DF.ExtTorSpaces._TOR_USE_TRIPLET_BOUNDARY_ASSEMBLY[] = true
+        DF.ExtTorSpaces._TOR_USE_DIRECT_MAP_TRIPLET_ASSEMBLY[] = false
+        Tfirst_triplet = DF.Tor(Rop, L, df_first; res=resRop)
+        Tsecond_triplet = DF.Tor(Rop, L, df_second; res=resL)
+        DC_triplet = DF.TorDoubleComplex(Rop, L; maxlen=2, threads=false)
+
+        @test Tfirst_on.dims == Tfirst_triplet.dims
+        @test all(Tfirst_on.bd[i] == Tfirst_triplet.bd[i] for i in eachindex(Tfirst_on.bd))
+        @test Tsecond_on.dims == Tsecond_triplet.dims
+        @test all(Tsecond_on.bd[i] == Tsecond_triplet.bd[i] for i in eachindex(Tsecond_on.bd))
+        @test DC_on.dims == DC_triplet.dims
+        @test all(DC_on.dv[i] == DC_triplet.dv[i] for i in eachindex(DC_on.dv))
+        @test all(DC_on.dh[i] == DC_triplet.dh[i] for i in eachindex(DC_on.dh))
+
+        DF.ExtTorSpaces._TOR_USE_DIRECT_MAP_TRIPLET_ASSEMBLY[] = true
+        DF.ExtTorSpaces._TOR_DIRECT_MAP_TRIPLET_MAX_PLAN_NNZ[] = 0
+        DF.ExtTorSpaces._TOR_DIRECT_MAP_TRIPLET_MAX_BLOCK_WORK[] = 0
+        DF.ExtTorSpaces._TOR_DIRECT_MAP_TRIPLET_MAX_BICOMPLEX_PLAN_NNZ[] = 0
+        DF.ExtTorSpaces._TOR_DIRECT_MAP_TRIPLET_MAX_BICOMPLEX_BLOCK_WORK[] = 0
+        Tfirst_gated = DF.Tor(Rop, L, df_first; res=resRop)
+        DC_gated = DF.TorDoubleComplex(Rop, L; maxlen=2, threads=false)
+        @test Tfirst_gated.dims == Tfirst_triplet.dims
+        @test all(Tfirst_gated.bd[i] == Tfirst_triplet.bd[i] for i in eachindex(Tfirst_gated.bd))
+        @test DC_gated.dims == DC_triplet.dims
+        @test all(DC_gated.dh[i] == DC_triplet.dh[i] for i in eachindex(DC_gated.dh))
+
+        rc = CM.ResolutionCache()
+        DF.SpectralSequences._TOR_DOUBLE_COMPLEX_CACHE_FASTPATH[] = false
+        DC_cache_off_1 = DF.TorDoubleComplex(Rop, L; maxlen=2, threads=false, cache=rc)
+        DC_cache_off_2 = DF.TorDoubleComplex(Rop, L; maxlen=2, threads=false, cache=rc)
+        DF.SpectralSequences._TOR_DOUBLE_COMPLEX_CACHE_FASTPATH[] = true
+        DC_cache_on = DF.TorDoubleComplex(Rop, L; maxlen=2, threads=false, cache=rc)
+        @test DC_cache_off_2 === DC_cache_off_1
+        @test DC_cache_on === DC_cache_off_1
+    finally
+        DF.ExtTorSpaces._TOR_USE_TRIPLET_BOUNDARY_ASSEMBLY[] = gate
+        DF.ExtTorSpaces._TOR_USE_DIRECT_MAP_TRIPLET_ASSEMBLY[] = direct_gate
+        DF.ExtTorSpaces._TOR_DIRECT_MAP_TRIPLET_MAX_PLAN_NNZ[] = max_nnz
+        DF.ExtTorSpaces._TOR_DIRECT_MAP_TRIPLET_MAX_BLOCK_WORK[] = max_work
+        DF.ExtTorSpaces._TOR_DIRECT_MAP_TRIPLET_MAX_BICOMPLEX_PLAN_NNZ[] = max_bic_nnz
+        DF.ExtTorSpaces._TOR_DIRECT_MAP_TRIPLET_MAX_BICOMPLEX_BLOCK_WORK[] = max_bic_work
+        DF.SpectralSequences._TOR_DOUBLE_COMPLEX_CACHE_FASTPATH[] = cache_fast
+    end
+
+    function _grid_poset(nx::Int, ny::Int)
+        rel = falses(nx * ny, nx * ny)
+        idx(ix, iy) = (iy - 1) * nx + ix
+        for y1 in 1:ny, x1 in 1:nx
+            i = idx(x1, y1)
+            for y2 in y1:ny, x2 in x1:nx
+                rel[i, idx(x2, y2)] = true
+            end
+        end
+        return FF.FinitePoset(rel; check=false)
+    end
+
+    function _random_fringe(Q::FF.AbstractPoset, field::CM.AbstractCoeffField, seed::Integer)
+        rng = MersenneTwister(Int(seed))
+        Kloc = CM.coeff_type(field)
+        n = FF.nvertices(Q)
+        nups = 12
+        ndowns = 12
+        U = Vector{FF.Upset}(undef, nups)
+        D = Vector{FF.Downset}(undef, ndowns)
+        up_verts = Vector{Int}(undef, nups)
+        down_verts = Vector{Int}(undef, ndowns)
+        @inbounds for i in 1:nups
+            up_verts[i] = rand(rng, 1:n)
+            U[i] = FF.principal_upset(Q, up_verts[i])
+        end
+        @inbounds for j in 1:ndowns
+            down_verts[j] = rand(rng, 1:n)
+            D[j] = FF.principal_downset(Q, down_verts[j])
+        end
+        phi = zeros(Kloc, ndowns, nups)
+        @inbounds for j in 1:ndowns, i in 1:nups
+            FF.leq(Q, up_verts[i], down_verts[j]) || continue
+            rand(rng) < 0.45 || continue
+            v = rand(rng, -2:2)
+            v == 0 && (v = 1)
+            phi[j, i] = CM.coerce(field, v)
+        end
+        return FF.FringeModule{Kloc}(Q, U, D, phi; field=field)
+    end
+
+    Pm = _grid_poset(4, 4)
+    Popm = FF.FinitePoset(transpose(FF.leq_matrix(Pm)); check=false)
+    Lm = IR.pmodule_from_fringe(_random_fringe(Pm, field, 0xBEEF))
+    Ropm = IR.pmodule_from_fringe(_random_fringe(Popm, field, 0xFACE))
+    opts_m = TO.ResolutionOptions(maxlen=3)
+    resRopm = DF.projective_resolution(Ropm, opts_m; threads=false)
+    resLm = DF.projective_resolution(Lm, opts_m; threads=false)
+
+    gate = DF.ExtTorSpaces._TOR_USE_TRIPLET_BOUNDARY_ASSEMBLY[]
+    direct_gate = DF.ExtTorSpaces._TOR_USE_DIRECT_MAP_TRIPLET_ASSEMBLY[]
+    try
+        DF.ExtTorSpaces._TOR_USE_TRIPLET_BOUNDARY_ASSEMBLY[] = true
+        DF.ExtTorSpaces._TOR_USE_DIRECT_MAP_TRIPLET_ASSEMBLY[] = false
+        Tm_off = DF.Tor(Ropm, Lm, TO.DerivedFunctorOptions(maxdeg=3, model=:first); res=resRopm)
+        DCm_off = DF.TorDoubleComplex(Ropm, Lm; maxlen=3, threads=false)
+
+        DF.ExtTorSpaces._TOR_USE_DIRECT_MAP_TRIPLET_ASSEMBLY[] = true
+        Tm_on = DF.Tor(Ropm, Lm, TO.DerivedFunctorOptions(maxdeg=3, model=:first); res=resRopm)
+        DCm_on = DF.TorDoubleComplex(Ropm, Lm; maxlen=3, threads=false)
+
+        @test Tm_on.dims == Tm_off.dims
+        @test all(Tm_on.bd[i] == Tm_off.bd[i] for i in eachindex(Tm_on.bd))
+        @test DCm_on.dims == DCm_off.dims
+        @test all(DCm_on.dh[i] == DCm_off.dh[i] for i in eachindex(DCm_on.dh))
+    finally
+        DF.ExtTorSpaces._TOR_USE_TRIPLET_BOUNDARY_ASSEMBLY[] = gate
+        DF.ExtTorSpaces._TOR_USE_DIRECT_MAP_TRIPLET_ASSEMBLY[] = direct_gate
+    end
 end
 
 @testset "HomSystemCache type stability" begin
@@ -444,6 +856,402 @@ function direct_sum_with_split_sequence(A::MD.PModule{K}, C::MD.PModule{K}) wher
     return B, i, p
 end
 
+@testset "DerivedFunctors semantic accessors" begin
+    field = CM.QQField()
+    K = CM.coeff_type(field)
+    P = chain_poset(2)
+
+    S1 = IR.pmodule_from_fringe(
+        one_by_one_fringe(P, FF.principal_upset(P, 1), FF.principal_downset(P, 1);
+                          scalar=one(K), field=field)
+    )
+    S2 = IR.pmodule_from_fringe(
+        one_by_one_fringe(P, FF.principal_upset(P, 2), FF.principal_downset(P, 2);
+                          scalar=one(K), field=field)
+    )
+    I12 = IR.pmodule_from_fringe(
+        one_by_one_fringe(P, FF.principal_upset(P, 1), FF.principal_downset(P, 2);
+                          scalar=one(K), field=field)
+    )
+
+    resP = DF.projective_resolution(S1, TO.ResolutionOptions(maxlen=1))
+    resI = DF.injective_resolution(S1, TO.ResolutionOptions(maxlen=1))
+
+    @test DF.source_module(resP) === S1
+    @test DF.source_module(resI) === S1
+    @test DF.augmentation_map(resP) === resP.aug
+    @test DF.coaugmentation_map(resI) === resI.iota0
+    @test DF.resolution_terms(resP) == resP.Pmods
+    @test DF.resolution_terms(resP) !== resP.Pmods
+    @test DF.resolution_terms(resI) == resI.Emods
+    @test DF.resolution_terms(resI) !== resI.Emods
+    @test DF.resolution_differentials(resP) == resP.d_mor
+    @test DF.resolution_differentials(resI) == resI.d_mor
+    @test DF.resolution_length(resP) == length(resP.d_mor)
+    @test DF.resolution_length(resI) == length(resI.d_mor)
+    @test TOA.resolution_length(resP) == DF.resolution_length(resP)
+
+    H = DF.Hom(S1, I12)
+    @test DF.source_module(H) === S1
+    @test DF.target_module(H) === I12
+    @test DF.nonzero_degrees(H) == (DF.dim(H) == 0 ? Int[] : [0])
+    @test DF.degree_dimensions(H) == (DF.dim(H) == 0 ? Dict{Int,Int}() : Dict(0 => DF.dim(H)))
+
+    Eproj = DF.Ext(resP, I12)
+    Einj = DF.ExtInjective(S1, I12, TO.DerivedFunctorOptions(maxdeg=1, model=:injective))
+    Euni = DF.ExtSpace(S1, I12, TO.DerivedFunctorOptions(maxdeg=1, model=:unified, canon=:projective))
+
+    @test DF.source_module(Eproj) === S1
+    @test DF.target_module(Eproj) === I12
+    @test DF.source_module(Einj) === S1
+    @test DF.target_module(Einj) === I12
+    @test DF.source_module(Euni) === S1
+    @test DF.target_module(Euni) === I12
+    @test sort(DF.nonzero_degrees(Eproj)) == sort(collect(keys(DF.degree_dimensions(Eproj))))
+    @test sort(DF.nonzero_degrees(Einj)) == sort(collect(keys(DF.degree_dimensions(Einj))))
+    @test sort(DF.nonzero_degrees(Euni)) == sort(collect(keys(DF.degree_dimensions(Euni))))
+
+    Pop = FF.FinitePoset(transpose(FF.leq_matrix(P)); check=false)
+    RopH = one_by_one_fringe(Pop, FF.principal_upset(Pop, 2), FF.principal_downset(Pop, 2);
+                             scalar=one(K), field=field)
+    Rop = IR.pmodule_from_fringe(RopH)
+
+    Tfirst = DF.Tor(Rop, I12, TO.DerivedFunctorOptions(maxdeg=1, model=:first))
+    Tsecond = DF.Tor(Rop, I12, TO.DerivedFunctorOptions(maxdeg=1, model=:second))
+
+    @test DF.source_module(Tfirst) === Rop
+    @test DF.target_module(Tfirst) === I12
+    @test DF.source_module(Tsecond) === Rop
+    @test DF.target_module(Tsecond) === I12
+    @test sort(DF.nonzero_degrees(Tfirst)) == sort(collect(keys(DF.degree_dimensions(Tfirst))))
+    @test sort(DF.nonzero_degrees(Tsecond)) == sort(collect(keys(DF.degree_dimensions(Tsecond))))
+    @test TOA.source_module === DF.source_module
+    @test TOA.target_module === DF.target_module
+    @test TOA.nonzero_degrees === DF.nonzero_degrees
+    @test TOA.degree_dimensions === DF.degree_dimensions
+
+    B, i, p = direct_sum_with_split_sequence(S2, S1)
+    Rop1 = IR.pmodule_from_fringe(
+        one_by_one_fringe(Pop, FF.principal_upset(Pop, 1), FF.principal_downset(Pop, 1);
+                          scalar=one(K), field=field)
+    )
+    Bop, iop, pop = direct_sum_with_split_sequence(Rop, Rop1)
+    les_second = DF.ExtLongExactSequenceSecond(S1, S2, B, S1, i, p,
+                                               TO.DerivedFunctorOptions(maxdeg=1, model=:projective))
+    les_first = DF.ExtLongExactSequenceFirst(S2, B, S1, S1, i, p,
+                                             TO.DerivedFunctorOptions(maxdeg=1, model=:injective))
+    tor_les_second = DF.TorLongExactSequenceSecond(Rop, i, p,
+                                                   TO.DerivedFunctorOptions(maxdeg=1, model=:first))
+    tor_les_first = DF.TorLongExactSequenceFirst(S1, iop, pop,
+                                                 TO.DerivedFunctorOptions(maxdeg=1, model=:second))
+
+    dims_second = DF.sequence_dimensions(les_second, 0)
+    maps_second = DF.sequence_maps(les_second, 0)
+    entry_second = DF.sequence_entry(les_second, 0)
+    @test dims_second.A == DF.dim(les_second.EA, 0)
+    @test maps_second.i == les_second.iH[1]
+    @test entry_second.delta == les_second.delta[1]
+    @test TOA.sequence_dimensions(les_second, 0) == dims_second
+
+    dims_first = DF.sequence_dimensions(les_first, 0)
+    maps_first = DF.sequence_maps(les_first, 0)
+    entry_first = DF.sequence_entry(les_first, 0)
+    @test dims_first.C == DF.dim(les_first.EC, 0)
+    @test maps_first.p == les_first.pH[1]
+    @test entry_first.delta == les_first.delta[1]
+
+    tor_dims_second = DF.sequence_dimensions(tor_les_second, 0)
+    tor_maps_second = DF.sequence_maps(tor_les_second, 0)
+    tor_entry_second = DF.sequence_entry(tor_les_second, 0)
+    @test tor_dims_second.A == DF.dim(tor_les_second.TorA, 0)
+    @test tor_maps_second.i == tor_les_second.iH[1]
+    @test tor_entry_second.delta == tor_les_second.delta[1]
+
+    tor_dims_first = DF.sequence_dimensions(tor_les_first, 0)
+    tor_maps_first = DF.sequence_maps(tor_les_first, 0)
+    tor_entry_first = DF.sequence_entry(tor_les_first, 0)
+    @test tor_dims_first.A == DF.dim(tor_les_first.TorA, 0)
+    @test tor_maps_first.i == tor_les_first.iH[1]
+    @test tor_entry_first.delta == tor_les_first.delta[1]
+
+    ess = DF.ExtSpectralSequence(S1, S1; maxlen=1)
+    tss = DF.TorSpectralSequence(Rop, S1; maxlen=1)
+    @test DF.page_dimensions(ess, 2) == TO.ChainComplexes.page_dims_dict(ess, 2)
+    @test DF.page_dimensions(tss, 2) == TO.ChainComplexes.page_dims_dict(tss, 2)
+    @test DF.page_dimensions(tss; page=2) == DF.page_dimensions(tss, 2)
+    @test TOA.page_dimensions === DF.page_dimensions
+    @test DF.spectral_sequence_summary(tss).kind == :tor_spectral_sequence
+    @test DF.spectral_sequence_summary(ess).kind == :spectral_sequence
+
+    Aext = DF.ExtAlgebra(S1, TO.DerivedFunctorOptions(maxdeg=1))
+    Ator = DF.TorAlgebra(Tsecond)
+    @test DF.algebra_field(Aext) == field
+    @test DF.algebra_field(Ator) == field
+    @test DF.nonzero_degrees(Aext) == [t for t in DF.degree_range(Aext) if DF.dim(Aext, t) != 0]
+    @test DF.nonzero_degrees(Ator) == [t for t in DF.degree_range(Ator) if DF.dim(Ator.T, t) != 0]
+    @test length(DF.generator_degrees(Aext)) == sum(DF.dim(Aext, t) for t in DF.degree_range(Aext))
+    @test length(DF.generator_degrees(Ator)) == sum(DF.dim(Ator.T, t) for t in DF.degree_range(Ator))
+    @test TOA.generator_degrees === DF.generator_degrees
+    @test TOA.algebra_field === DF.algebra_field
+end
+
+@testset "DerivedFunctors summaries and validation helpers" begin
+    field = CM.QQField()
+    K = CM.coeff_type(field)
+    P = chain_poset(2)
+
+    S1 = IR.pmodule_from_fringe(
+        one_by_one_fringe(P, FF.principal_upset(P, 1), FF.principal_downset(P, 1);
+                          scalar=one(K), field=field)
+    )
+    I12 = IR.pmodule_from_fringe(
+        one_by_one_fringe(P, FF.principal_upset(P, 1), FF.principal_downset(P, 2);
+                          scalar=one(K), field=field)
+    )
+    Pop = FF.FinitePoset(transpose(FF.leq_matrix(P)); check=false)
+    Rop = IR.pmodule_from_fringe(
+        one_by_one_fringe(Pop, FF.principal_upset(Pop, 2), FF.principal_downset(Pop, 2);
+                          scalar=one(K), field=field)
+    )
+
+    resP = DF.projective_resolution(S1, TO.ResolutionOptions(maxlen=1))
+    resI = DF.injective_resolution(S1, TO.ResolutionOptions(maxlen=1))
+    H = DF.Hom(S1, I12)
+    Eproj = DF.Ext(resP, I12)
+    Euni = DF.ExtSpace(S1, I12, TO.DerivedFunctorOptions(maxdeg=1, model=:unified, canon=:projective))
+    Tfirst = DF.Tor(Rop, I12, TO.DerivedFunctorOptions(maxdeg=1, model=:first))
+    Tsecond = DF.Tor(Rop, I12, TO.DerivedFunctorOptions(maxdeg=1, model=:second))
+    Aext = DF.ExtAlgebra(S1, TO.DerivedFunctorOptions(maxdeg=1))
+
+    B, i, p = direct_sum_with_split_sequence(I12, S1)
+    les = DF.ExtLongExactSequenceSecond(S1, I12, B, S1, i, p,
+                                        TO.DerivedFunctorOptions(maxdeg=1, model=:projective))
+
+    DC = DF.ExtDoubleComplex(S1, I12; maxlen=1)
+    ess = DF.ExtSpectralSequence(S1, I12; maxlen=1)
+    tss = DF.TorSpectralSequence(Rop, I12; maxlen=1)
+
+    @test DF.resolution_summary(resP).kind == :projective_resolution
+    @test DF.resolution_summary(resI).kind == :injective_resolution
+    @test DF.hom_summary(H).kind == :hom_space
+    @test DF.ext_summary(Eproj).model == :projective
+    @test DF.ext_summary(Euni).model == :unified
+    @test DF.tor_summary(Tfirst).model == :first
+    @test DF.tor_summary(Tsecond).model == :second
+    @test DF.double_complex_summary(DC).kind == :derived_double_complex
+    @test DF.derived_les_summary(les).kind == :ext_long_exact_sequence_second
+    @test DF.algebra_summary(Aext).kind == :ext_algebra
+
+    @test DF.total_dimension(H) == DF.dim(H)
+    @test DF.total_dimension(Eproj) == sum(values(DF.degree_dimensions(Eproj)))
+    @test DF.total_dimension(Tfirst) == sum(values(DF.degree_dimensions(Tfirst)))
+    @test DF.total_dimension(Aext) == sum(DF.dim(Aext, t) for t in DF.degree_range(Aext))
+
+    repP = DF.check_projective_resolution(resP)
+    repI = DF.check_injective_resolution(resI)
+    repEss = DF.check_ext_spectral_sequence(ess)
+    repTss = DF.check_tor_spectral_sequence(tss)
+    repA = DF.check_ext_algebra(Aext)
+
+    @test repP.valid
+    @test repI.valid
+    @test repEss.valid
+    @test repTss.valid
+    @test repA.valid
+
+    wrapped = DF.derived_functor_validation_summary(repP)
+    @test wrapped isa DF.DerivedFunctorValidationSummary
+    @test occursin("DerivedFunctorValidationSummary", sprint(show, wrapped))
+    @test occursin("DerivedFunctorValidationSummary", sprint(show, MIME"text/plain"(), wrapped))
+
+    bad_dmat = copy(resP.d_mat)
+    bad_dmat[1] = spzeros(K, size(resP.d_mat[1], 1) + 1, size(resP.d_mat[1], 2))
+    bad_resP = DF.ProjectiveResolution(resP.M, resP.Pmods, resP.gens, resP.d_mor, bad_dmat, resP.aug)
+    bad_rep = DF.check_projective_resolution(bad_resP)
+    @test !bad_rep.valid
+    @test !isempty(bad_rep.issues)
+    @test_throws ArgumentError DF.check_projective_resolution(bad_resP; throw=true)
+
+    bad_A = DF.ExtAlgebra{K}(Aext.E, Dict((0, 0) => zeros(K, 1, 2)), nothing, Aext.tmin, Aext.tmax)
+    bad_arep = DF.check_ext_algebra(bad_A)
+    @test !bad_arep.valid
+    @test_throws ArgumentError DF.check_ext_algebra(bad_A; throw=true)
+
+    @test TOA.total_dimension === DF.total_dimension
+    @test TOA.hom_summary === DF.hom_summary
+    @test TOA.ext_summary === DF.ext_summary
+    @test TOA.tor_summary === DF.tor_summary
+    @test TOA.double_complex_summary === DF.double_complex_summary
+    @test TOA.derived_les_summary === DF.derived_les_summary
+    @test TOA.algebra_summary === DF.algebra_summary
+    @test TOA.check_projective_resolution === DF.check_projective_resolution
+    @test TOA.check_injective_resolution === DF.check_injective_resolution
+    @test TOA.check_ext_spectral_sequence === DF.check_ext_spectral_sequence
+    @test TOA.check_tor_spectral_sequence === DF.check_tor_spectral_sequence
+    @test TOA.check_ext_algebra === DF.check_ext_algebra
+    @test TOA.derived_functor_validation_summary === DF.derived_functor_validation_summary
+end
+
+@testset "DerivedFunctors describe/show wrapper surface" begin
+    field = CM.QQField()
+    K = CM.coeff_type(field)
+    P = chain_poset(2)
+
+    S1 = IR.pmodule_from_fringe(
+        one_by_one_fringe(P, FF.principal_upset(P, 1), FF.principal_downset(P, 1);
+                          scalar=one(K), field=field)
+    )
+    S2 = IR.pmodule_from_fringe(
+        one_by_one_fringe(P, FF.principal_upset(P, 2), FF.principal_downset(P, 2);
+                          scalar=one(K), field=field)
+    )
+    I12 = IR.pmodule_from_fringe(
+        one_by_one_fringe(P, FF.principal_upset(P, 1), FF.principal_downset(P, 2);
+                          scalar=one(K), field=field)
+    )
+    Pop = FF.FinitePoset(transpose(FF.leq_matrix(P)); check=false)
+    Rop = IR.pmodule_from_fringe(
+        one_by_one_fringe(Pop, FF.principal_upset(Pop, 2), FF.principal_downset(Pop, 2);
+                          scalar=one(K), field=field)
+    )
+    Rop1 = IR.pmodule_from_fringe(
+        one_by_one_fringe(Pop, FF.principal_upset(Pop, 1), FF.principal_downset(Pop, 1);
+                          scalar=one(K), field=field)
+    )
+
+    resP = DF.projective_resolution(S1, TO.ResolutionOptions(maxlen=1))
+    resI = DF.injective_resolution(S1, TO.ResolutionOptions(maxlen=1))
+    H = DF.Hom(S1, I12)
+    Eproj = DF.Ext(resP, I12)
+    Einj = DF.ExtInjective(S1, I12, TO.DerivedFunctorOptions(maxdeg=1, model=:injective))
+    Euni = DF.ExtSpace(S1, I12, TO.DerivedFunctorOptions(maxdeg=1, model=:unified, canon=:projective))
+    Tfirst = DF.Tor(Rop, I12, TO.DerivedFunctorOptions(maxdeg=1, model=:first))
+    Tsecond = DF.Tor(Rop, I12, TO.DerivedFunctorOptions(maxdeg=1, model=:second))
+    Aext = DF.ExtAlgebra(S1, TO.DerivedFunctorOptions(maxdeg=1))
+    DF.precompute!(Aext)
+    coverP = only(FF.cover_edges(P))
+    coverPop = only(FF.cover_edges(Pop))
+    S2alg = MD.PModule{K}(P, [0, 1], Dict{Tuple{Int,Int},Matrix{K}}(coverP => CM.zeros(field, 1, 0)); field=field)
+    P2op = MD.PModule{K}(Pop, [1, 1], Dict{Tuple{Int,Int},Matrix{K}}(coverPop => CM.ones(field, 1, 1)); field=field)
+    T0 = DF.Tor(P2op, S2alg, TO.DerivedFunctorOptions(maxdeg=0))
+    Ator = DF.TorAlgebra(T0)
+    DF.set_chain_product!(Ator, 0, 0, sparse(CM.ones(field, 1, 1)))
+    DF.multiplication_matrix(Ator, 0, 0)
+    ext_deg = first(DF.nonzero_degrees(Aext))
+    tor_deg = first(DF.nonzero_degrees(Ator))
+    ext_coords = zeros(K, DF.dim(Aext, ext_deg))
+    ext_coords[1] = one(K)
+    tor_coords = zeros(K, DF.dim(Ator, tor_deg))
+    tor_coords[1] = one(K)
+    xext = DF.element(Aext, ext_deg, ext_coords)
+    xtor = DF.element(Ator, tor_deg, tor_coords)
+
+    B, i, p = direct_sum_with_split_sequence(S2, S1)
+    Bop, iop, pop = direct_sum_with_split_sequence(Rop, Rop1)
+    les_second = DF.ExtLongExactSequenceSecond(S1, S2, B, S1, i, p,
+                                               TO.DerivedFunctorOptions(maxdeg=1, model=:projective))
+    les_first = DF.ExtLongExactSequenceFirst(S2, B, S1, S1, i, p,
+                                             TO.DerivedFunctorOptions(maxdeg=1, model=:injective))
+    tor_les_second = DF.TorLongExactSequenceSecond(Rop, i, p,
+                                                   TO.DerivedFunctorOptions(maxdeg=1, model=:first))
+    tor_les_first = DF.TorLongExactSequenceFirst(S1, iop, pop,
+                                                 TO.DerivedFunctorOptions(maxdeg=1, model=:second))
+    tss = DF.TorSpectralSequence(Rop, I12; maxlen=1)
+
+    @test TO.describe(resP).kind == :projective_resolution
+    @test TO.describe(resI).kind == :injective_resolution
+    @test TO.describe(H).kind == :hom_space
+    @test TO.describe(Eproj).model == :projective
+    @test TO.describe(Einj).model == :injective
+    @test TO.describe(Euni).model == :unified
+    @test TO.describe(Tfirst).model == :first
+    @test TO.describe(Tsecond).model == :second
+    @test TO.describe(Aext).kind == :ext_algebra
+    @test TO.describe(Ator).kind == :tor_algebra
+    @test TO.describe(xext).kind == :ext_element
+    @test TO.describe(xtor).kind == :tor_element
+    @test TO.describe(les_second).kind == :ext_long_exact_sequence_second
+    @test TO.describe(les_first).kind == :ext_long_exact_sequence_first
+    @test TO.describe(tor_les_second).kind == :tor_long_exact_sequence_second
+    @test TO.describe(tor_les_first).kind == :tor_long_exact_sequence_first
+    @test TO.describe(tss).kind == :tor_spectral_sequence
+
+    shown = (
+        ("ProjectiveResolution", resP),
+        ("InjectiveResolution", resI),
+        ("HomSpace", H),
+        ("ExtSpaceProjective", Eproj),
+        ("ExtSpaceInjective", Einj),
+        ("ExtSpace", Euni),
+        ("TorSpace", Tfirst),
+        ("TorSpaceSecond", Tsecond),
+        ("ExtAlgebra", Aext),
+        ("TorAlgebra", Ator),
+        ("ExtElement", xext),
+        ("TorElement", xtor),
+        ("ExtLongExactSequenceSecond", les_second),
+        ("ExtLongExactSequenceFirst", les_first),
+        ("TorLongExactSequenceSecond", tor_les_second),
+        ("TorLongExactSequenceFirst", tor_les_first),
+        ("TorSpectralSequence", tss),
+    )
+    for (name, obj) in shown
+        @test occursin(name, sprint(show, obj))
+        @test occursin(name, sprint(show, MIME"text/plain"(), obj))
+    end
+
+    @test DF.wrapped_spectral_sequence(tss) === tss.ss
+    @test DF.underlying_ext_space(Aext) === Aext.E
+    @test DF.underlying_tor_space(Ator) === Ator.T
+    @test !isempty(DF.cached_product_degrees(Aext))
+    @test (0, 0) in DF.cached_product_degrees(Ator)
+    @test DF.parent_algebra(xext) === Aext
+    @test DF.parent_algebra(xtor) === Ator
+    @test DF.element_degree(xext) == ext_deg
+    @test DF.element_degree(xtor) == tor_deg
+    @test DF.element_coordinates(xext) == ext_coords
+    @test DF.element_coordinates(xtor) == tor_coords
+    @test DF.coordinates(xext) == ext_coords
+    @test DF.coordinates(xtor) == tor_coords
+
+    good_tor_report = DF.check_tor_algebra(Ator)
+    @test good_tor_report.valid
+    @test good_tor_report.kind == :tor_algebra
+
+    bad_tor = DF.TorAlgebra{K}(
+        Ator.T,
+        Dict{Tuple{Int,Int},SparseMatrixCSC{K,Int}}(),
+        nothing,
+        Dict((0, 0) => zeros(K, 1, 2)),
+        nothing,
+    )
+    bad_tor_report = DF.check_tor_algebra(bad_tor)
+    @test !bad_tor_report.valid
+    @test !isempty(bad_tor_report.issues)
+    @test_throws ArgumentError DF.check_tor_algebra(bad_tor; throw=true)
+
+    @test TOA.wrapped_spectral_sequence === DF.wrapped_spectral_sequence
+    @test TOA.underlying_ext_space === DF.underlying_ext_space
+    @test TOA.underlying_tor_space === DF.underlying_tor_space
+    @test TOA.cached_product_degrees === DF.cached_product_degrees
+    @test TOA.parent_algebra === DF.parent_algebra
+    @test TOA.element_degree === DF.element_degree
+    @test TOA.element_coordinates === DF.element_coordinates
+    @test TOA.check_tor_algebra === DF.check_tor_algebra
+    @test TOA.ProjectiveResolution === DF.ProjectiveResolution
+    @test TOA.InjectiveResolution === DF.InjectiveResolution
+    @test TOA.HomSpace === DF.HomSpace
+    @test TOA.ExtSpaceProjective === DF.ExtSpaceProjective
+    @test TOA.ExtSpaceInjective === DF.ExtSpaceInjective
+    @test TOA.ExtSpace === DF.ExtSpace
+    @test TOA.TorSpace === DF.TorSpace
+    @test TOA.TorSpaceSecond === DF.TorSpaceSecond
+    @test TOA.ExtAlgebra === DF.ExtAlgebra
+    @test TOA.TorAlgebra === DF.TorAlgebra
+    @test TOA.ExtElement === DF.ExtElement
+    @test TOA.TorElement === DF.TorElement
+end
+
 @testset "Minimality diagnostics for projective/injective resolutions" begin
     with_fields(FIELDS_FULL) do field
         # Use a small poset where minimal resolutions are nontrivial.
@@ -457,7 +1265,7 @@ end
         )
 
         # Projective resolution should be minimal (and certified minimal by the checker).
-        resP = DF.projective_resolution(S1, PM.ResolutionOptions(maxlen=4))
+        resP = DF.projective_resolution(S1, TO.ResolutionOptions(maxlen=4))
         repP = DF.minimality_report(resP)
         @test repP.cover_ok
         @test repP.minimal
@@ -466,7 +1274,7 @@ end
         DF.assert_minimal(resP)
 
         # Passing ResolutionOptions(minimal=true, check=true) should succeed and return a minimal resolution.
-        resPmin = DF.projective_resolution(S1, PM.ResolutionOptions(maxlen=4, minimal=true, check=true))
+        resPmin = DF.projective_resolution(S1, TO.ResolutionOptions(maxlen=4, minimal=true, check=true))
         @test DF.is_minimal(resPmin)
 
         # Corrupt the resolution by inserting a diagonal coefficient in d^1 (degree 1 -> 0),
@@ -493,7 +1301,7 @@ end
         end
 
         # Injective resolution: also expected to be minimal for these constructions.
-        resI = DF.injective_resolution(S1, PM.ResolutionOptions(maxlen=4))
+        resI = DF.injective_resolution(S1, TO.ResolutionOptions(maxlen=4))
         repI = DF.minimality_report(resI)
         @test repI.hull_ok
         @test repI.minimal
@@ -501,7 +1309,7 @@ end
         @test DF.is_minimal(resI)
         DF.assert_minimal(resI)
 
-        resImin = DF.injective_resolution(S1, PM.ResolutionOptions(maxlen=4, minimal=true, check=true))
+        resImin = DF.injective_resolution(S1, TO.ResolutionOptions(maxlen=4, minimal=true, check=true))
         @test DF.is_minimal(resImin)
     end
 end
@@ -514,14 +1322,14 @@ end
         # Simple modules S1..S4 as fringe modules, then as poset-modules.
         Sm = Vector{MD.PModule{K}}(undef, P.n)
         for v in 1:P.n
-            Hv = one_by_one_fringe(P, FF.principal_upset(P, v), FF.principal_downset(P, v); scalar=one(K), field=field)
+            Hv = one_by_one_fringe(P, FF.principal_upset(P, v), FF.principal_downset(P, v), one(K); field=field)
             Sm[v] = IR.pmodule_from_fringe(Hv)
         end
         S1, S2, S3, S4 = Sm
 
         # Minimal projective resolution of S1 on the diamond should have:
         # P0 = P1, P1 = P2 oplus P3, P2 = P4.
-        res = DF.projective_resolution(S1, PM.ResolutionOptions(maxlen=2))
+        res = DF.projective_resolution(S1, TO.ResolutionOptions(maxlen=2))
         b = DF.betti(res)
 
         Btbl = DF.betti_table(res)
@@ -564,7 +1372,7 @@ end
         S1, S2, S3, S4 = Sm
 
         # Compute the target Ext space once so coordinates are comparable.
-        E14 = DF.Ext(S1, S4, PM.DerivedFunctorOptions(maxdeg=2))
+        E14 = DF.Ext(S1, S4, TO.DerivedFunctorOptions(maxdeg=2))
         if _is_real_field(field)
             # Numerical Ext over reals can introduce duplicated classes in this setup.
             @test DF.dim(E14, 2) >= 1
@@ -573,25 +1381,91 @@ end
         @test DF.dim(E14, 2) == 1
 
         # Via the chain 1 -> 2 -> 4
-        E24 = DF.Ext(S2, S4, PM.DerivedFunctorOptions(maxdeg=1))
-        E12 = DF.Ext(S1, S2, PM.DerivedFunctorOptions(maxdeg=2))  # needs tmax >= 2 because p+q = 2
+        E24 = DF.Ext(S2, S4, TO.DerivedFunctorOptions(maxdeg=1))
+        E12 = DF.Ext(S1, S2, TO.DerivedFunctorOptions(maxdeg=2))  # needs tmax >= 2 because p+q = 2
         @test DF.dim(E24, 1) == 1
         @test DF.dim(E12, 1) == 1
 
         beta = [c(1)]
         alpha = [c(1)]
-        _, coords_2 = PM.DerivedFunctors.yoneda_product(E24, 1, beta, E12, 1, alpha; ELN=E14)
+        _, coords_2 = TO.DerivedFunctors.yoneda_product(E24, 1, beta, E12, 1, alpha; ELN=E14)
         @test coords_2[1] != 0
 
         # Via the chain 1 -> 3 -> 4
-        E34 = DF.Ext(S3, S4, PM.DerivedFunctorOptions(maxdeg=1))
-        E13 = DF.Ext(S1, S3, PM.DerivedFunctorOptions(maxdeg=2))
-        _, coords_3 = PM.DerivedFunctors.yoneda_product(E34, 1, [c(1)], E13, 1, [c(1)]; ELN=E14)
+        E34 = DF.Ext(S3, S4, TO.DerivedFunctorOptions(maxdeg=1))
+        E13 = DF.Ext(S1, S3, TO.DerivedFunctorOptions(maxdeg=2))
+        _, coords_3 = TO.DerivedFunctors.yoneda_product(E34, 1, [c(1)], E13, 1, [c(1)]; ELN=E14)
         @test coords_3[1] != 0
 
         # In a 1-dimensional target, the two products must be proportional.
         # With our deterministic lifts/basis choices, they should agree up to sign.
         @test coords_2[1] == coords_3[1] || coords_2[1] == -coords_3[1]
+    end
+end
+
+@testset "Functoriality direct-map kernels parity" begin
+    field = CM.QQField()
+    K = CM.coeff_type(field)
+    c(x) = CM.coerce(field, x)
+
+    P = diamond_poset()
+    Sm = Vector{MD.PModule{K}}(undef, P.n)
+    for v in 1:P.n
+        Hv = one_by_one_fringe(P, FF.principal_upset(P, v), FF.principal_downset(P, v), one(K); field=field)
+        Sm[v] = IR.pmodule_from_fringe(Hv)
+    end
+    S1, S2, _, S4 = Sm
+
+    E14 = DF.Ext(S1, S4, TO.DerivedFunctorOptions(maxdeg=2, model=:projective))
+    A_off = DF.Functoriality._FUNCTORIALITY_USE_DIRECT_COEFF_TRIPLETS[]
+    M_off = DF.Functoriality._FUNCTORIALITY_USE_DIRECT_COEFF_MATVECS[]
+    C_off = DF.Functoriality._FUNCTORIALITY_USE_COEFF_PLAN_CACHE[]
+    T_off = DF.Functoriality._FUNCTORIALITY_DIRECT_COEFF_MIN_NNZ[]
+    Cc_off = DF.Functoriality._FUNCTORIALITY_DIRECT_COCYCLE_MIN_NNZ[]
+
+    Pop = FF.FinitePoset(transpose(FF.leq_matrix(P)); check=false)
+    RopH = one_by_one_fringe(Pop, FF.principal_upset(Pop, 2), FF.principal_downset(Pop, 2), one(K); field=field)
+    LH = one_by_one_fringe(P, FF.principal_upset(P, 1), FF.principal_downset(P, 1), one(K); field=field)
+    Rop = IR.pmodule_from_fringe(RopH)
+    L = IR.pmodule_from_fringe(LH)
+    T = DF.Tor(Rop, L, TO.DerivedFunctorOptions(maxdeg=1, model=:first))
+
+    try
+        DF.Functoriality._FUNCTORIALITY_USE_DIRECT_COEFF_TRIPLETS[] = false
+        DF.Functoriality._FUNCTORIALITY_USE_DIRECT_COEFF_MATVECS[] = false
+        DF.Functoriality._FUNCTORIALITY_USE_COEFF_PLAN_CACHE[] = false
+        DF.Functoriality._FUNCTORIALITY_DIRECT_COEFF_MIN_NNZ[] = typemax(Int)
+        DF.Functoriality._FUNCTORIALITY_DIRECT_COCYCLE_MIN_NNZ[] = typemax(Int)
+        ext_off = DF.ext_map_first(E14, E14, IR.id_morphism(S1); t=1)
+        tor_off = DF.tor_map_first(T, T, IR.id_morphism(Rop); s=1)
+        _, yoneda_off = DF.yoneda_product(
+            DF.Ext(S2, S4, TO.DerivedFunctorOptions(maxdeg=1, model=:projective)), 1, [c(1)],
+            DF.Ext(S1, S2, TO.DerivedFunctorOptions(maxdeg=2, model=:projective)), 1, [c(1)];
+            ELN=E14,
+        )
+
+        DF.Functoriality._FUNCTORIALITY_USE_DIRECT_COEFF_TRIPLETS[] = true
+        DF.Functoriality._FUNCTORIALITY_USE_DIRECT_COEFF_MATVECS[] = true
+        DF.Functoriality._FUNCTORIALITY_USE_COEFF_PLAN_CACHE[] = true
+        DF.Functoriality._FUNCTORIALITY_DIRECT_COEFF_MIN_NNZ[] = 0
+        DF.Functoriality._FUNCTORIALITY_DIRECT_COCYCLE_MIN_NNZ[] = 0
+        ext_on = DF.ext_map_first(E14, E14, IR.id_morphism(S1); t=1)
+        tor_on = DF.tor_map_first(T, T, IR.id_morphism(Rop); s=1)
+        _, yoneda_on = DF.yoneda_product(
+            DF.Ext(S2, S4, TO.DerivedFunctorOptions(maxdeg=1, model=:projective)), 1, [c(1)],
+            DF.Ext(S1, S2, TO.DerivedFunctorOptions(maxdeg=2, model=:projective)), 1, [c(1)];
+            ELN=E14,
+        )
+
+        @test ext_on == ext_off
+        @test tor_on == tor_off
+        @test yoneda_on == yoneda_off
+    finally
+        DF.Functoriality._FUNCTORIALITY_USE_DIRECT_COEFF_TRIPLETS[] = A_off
+        DF.Functoriality._FUNCTORIALITY_USE_DIRECT_COEFF_MATVECS[] = M_off
+        DF.Functoriality._FUNCTORIALITY_USE_COEFF_PLAN_CACHE[] = C_off
+        DF.Functoriality._FUNCTORIALITY_DIRECT_COEFF_MIN_NNZ[] = T_off
+        DF.Functoriality._FUNCTORIALITY_DIRECT_COCYCLE_MIN_NNZ[] = Cc_off
     end
 end
 
@@ -615,7 +1489,7 @@ end
         S123 = Sm[8]  # {1,2,3}
 
         # Target space: Ext^3(S0, S123) should be 1-dimensional for B3.
-        E03 = DF.Ext(S0, S123, PM.DerivedFunctorOptions(maxdeg=3))
+        E03 = DF.Ext(S0, S123, TO.DerivedFunctorOptions(maxdeg=3))
         if _is_real_field(field)
             @test DF.dim(E03, 3) >= 1
         else
@@ -624,9 +1498,9 @@ end
 
         # Degree-1 generators on the cover chain:
         #   {} -> {1} -> {1,2} -> {1,2,3}
-        E23 = DF.Ext(S12, S123, PM.DerivedFunctorOptions(maxdeg=3))
-        E12 = DF.Ext(S1,  S12, PM.DerivedFunctorOptions(maxdeg=3))
-        E01 = DF.Ext(S0,  S1,   PM.DerivedFunctorOptions(maxdeg=3))
+        E23 = DF.Ext(S12, S123, TO.DerivedFunctorOptions(maxdeg=3))
+        E12 = DF.Ext(S1,  S12, TO.DerivedFunctorOptions(maxdeg=3))
+        E01 = DF.Ext(S0,  S1,   TO.DerivedFunctorOptions(maxdeg=3))
 
         if _is_real_field(field)
             @test DF.dim(E23, 1) >= 1
@@ -639,8 +1513,8 @@ end
         end
 
         # Intermediate targets in degree 2 (also 1-dimensional for this choice).
-        E13 = DF.Ext(S1,  S123, PM.DerivedFunctorOptions(maxdeg=3))
-        E02 = DF.Ext(S0,  S12, PM.DerivedFunctorOptions(maxdeg=3))
+        E13 = DF.Ext(S1,  S123, TO.DerivedFunctorOptions(maxdeg=3))
+        E02 = DF.Ext(S0,  S12, TO.DerivedFunctorOptions(maxdeg=3))
         if _is_real_field(field)
             @test DF.dim(E13, 2) >= 1
             @test DF.dim(E02, 2) >= 1
@@ -653,12 +1527,12 @@ end
         end
 
         # Left bracketing: (e23 * e12) * e01
-        _, x = PM.DerivedFunctors.yoneda_product(E23, 1, [c(1)], E12, 1, [c(1)]; ELN=E13)  # x in Ext^2(S1,S123)
-        _, left = PM.DerivedFunctors.yoneda_product(E13, 2, x, E01, 1, [c(1)]; ELN=E03)
+        _, x = TO.DerivedFunctors.yoneda_product(E23, 1, [c(1)], E12, 1, [c(1)]; ELN=E13)  # x in Ext^2(S1,S123)
+        _, left = TO.DerivedFunctors.yoneda_product(E13, 2, x, E01, 1, [c(1)]; ELN=E03)
 
         # Right bracketing: e23 * (e12 * e01)
-        _, y = PM.DerivedFunctors.yoneda_product(E12, 1, [c(1)], E01, 1, [c(1)]; ELN=E02)  # y in Ext^2(S0,S12)
-        _, right = PM.DerivedFunctors.yoneda_product(E23, 1, [c(1)], E02, 2, y; ELN=E03)
+        _, y = TO.DerivedFunctors.yoneda_product(E12, 1, [c(1)], E01, 1, [c(1)]; ELN=E02)  # y in Ext^2(S0,S12)
+        _, right = TO.DerivedFunctors.yoneda_product(E23, 1, [c(1)], E02, 2, y; ELN=E03)
 
         # Nontriviality + associativity up to sign in a 1-dimensional target.
         @test left[1] != 0
@@ -691,7 +1565,7 @@ end
 
         # We test delta^2 : Ext^2(M,C) -> Ext^3(M,A), so we need the resolution through degree t+1 = 3.
         t = 2
-        resM = DF.projective_resolution(S1, PM.ResolutionOptions(maxlen=t+1))   # i.e. maxlen=3
+        resM = DF.projective_resolution(S1, TO.ResolutionOptions(maxlen=t+1))   # i.e. maxlen=3
         EMA = DF.Ext(resM, A)
         EMB = DF.Ext(resM, B)
         EMC = DF.Ext(resM, C)
@@ -712,10 +1586,10 @@ end
         C1 = S2
         B1, i1, p1 = direct_sum_with_split_sequence(A1, C1)
 
-        resN = DF.injective_resolution(S4, PM.ResolutionOptions(maxlen=2))
-        EA = PM.ExtInjective(A1, resN)
-        EB = PM.ExtInjective(B1, resN)
-        EC = PM.ExtInjective(C1, resN)
+        resN = DF.injective_resolution(S4, TO.ResolutionOptions(maxlen=2))
+        EA = TO.ExtInjective(A1, resN)
+        EB = TO.ExtInjective(B1, resN)
+        EC = TO.ExtInjective(C1, resN)
 
         delta1 = DF.connecting_hom_first(EA, EB, EC, i1, p1; t=1)
         if _is_real_field(field)
@@ -723,6 +1597,468 @@ end
         else
             @test all(delta1 .== 0)
         end
+    end
+end
+
+@testset "DerivedFunctors support-plan and Hom-workspace parity" begin
+    field = CM.QQField()
+    K = CM.coeff_type(field)
+    Q = chain_poset(4)
+
+    Sm = Vector{MD.PModule{K}}(undef, Q.n)
+    for v in 1:Q.n
+        Hv = one_by_one_fringe(Q, FF.principal_upset(Q, v), FF.principal_downset(Q, v);
+                               scalar=one(K), field=field)
+        Sm[v] = IR.pmodule_from_fringe(Hv)
+    end
+    S1, S2, S3, S4 = Sm
+
+    resS1 = DF.projective_resolution(S1, TO.ResolutionOptions(maxlen=3))
+    A = S4
+    C = S3
+    B, i, p = direct_sum_with_split_sequence(A, C)
+    EMA = DF.Ext(resS1, A)
+    EMB = DF.Ext(resS1, B)
+    EMC = DF.Ext(resS1, C)
+
+    A1 = S3
+    C1 = S2
+    B1, i1, p1 = direct_sum_with_split_sequence(A1, C1)
+    resN = DF.injective_resolution(S4, TO.ResolutionOptions(maxlen=2))
+    EA = TO.ExtInjective(A1, resN)
+    EB = TO.ExtInjective(B1, resN)
+    EC = TO.ExtInjective(C1, resN)
+
+    old_support = DF.Functoriality._FUNCTORIALITY_USE_SUPPORT_SOLVE_PLANS[]
+    old_hom_ws = DF.Functoriality._FUNCTORIALITY_USE_HOM_WORKSPACES[]
+    old_inj_downset_cache = DF.Resolutions._RESOLUTIONS_USE_INJECTIVE_DOWNSET_SYSTEM_CACHE[]
+    old_inj_downset_solve_plan = DF.Resolutions._RESOLUTIONS_USE_INJECTIVE_DOWNSET_SOLVE_PLAN_CACHE[]
+    old_hom_solve_cache = DF.Functoriality._FUNCTORIALITY_USE_HOM_SOLVE_WORKSPACE_CACHE[]
+    old_hom_basis_plan = DF.Functoriality._FUNCTORIALITY_USE_HOM_BASIS_SOLVE_PLAN_CACHE[]
+    old_proj_lift_cache = DF.Resolutions._RESOLUTIONS_USE_PROJECTIVE_LIFT_STRUCTURE_CACHE[]
+    try
+        DF.Functoriality._FUNCTORIALITY_USE_SUPPORT_SOLVE_PLANS[] = false
+        DF.Functoriality._FUNCTORIALITY_USE_HOM_WORKSPACES[] = false
+        DF.Resolutions._RESOLUTIONS_USE_INJECTIVE_DOWNSET_SYSTEM_CACHE[] = false
+        DF.Resolutions._RESOLUTIONS_USE_INJECTIVE_DOWNSET_SOLVE_PLAN_CACHE[] = false
+        DF.Functoriality._FUNCTORIALITY_USE_HOM_SOLVE_WORKSPACE_CACHE[] = false
+        DF.Functoriality._FUNCTORIALITY_USE_HOM_BASIS_SOLVE_PLAN_CACHE[] = false
+        DF.Resolutions._RESOLUTIONS_USE_PROJECTIVE_LIFT_STRUCTURE_CACHE[] = false
+        lift_off = DF.Functoriality._lift_pmodule_map_to_projective_resolution_chainmap_coeff(
+            resS1, resS1, IR.id_morphism(S1); upto=2
+        )
+        delta_off = DF.connecting_hom(EMA, EMB, EMC, i, p; t=2)
+        delta_first_off = DF.connecting_hom_first(EA, EB, EC, i1, p1; t=1)
+        ext_first_off = DF.ext_map_first(EA, EB, i1; t=1)
+        ext_second_off = DF.ext_map_second(EC, EC, IR.id_morphism(S4); t=1)
+        les_first_off = DF.ExtLongExactSequenceFirst(A1, B1, C1, S4, i1, p1,
+                                                     TO.DerivedFunctorOptions(maxdeg=1, model=:injective))
+
+        DF.Functoriality._FUNCTORIALITY_USE_SUPPORT_SOLVE_PLANS[] = true
+        DF.Functoriality._FUNCTORIALITY_USE_HOM_WORKSPACES[] = true
+        DF.Resolutions._RESOLUTIONS_USE_INJECTIVE_DOWNSET_SYSTEM_CACHE[] = true
+        DF.Resolutions._RESOLUTIONS_USE_INJECTIVE_DOWNSET_SOLVE_PLAN_CACHE[] = true
+        DF.Functoriality._FUNCTORIALITY_USE_HOM_SOLVE_WORKSPACE_CACHE[] = true
+        DF.Functoriality._FUNCTORIALITY_USE_HOM_BASIS_SOLVE_PLAN_CACHE[] = true
+        DF.Resolutions._RESOLUTIONS_USE_PROJECTIVE_LIFT_STRUCTURE_CACHE[] = true
+        lift_on = DF.Functoriality._lift_pmodule_map_to_projective_resolution_chainmap_coeff(
+            resS1, resS1, IR.id_morphism(S1); upto=2
+        )
+        delta_on = DF.connecting_hom(EMA, EMB, EMC, i, p; t=2)
+        delta_first_on = DF.connecting_hom_first(EA, EB, EC, i1, p1; t=1)
+        ext_first_on = DF.ext_map_first(EA, EB, i1; t=1)
+        ext_second_on = DF.ext_map_second(EC, EC, IR.id_morphism(S4); t=1)
+        les_first_on = DF.ExtLongExactSequenceFirst(A1, B1, C1, S4, i1, p1,
+                                                    TO.DerivedFunctorOptions(maxdeg=1, model=:injective))
+
+        @test length(lift_on) == length(lift_off)
+        @test all(lift_on[k] == lift_off[k] for k in eachindex(lift_on))
+        @test delta_on == delta_off
+        @test delta_first_on == delta_first_off
+        @test ext_first_on == ext_first_off
+        @test ext_second_on == ext_second_off
+        @test les_first_on.pH == les_first_off.pH
+        @test les_first_on.iH == les_first_off.iH
+        @test les_first_on.delta == les_first_off.delta
+    finally
+        DF.Functoriality._FUNCTORIALITY_USE_SUPPORT_SOLVE_PLANS[] = old_support
+        DF.Functoriality._FUNCTORIALITY_USE_HOM_WORKSPACES[] = old_hom_ws
+        DF.Resolutions._RESOLUTIONS_USE_INJECTIVE_DOWNSET_SYSTEM_CACHE[] = old_inj_downset_cache
+        DF.Resolutions._RESOLUTIONS_USE_INJECTIVE_DOWNSET_SOLVE_PLAN_CACHE[] = old_inj_downset_solve_plan
+        DF.Functoriality._FUNCTORIALITY_USE_HOM_SOLVE_WORKSPACE_CACHE[] = old_hom_solve_cache
+        DF.Functoriality._FUNCTORIALITY_USE_HOM_BASIS_SOLVE_PLAN_CACHE[] = old_hom_basis_plan
+        DF.Resolutions._RESOLUTIONS_USE_PROJECTIVE_LIFT_STRUCTURE_CACHE[] = old_proj_lift_cache
+    end
+end
+
+@testset "Projective lift identity regression on grid direct sum" begin
+    field = CM.QQField()
+    K = CM.coeff_type(field)
+
+    function dense_grid_poset(nx::Int, ny::Int)
+        n = nx * ny
+        rel = falses(n, n)
+        @inbounds for y1 in 1:ny, x1 in 1:nx
+            i = x1 + (y1 - 1) * nx
+            for y2 in y1:ny, x2 in x1:nx
+                j = x2 + (y2 - 1) * nx
+                rel[i, j] = true
+            end
+        end
+        return FF.FinitePoset(rel; check=false)
+    end
+
+    @inline grid2_index(row::Int, col::Int) = row + (col - 1) * 2
+
+    function interval_module(P, lo::Int, hi::Int)
+        H = FF.one_by_one_fringe(
+            P,
+            FF.principal_upset(P, lo),
+            FF.principal_downset(P, hi),
+            one(K);
+            field=field,
+        )
+        return IR.pmodule_from_fringe(H)
+    end
+
+    function sum_modules(mods)
+        M = mods[1]
+        for i in 2:length(mods)
+            M = MD.direct_sum(M, mods[i])
+        end
+        return M
+    end
+
+    function grid_module(Q; variant::Int)
+        m = div(FF.nvertices(Q), 2)
+        specs = variant == 1 ? [
+            (grid2_index(1, 1), grid2_index(2, m)),
+            (grid2_index(1, 1), grid2_index(1, m)),
+            (grid2_index(2, 1), grid2_index(2, m)),
+            (grid2_index(1, 2), grid2_index(2, max(2, m - 1))),
+        ] : [
+            (grid2_index(1, 1), grid2_index(2, m)),
+            (grid2_index(1, max(1, cld(m, 2))), grid2_index(2, m)),
+            (grid2_index(1, 2), grid2_index(1, m)),
+            (grid2_index(2, 2), grid2_index(2, max(2, m - 1))),
+        ]
+        return sum_modules([interval_module(Q, lo, hi) for (lo, hi) in specs])
+    end
+
+    Q = dense_grid_poset(2, 6)
+    A = grid_module(Q; variant=1)
+    B = grid_module(Q; variant=2)
+    S = MD.direct_sum(A, B)
+    idS = MD.id_morphism(S)
+    res = DF.projective_resolution(S, OPT.ResolutionOptions(maxlen=2); threads=false)
+    res_alt = DF.projective_resolution(S, OPT.ResolutionOptions(maxlen=2); threads=false)
+
+    lift = DF.Functoriality.lift_chainmap(res, res, idS; maxlen=2)
+    @test length(lift) == 3
+    @test all(size(lift[k]) == (length(res.gens[k]), length(res.gens[k])) for k in eachindex(lift))
+    for k in eachindex(lift)
+        n = length(res.gens[k])
+        if n == 0
+            @test nnz(lift[k]) == 0
+        else
+            idx = collect(1:n)
+            expect = sparse(idx, idx, fill(one(K), n), n, n)
+            @test lift[k] == expect
+        end
+    end
+
+    lift_alt = DF.Functoriality.lift_chainmap(res, res_alt, idS; maxlen=2)
+    @test length(lift_alt) == 3
+    phi0 = TO.ChangeOfPosets._pmorphism_from_upset_coeff(
+        res.Pmods[1], res_alt.Pmods[1], res.gens[1], res_alt.gens[1], lift_alt[1]
+    )
+    lhs0 = DF.compose(res_alt.aug, phi0)
+    rhs0 = DF.compose(idS, res.aug)
+    @test all(lhs0.comps[u] == rhs0.comps[u] for u in eachindex(lhs0.comps))
+    phi_prev = phi0
+    for k in 1:2
+        phik = TO.ChangeOfPosets._pmorphism_from_upset_coeff(
+            res.Pmods[k + 1], res_alt.Pmods[k + 1], res.gens[k + 1], res_alt.gens[k + 1], lift_alt[k + 1]
+        )
+        lhsk = DF.compose(res_alt.d_mor[k], phik)
+        rhsk = DF.compose(phi_prev, res.d_mor[k])
+        @test all(lhsk.comps[u] == rhsk.comps[u] for u in eachindex(lhsk.comps))
+        phi_prev = phik
+    end
+
+    P = chain_poset(3)
+    pi_of_q = Vector{Int}(undef, FF.nvertices(Q))
+    @inbounds for col in 1:6
+        p = min(3, max(1, cld(3 * col, 6)))
+        pi_of_q[grid2_index(1, col)] = p
+        pi_of_q[grid2_index(2, col)] = p
+    end
+    pi = TO.Encoding.EncodingMap(Q, P, pi_of_q)
+
+    F = TO.ChangeOfPosets.pushforward_left_complex(
+        pi,
+        idS,
+        OPT.DerivedFunctorOptions(maxdeg=1);
+        check=true,
+        res_dom=res,
+        res_cod=res,
+        threads=false,
+    )
+    @test length(F.comps) == 3
+    @test F.tmin == -2
+    @test F.tmax == 0
+    @test all(F.comps[i].dom.dims == F.comps[i].cod.dims for i in eachindex(F.comps))
+end
+
+@testset "ChangeOfPosets derived caches reuse cochain maps and induced morphisms" begin
+    field = CM.QQField()
+    K = CM.coeff_type(field)
+    Q = chain_poset(4)
+    P = chain_poset(2)
+    pi = TO.Encoding.EncodingMap(Q, P, [1, 1, 2, 2])
+    M = IR.pmodule_from_fringe(one_by_one_fringe(Q,
+                                                 FF.principal_upset(Q, 2),
+                                                 FF.principal_downset(Q, 4);
+                                                 scalar=one(K), field=field))
+    idM = MD.id_morphism(M)
+    df = OPT.DerivedFunctorOptions(maxdeg=1)
+    resP = DF.projective_resolution(M, OPT.ResolutionOptions(maxlen=2))
+    resI = DF.injective_resolution(M, OPT.ResolutionOptions(maxlen=2))
+    sc = CM.SessionCache()
+
+    F1 = TO.ChangeOfPosets.pushforward_left_complex(
+        pi,
+        idM,
+        df;
+        check=true,
+        res_dom=resP,
+        res_cod=resP,
+        threads=false,
+        session_cache=sc,
+    )
+    F2 = TO.ChangeOfPosets.pushforward_left_complex(
+        pi,
+        idM,
+        df;
+        check=true,
+        res_dom=resP,
+        res_cod=resP,
+        threads=false,
+        session_cache=sc,
+    )
+    @test F1 === F2
+
+    L1 = TO.ChangeOfPosets.Lpushforward_left(
+        pi,
+        idM,
+        df;
+        check=true,
+        res_dom=resP,
+        res_cod=resP,
+        threads=false,
+        session_cache=sc,
+    )
+    L2 = TO.ChangeOfPosets.Lpushforward_left(
+        pi,
+        idM,
+        df;
+        check=true,
+        res_dom=resP,
+        res_cod=resP,
+        threads=false,
+        session_cache=sc,
+    )
+    @test L1 === L2
+
+    G1 = TO.ChangeOfPosets.pushforward_right_complex(
+        pi,
+        idM,
+        df;
+        check=true,
+        res_dom=resI,
+        res_cod=resI,
+        threads=false,
+        session_cache=sc,
+    )
+    G2 = TO.ChangeOfPosets.pushforward_right_complex(
+        pi,
+        idM,
+        df;
+        check=true,
+        res_dom=resI,
+        res_cod=resI,
+        threads=false,
+        session_cache=sc,
+    )
+    @test G1 === G2
+
+    R1 = TO.ChangeOfPosets.Rpushforward_right(
+        pi,
+        idM,
+        df;
+        check=true,
+        res_dom=resI,
+        res_cod=resI,
+        threads=false,
+        session_cache=sc,
+    )
+    R2 = TO.ChangeOfPosets.Rpushforward_right(
+        pi,
+        idM,
+        df;
+        check=true,
+        res_dom=resI,
+        res_cod=resI,
+        threads=false,
+        session_cache=sc,
+    )
+    @test R1 === R2
+end
+
+@testset "ChangeOfPosets derived coefficient fast path parity" begin
+    field = CM.QQField()
+    K = CM.coeff_type(field)
+    Q = chain_poset(4)
+    P = chain_poset(2)
+    pi = TO.Encoding.EncodingMap(Q, P, [1, 1, 2, 2])
+    M = IR.pmodule_from_fringe(one_by_one_fringe(Q,
+                                                 FF.principal_upset(Q, 2),
+                                                 FF.principal_downset(Q, 4);
+                                                 scalar=one(K), field=field))
+
+    function _scalar_id_map(M::MD.PModule{K}, a::K) where {K}
+        comps = Matrix{K}[]
+        for d in M.dims
+            A = zeros(K, d, d)
+            for i in 1:d
+                A[i, i] = a
+            end
+            push!(comps, A)
+        end
+        return MD.PMorphism(M, M, comps)
+    end
+
+    function _same_pmodule_morphism(f::MD.PMorphism, g::MD.PMorphism)
+        @test f.dom.dims == g.dom.dims
+        @test f.cod.dims == g.cod.dims
+        @test length(f.comps) == length(g.comps)
+        for u in eachindex(f.comps)
+            @test Matrix(f.comps[u]) == Matrix(g.comps[u])
+        end
+    end
+
+    function _same_cochain_map(F::CC.ModuleCochainMap, G::CC.ModuleCochainMap)
+        @test F.tmin == G.tmin
+        @test F.tmax == G.tmax
+        @test [T.dims for T in F.C.terms] == [T.dims for T in G.C.terms]
+        @test [T.dims for T in F.D.terms] == [T.dims for T in G.D.terms]
+        @test length(F.comps) == length(G.comps)
+        for i in eachindex(F.comps)
+            _same_pmodule_morphism(F.comps[i], G.comps[i])
+        end
+    end
+
+    f = _scalar_id_map(M, K(2))
+    fid = MD.id_morphism(M)
+    df = OPT.DerivedFunctorOptions(maxdeg=1)
+    resP = DF.projective_resolution(M, OPT.ResolutionOptions(maxlen=2))
+    resI = DF.injective_resolution(M, OPT.ResolutionOptions(maxlen=2))
+
+    old_left_fast = TO.ChangeOfPosets._CHANGE_OF_POSETS_USE_DERIVED_LEFT_COEFF_FASTPATH[]
+    old_right_fast = TO.ChangeOfPosets._CHANGE_OF_POSETS_USE_DERIVED_RIGHT_COEFF_FASTPATH[]
+    old_left_plan_cache = TO.ChangeOfPosets._CHANGE_OF_POSETS_USE_LEFT_DERIVED_COEFF_PLAN_CACHE[]
+    old_left_diffs = TO.ChangeOfPosets._CHANGE_OF_POSETS_USE_LEFT_DERIVED_DIFFS_FROM_DATA[]
+    old_left_cohom = TO.ChangeOfPosets._CHANGE_OF_POSETS_USE_LEFT_DERIVED_COHOMOLOGY_SHORTCUT[]
+    old_right_plan_cache = TO.ChangeOfPosets._CHANGE_OF_POSETS_USE_RIGHT_DERIVED_COEFF_PLAN_CACHE[]
+    old_right_diffs = TO.ChangeOfPosets._CHANGE_OF_POSETS_USE_RIGHT_DERIVED_DIFFS_FROM_DATA[]
+    old_right_matrix_recur = TO.ChangeOfPosets._CHANGE_OF_POSETS_USE_RIGHT_DERIVED_COEFF_MATRIX_RECURRENCE[]
+    old_right_shared = TO.ChangeOfPosets._CHANGE_OF_POSETS_USE_RIGHT_DERIVED_SHARED_RESOLUTION_FASTPATH[]
+    old_right_identity = TO.ChangeOfPosets._CHANGE_OF_POSETS_USE_RIGHT_DERIVED_IDENTITY_MAP_FASTPATH[]
+    try
+        TO.ChangeOfPosets._CHANGE_OF_POSETS_USE_DERIVED_LEFT_COEFF_FASTPATH[] = false
+        TO.ChangeOfPosets._CHANGE_OF_POSETS_USE_DERIVED_RIGHT_COEFF_FASTPATH[] = false
+        TO.ChangeOfPosets._CHANGE_OF_POSETS_USE_LEFT_DERIVED_COEFF_PLAN_CACHE[] = false
+        TO.ChangeOfPosets._CHANGE_OF_POSETS_USE_LEFT_DERIVED_DIFFS_FROM_DATA[] = false
+        TO.ChangeOfPosets._CHANGE_OF_POSETS_USE_LEFT_DERIVED_COHOMOLOGY_SHORTCUT[] = false
+        TO.ChangeOfPosets._CHANGE_OF_POSETS_USE_RIGHT_DERIVED_COEFF_PLAN_CACHE[] = false
+        TO.ChangeOfPosets._CHANGE_OF_POSETS_USE_RIGHT_DERIVED_DIFFS_FROM_DATA[] = false
+        TO.ChangeOfPosets._CHANGE_OF_POSETS_USE_RIGHT_DERIVED_COEFF_MATRIX_RECURRENCE[] = false
+        TO.ChangeOfPosets._CHANGE_OF_POSETS_USE_RIGHT_DERIVED_SHARED_RESOLUTION_FASTPATH[] = false
+        TO.ChangeOfPosets._CHANGE_OF_POSETS_USE_RIGHT_DERIVED_IDENTITY_MAP_FASTPATH[] = false
+        Lcold = TO.ChangeOfPosets.pushforward_left_complex(
+            pi, f, df; check=true, res_dom=resP, res_cod=resP, threads=false, session_cache=nothing
+        )
+        Rcold = TO.ChangeOfPosets.pushforward_right_complex(
+            pi, f, df; check=true, res_dom=resI, res_cod=resI, threads=false, session_cache=nothing
+        )
+        Rid_cold = TO.ChangeOfPosets.pushforward_right_complex(
+            pi, MD.id_morphism(M), df; check=true, res_dom=resI, res_cod=resI, threads=false, session_cache=nothing
+        )
+        Lvec_cold = TO.ChangeOfPosets.Lpushforward_left(
+            pi, f, df; check=true, res_dom=resP, res_cod=resP, threads=false, session_cache=nothing
+        )
+        Rvec_cold = TO.ChangeOfPosets.Rpushforward_right(
+            pi, f, df; check=true, res_dom=resI, res_cod=resI, threads=false, session_cache=nothing
+        )
+        Rvec_id_cold = TO.ChangeOfPosets.Rpushforward_right(
+            pi, fid, df; check=true, res_dom=resI, res_cod=resI, threads=false, session_cache=nothing
+        )
+
+        TO.ChangeOfPosets._CHANGE_OF_POSETS_USE_DERIVED_LEFT_COEFF_FASTPATH[] = true
+        TO.ChangeOfPosets._CHANGE_OF_POSETS_USE_DERIVED_RIGHT_COEFF_FASTPATH[] = true
+        TO.ChangeOfPosets._CHANGE_OF_POSETS_USE_LEFT_DERIVED_COEFF_PLAN_CACHE[] = true
+        TO.ChangeOfPosets._CHANGE_OF_POSETS_USE_LEFT_DERIVED_DIFFS_FROM_DATA[] = true
+        TO.ChangeOfPosets._CHANGE_OF_POSETS_USE_LEFT_DERIVED_COHOMOLOGY_SHORTCUT[] = true
+        TO.ChangeOfPosets._CHANGE_OF_POSETS_USE_RIGHT_DERIVED_COEFF_PLAN_CACHE[] = true
+        TO.ChangeOfPosets._CHANGE_OF_POSETS_USE_RIGHT_DERIVED_DIFFS_FROM_DATA[] = true
+        TO.ChangeOfPosets._CHANGE_OF_POSETS_USE_RIGHT_DERIVED_COEFF_MATRIX_RECURRENCE[] = true
+        TO.ChangeOfPosets._CHANGE_OF_POSETS_USE_RIGHT_DERIVED_SHARED_RESOLUTION_FASTPATH[] = true
+        TO.ChangeOfPosets._CHANGE_OF_POSETS_USE_RIGHT_DERIVED_IDENTITY_MAP_FASTPATH[] = true
+        Lfast = TO.ChangeOfPosets.pushforward_left_complex(
+            pi, f, df; check=true, res_dom=resP, res_cod=resP, threads=false, session_cache=nothing
+        )
+        Rfast = TO.ChangeOfPosets.pushforward_right_complex(
+            pi, f, df; check=true, res_dom=resI, res_cod=resI, threads=false, session_cache=nothing
+        )
+        Rid_fast = TO.ChangeOfPosets.pushforward_right_complex(
+            pi, MD.id_morphism(M), df; check=true, res_dom=resI, res_cod=resI, threads=false, session_cache=nothing
+        )
+        Lvec_fast = TO.ChangeOfPosets.Lpushforward_left(
+            pi, f, df; check=true, res_dom=resP, res_cod=resP, threads=false, session_cache=nothing
+        )
+        Rvec_fast = TO.ChangeOfPosets.Rpushforward_right(
+            pi, f, df; check=true, res_dom=resI, res_cod=resI, threads=false, session_cache=nothing
+        )
+        Rvec_id_fast = TO.ChangeOfPosets.Rpushforward_right(
+            pi, fid, df; check=true, res_dom=resI, res_cod=resI, threads=false, session_cache=nothing
+        )
+
+        _same_cochain_map(Lcold, Lfast)
+        _same_cochain_map(Rcold, Rfast)
+        _same_cochain_map(Rid_cold, Rid_fast)
+        @test length(Lvec_cold) == length(Lvec_fast)
+        @test length(Rvec_cold) == length(Rvec_fast)
+        @test length(Rvec_id_cold) == length(Rvec_id_fast)
+        for i in eachindex(Lvec_cold)
+            _same_pmodule_morphism(Lvec_cold[i], Lvec_fast[i])
+        end
+        for i in eachindex(Rvec_cold)
+            _same_pmodule_morphism(Rvec_cold[i], Rvec_fast[i])
+        end
+        for i in eachindex(Rvec_id_cold)
+            _same_pmodule_morphism(Rvec_id_cold[i], Rvec_id_fast[i])
+        end
+    finally
+        TO.ChangeOfPosets._CHANGE_OF_POSETS_USE_DERIVED_LEFT_COEFF_FASTPATH[] = old_left_fast
+        TO.ChangeOfPosets._CHANGE_OF_POSETS_USE_DERIVED_RIGHT_COEFF_FASTPATH[] = old_right_fast
+        TO.ChangeOfPosets._CHANGE_OF_POSETS_USE_LEFT_DERIVED_COEFF_PLAN_CACHE[] = old_left_plan_cache
+        TO.ChangeOfPosets._CHANGE_OF_POSETS_USE_LEFT_DERIVED_DIFFS_FROM_DATA[] = old_left_diffs
+        TO.ChangeOfPosets._CHANGE_OF_POSETS_USE_LEFT_DERIVED_COHOMOLOGY_SHORTCUT[] = old_left_cohom
+        TO.ChangeOfPosets._CHANGE_OF_POSETS_USE_RIGHT_DERIVED_COEFF_PLAN_CACHE[] = old_right_plan_cache
+        TO.ChangeOfPosets._CHANGE_OF_POSETS_USE_RIGHT_DERIVED_DIFFS_FROM_DATA[] = old_right_diffs
+        TO.ChangeOfPosets._CHANGE_OF_POSETS_USE_RIGHT_DERIVED_COEFF_MATRIX_RECURRENCE[] = old_right_matrix_recur
+        TO.ChangeOfPosets._CHANGE_OF_POSETS_USE_RIGHT_DERIVED_SHARED_RESOLUTION_FASTPATH[] = old_right_shared
+        TO.ChangeOfPosets._CHANGE_OF_POSETS_USE_RIGHT_DERIVED_IDENTITY_MAP_FASTPATH[] = old_right_identity
     end
 end
 
@@ -750,14 +2086,14 @@ end
 
         # Fix M = S1. Then delta^0: Hom(S1,S1) -> Ext^1(S1,S2) sends id to the extension class,
         # so it must be nonzero (hence rank 1, since both sides are 1-dimensional).
-        resM = DF.projective_resolution(S1, PM.ResolutionOptions(maxlen=2))
+        resM = DF.projective_resolution(S1, TO.ResolutionOptions(maxlen=2))
         EMA = DF.Ext(resM, S2)
         EMB = DF.Ext(resM, I12)
         EMC = DF.Ext(resM, S1)
         delta0 = DF.connecting_hom(EMA, EMB, EMC, i, p; t=0)
 
         # The packaged long exact sequence should expose the same delta^0.
-        les = PM.ExtLongExactSequenceSecond(S1, S2, I12, S1, i, p, PM.DerivedFunctorOptions(maxdeg=0))
+        les = TO.ExtLongExactSequenceSecond(S1, S2, I12, S1, i, p, TO.DerivedFunctorOptions(maxdeg=0))
         if _is_real_field(field)
             r0 = FL.rank(field, delta0)
             r1 = FL.rank(field, les.delta[1])
@@ -795,7 +2131,7 @@ end
         M12, _, _ = direct_sum_with_split_sequence(S1, S2)
         M, _, _ = direct_sum_with_split_sequence(M12, S4)
 
-        A = PM.ExtAlgebra(M, PM.DerivedFunctorOptions(maxdeg=2))
+        A = TO.ExtAlgebra(M, TO.DerivedFunctorOptions(maxdeg=2))
         E = A.E
 
         # Sanity: dimensions agree with the underlying Ext space.
@@ -835,7 +2171,7 @@ end
 
             # Cached multiplication must match a direct call to the mathematical core (Yoneda product)
             # in the same Ext space and bases.
-            _, coords_direct = PM.DerivedFunctors.yoneda_product(A.E, 1, x.coords, A.E, 1, y.coords; ELN=A.E)
+            _, coords_direct = TO.DerivedFunctors.yoneda_product(A.E, 1, x.coords, A.E, 1, y.coords; ELN=A.E)
             @test prod1.coords == coords_direct
             @test prod2.coords == coords_direct
         end
@@ -870,7 +2206,7 @@ end
         let
             F = [c(1) c(0); c(2) c(3)]
             I1 = Int[]; J1 = Int[]; V1 = K[]
-            PM.CoreModules._append_scaled_triplets!(I1, J1, V1, F, 10, 20; scale=c(2))
+            TO.CoreModules._append_scaled_triplets!(I1, J1, V1, F, 10, 20; scale=c(2))
 
             S1 = sparse(I1, J1, V1, 12, 22)
 
@@ -895,9 +2231,9 @@ end
 
         # 1) _coeff_matrix_upsets: new sparse assembly equals old dense->sparse reference
         let
-            U1 = PM.FiniteFringe.principal_upset(P, 1)
-            U2 = PM.FiniteFringe.principal_upset(P, 2)
-            U3 = PM.FiniteFringe.principal_upset(P, 3)
+            U1 = TO.FiniteFringe.principal_upset(P, 1)
+            U2 = TO.FiniteFringe.principal_upset(P, 2)
+            U3 = TO.FiniteFringe.principal_upset(P, 3)
             domU = [U1, U2, U3]
             codU = [U1, U2, U3]
 
@@ -926,7 +2262,7 @@ end
         # are active, so the morphism component matrix is the full coefficient matrix.
         let
             P = chain_poset(3)
-            DF = PM.DerivedFunctors
+            DF = TO.DerivedFunctors
 
             # A simple module with zero structure maps. This forces projective_cover to
             # pick generators at multiple vertices in a predictable way, producing a
@@ -938,7 +2274,7 @@ end
             M = MD.PModule{K}(P, dims, edge_maps; field=field)
 
             P0, pi0, gens0 = IR.projective_cover(M)
-            Ker, iota = PM.kernel_with_inclusion(pi0)
+            Ker, iota = TO.kernel_with_inclusion(pi0)
             P1, pi1, gens1 = IR.projective_cover(Ker)
 
             # Differential d : P1 -> P0
@@ -1061,6 +2397,194 @@ end
             @test T == sparse(Tref_dense)
         end
     end
+end
+
+@testset "DerivedFunctors packed active plans and lazy Ext/Hom internals" begin
+    field = CM.QQField()
+    K = CM.coeff_type(field)
+    P = chain_poset(3)
+
+    dims = fill(1, 3)
+    edge_zero = Dict{Tuple{Int,Int},Matrix{K}}(
+        (1, 2) => CM.zeros(field, 1, 1),
+        (2, 3) => CM.zeros(field, 1, 1),
+    )
+    M = MD.PModule{K}(P, dims, edge_zero; field=field)
+    N = MD.PModule{K}(P, dims, edge_zero; field=field)
+
+    H = DF.Hom(M, N)
+    @test getfield(H, :basis) === nothing
+    B = DF.basis(H)
+    @test length(B) == DF.dim(H)
+    @test getfield(H, :basis) === B
+    @test H.basis === B
+
+    bases = [1, 3]
+    plan1 = DF.Resolutions._packed_active_upset_plan(P, bases)
+    @test plan1.base_pos == [1, 2]
+    bases[1] = 2
+    plan2 = DF.Resolutions._packed_active_upset_plan(P, bases)
+    @test plan2.base_pos == [1, 2]
+    @test plan1.data != plan2.data
+
+    Einj, _, gens_at = IR._injective_hull(M; threads=false)
+    basesD = DF._flatten_gens_at(gens_at)
+    @test DF.Resolutions._coeff_matrix_downsets(P, basesD, basesD, IR.id_morphism(Einj)) ==
+          sparse(Matrix{K}(I, length(basesD), length(basesD)))
+
+    df_proj = TO.DerivedFunctorOptions(maxdeg=1, model=:unified, canon=:projective)
+    Eproj = DF.ExtSpace(M, N, df_proj)
+    @test getfield(Eproj, :Eproj) !== nothing
+    @test getfield(Eproj, :Einj) === nothing
+    @test DF.dim(Eproj, 0) == DF.dim(getfield(Eproj, :Eproj), 0)
+    @test getfield(Eproj, :Einj) === nothing
+    Einj = DF.injective_model(Eproj)
+    @test Einj === getfield(Eproj, :Einj)
+
+    df_inj = TO.DerivedFunctorOptions(maxdeg=1, model=:unified, canon=:injective)
+    Elazy = DF.ExtSpace(M, N, df_inj)
+    @test getfield(Elazy, :Eproj) === nothing
+    @test getfield(Elazy, :Einj) !== nothing
+    @test DF.dim(Elazy, 0) == DF.dim(getfield(Elazy, :Einj), 0)
+    @test getfield(Elazy, :Eproj) === nothing
+    Eproj2 = DF.projective_model(Elazy)
+    @test Eproj2 === getfield(Elazy, :Eproj)
+end
+
+@testset "DerivedFunctors injective resolution support-aware parity" begin
+    field = CM.QQField()
+    K = CM.coeff_type(field)
+    P = chain_poset(4)
+    edge = Dict{Tuple{Int,Int},Matrix{K}}(
+        (1, 2) => CM.zeros(field, 1, 0),
+        (2, 3) => CM.zeros(field, 0, 1),
+        (3, 4) => CM.zeros(field, 1, 0),
+    )
+    M = MD.PModule{K}(P, [0, 1, 0, 1], edge; field=field)
+    res = TO.ResolutionOptions(maxlen=2, minimal=false, check=false)
+
+    function _manual_injective_resolution_fullsupport(M::MD.PModule{K}, maxlen::Int) where {K}
+        n = FF.nvertices(M.Q)
+        cc = MD._get_cover_cache(M.Q)
+        map_memo = IR._indicator_new_array_memo(K, n)
+        ws = IR._new_resolution_workspace(K, n)
+        cokernel_cache = Vector{Any}(undef, n)
+        fill!(cokernel_cache, nothing)
+        full = collect(1:n)
+
+        E0, iota0, gens0 = IR._injective_hull(
+            M;
+            cache=cc,
+            map_memo=map_memo,
+            workspace=ws,
+            support_vertices=full,
+            threads=false,
+        )
+        Emods = MD.PModule{K}[E0]
+        gens = [DF._flatten_gens_at(gens0)]
+        d_mor = MD.PMorphism{K}[]
+
+        C0, pi0 = IR._cokernel_module(iota0; cache=cc, incremental_cache=cokernel_cache, active_vertices=full)
+        prevC, prevPi = C0, pi0
+
+        for _ in 1:maxlen
+            DF.Resolutions._reset_indicator_memo!(map_memo)
+            En, iotan, gensn = IR._injective_hull(
+                prevC;
+                cache=cc,
+                map_memo=map_memo,
+                workspace=ws,
+                support_vertices=full,
+                threads=false,
+            )
+            push!(Emods, En)
+            push!(gens, DF._flatten_gens_at(gensn))
+            push!(d_mor, DF.compose(iotan, prevPi))
+            Cn, pin = IR._cokernel_module(iotan; cache=cc, incremental_cache=cokernel_cache, active_vertices=full)
+            prevC, prevPi = Cn, pin
+        end
+
+        return DF.InjectiveResolution{K}(M, Emods, gens, d_mor, iota0)
+    end
+
+    Rnew = DF.injective_resolution(M, res; threads=false)
+    Rfull = _manual_injective_resolution_fullsupport(M, res.maxlen)
+
+    @test Rnew.gens == Rfull.gens
+    @test length(Rnew.d_mor) == length(Rfull.d_mor)
+    @test Rnew.iota0.comps == Rfull.iota0.comps
+    for i in eachindex(Rnew.d_mor)
+        @test Rnew.d_mor[i].comps == Rfull.d_mor[i].comps
+    end
+end
+
+@testset "DerivedFunctors projective Ext cochain decomposition parity" begin
+    field = CM.QQField()
+    K = CM.coeff_type(field)
+    P = chain_poset(3)
+    Hm = one_by_one_fringe(P, FF.principal_upset(P, 1), FF.principal_downset(P, 2); scalar=one(K), field=field)
+    Hn = one_by_one_fringe(P, FF.principal_upset(P, 2), FF.principal_downset(P, 3); scalar=one(K), field=field)
+    M = IR.pmodule_from_fringe(Hm)
+    N = IR.pmodule_from_fringe(Hn)
+    res = DF.projective_resolution(M, TO.ResolutionOptions(maxlen=1, minimal=false, check=false); threads=false)
+
+    C, offs = DF.ExtTorSpaces._projective_ext_cochain_complex(res, N; threads=false)
+    E = DF.Ext(res, N; threads=false)
+    H = TamerOp.ChainComplexes.cohomology_data(C)
+
+    @test C.dims == E.complex.dims
+    @test C.d == E.complex.d
+    @test offs == E.offsets
+    @test [Ht.dimH for Ht in H] == [DF.dim(E, t) for t in 0:1]
+end
+
+@testset "DerivedFunctors injective-side comparison batching parity" begin
+    field = CM.QQField()
+    K = CM.coeff_type(field)
+    P = chain_poset(3)
+    Hm = one_by_one_fringe(P, FF.principal_upset(P, 1), FF.principal_downset(P, 2); scalar=one(K), field=field)
+    Hn = one_by_one_fringe(P, FF.principal_upset(P, 2), FF.principal_downset(P, 3); scalar=one(K), field=field)
+    M = IR.pmodule_from_fringe(Hm)
+    N = IR.pmodule_from_fringe(Hn)
+
+    Eproj = DF.Ext(M, N, TO.DerivedFunctorOptions(maxdeg=1, model=:projective))
+    Einj = DF.ExtInjective(M, N, TO.DerivedFunctorOptions(maxdeg=1, model=:injective))
+    resP = Eproj.res
+    resE = Einj.res
+    basesP0 = resP.gens[1]
+    Eb = resE.Emods[1]
+    offs0t = DF.ExtTorSpaces._block_offsets_for_gens(Eb, basesP0)
+    active_lists = DF.Resolutions._active_upset_indices(P, basesP0)
+    active_plan = DF.Resolutions._packed_active_upset_plan(P, basesP0)
+
+    F_old = zeros(K, offs0t[end], DF.dim(Einj.homs[1]))
+    for j in 1:DF.dim(Einj.homs[1])
+        psi = DF.basis(Einj.homs[1])[j]
+        comp = DF.compose(psi, resP.aug)
+        for i in 1:length(basesP0)
+            u = basesP0[i]
+            pos = searchsortedfirst(active_lists[u], i)
+            @test pos <= length(active_lists[u]) && active_lists[u][pos] == i
+            F_old[(offs0t[i] + 1):offs0t[i + 1], j] = comp.comps[u][:, pos]
+        end
+    end
+
+    F_new = DF.ExtTorSpaces._precompose_to_projective_cochains_matrix(Einj.homs[1], resP.aug, basesP0, active_plan, offs0t, Eb)
+    @test F_new == F_old
+
+    cache = CM.ResolutionCache()
+    Euni_cached = DF.Ext(M, N, TO.DerivedFunctorOptions(maxdeg=1, model=:unified, canon=:projective); cache=cache)
+    P2I_cached, I2P_cached = DF.comparison_isomorphisms(Euni_cached)
+    @test length(P2I_cached) == 2
+    @test length(I2P_cached) == 2
+
+    Eproj_nocache = DF.Ext(M, N, TO.DerivedFunctorOptions(maxdeg=1, model=:projective); cache=nothing)
+    Eproj_cache = DF.Ext(M, N, TO.DerivedFunctorOptions(maxdeg=1, model=:projective); cache=CM.ResolutionCache())
+    @test [DF.dim(Eproj_nocache, t) for t in 0:1] == [DF.dim(Eproj_cache, t) for t in 0:1]
+
+    Einj_nocache = DF.Ext(M, N, TO.DerivedFunctorOptions(maxdeg=1, model=:injective); cache=nothing)
+    Einj_cache = DF.Ext(M, N, TO.DerivedFunctorOptions(maxdeg=1, model=:injective); cache=CM.ResolutionCache())
+    @test [DF.dim(Einj_nocache, t) for t in 0:1] == [DF.dim(Einj_cache, t) for t in 0:1]
 end
 
 @testset "DerivedFunctors: downset postcompose coefficient solver" begin

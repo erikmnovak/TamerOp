@@ -1,2 +1,0 @@
-tool,case_id,regime,n_points,ambient_dim,max_dim,cold_ms,cold_alloc_kib,warm_median_ms,warm_p90_ms,warm_alloc_median_kib,simplex_count,edge_count,max_simplex_dim,notes,timestamp_utc
-multipers,parity_n5000_d2_s11,normalized_parity,500,2,1,42.71893601980992,,33.788658009143546,36.77936899475753,,107696,,1,"kwargs={'complex': 'rips', 'output_type': 'simplextree', 'expand_dim': 1, 'num_collapses': 0}",2026-02-22T18:32:10.168174+00:00

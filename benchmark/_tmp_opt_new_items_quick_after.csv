@@ -1,5 +1,0 @@
-case,family,stage,cache_mode,median_ms,p90_ms,median_alloc_kib
-dims_only_probe_rips_d1,point,encoding_result,full_module,0.607627,0.776934,1373.46875
-dims_only_probe_rips_d1,point,cohomology_dims,dims_only,0.853792,0.961715,1938.476562
-solve_loop_probe_h1_generic,point,encoding_result,no_rhs_check,23.381338,30.641953,37144.578125
-solve_loop_probe_h1_generic,point,encoding_result,with_rhs_check,129.030845,381.188737,202251.9375

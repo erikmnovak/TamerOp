@@ -1,3 +1,0 @@
-tool,case_id,regime,n_points,ambient_dim,max_dim,cold_ms,cold_alloc_kib,warm_median_ms,warm_p90_ms,warm_alloc_median_kib,simplex_count,edge_count,max_simplex_dim,notes,timestamp_utc
-tamer_op,delaunay_lowerstar_n200_d2_md2_s11,delaunay_lowerstar_parity,200,2,2,23705.721648000002,864593.4453125,0.34084000000000003,0.535247,205.3203125,1151,575,2,function_delaunay_vs_delaunay_lowerstar,2026-02-24T03:34:12.810
-tamer_op,delaunay_lowerstar_n300_d2_md2_s17,delaunay_lowerstar_parity,300,2,2,6.69655,1638.6875,0.565063,0.822954,301.6796875,1759,879,2,function_delaunay_vs_delaunay_lowerstar,2026-02-24T03:34:21.727

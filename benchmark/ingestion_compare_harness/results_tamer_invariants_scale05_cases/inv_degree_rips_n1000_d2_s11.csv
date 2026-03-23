@@ -1,0 +1,2 @@
+tool,case_id,regime,invariant_kind,degree,n_points,ambient_dim,max_dim,cold_ms,cold_alloc_kib,warm_median_ms,warm_p90_ms,warm_alloc_median_kib,output_term_count,output_abs_mass,notes,timestamp_utc
+tamer_op,inv_degree_rips_n1000_d2_s11,degree_rips_parity,euler_signed_measure,0,500,2,1,8836.202807,4.903534265625e6,6200.2893564999995,8818.612464,4.90354240625e6,1018,1491,cold_mode=warm_uncached;cache=none;stage=encoding_result,2026-03-19T13:05:36.990

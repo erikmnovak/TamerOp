@@ -11,7 +11,7 @@
 # - For each kernel, this script runs:
 #   - a naive/baseline implementation (local copy of the previous algorithmic shape),
 #   - the current optimized library implementation (including `hom_dimension`
-#     path variants `:sparse_path`, `:dense_path`, `:dense_idx_internal`, and production `:auto`).
+#     path variants `:sparse_path`, `:dense_idx_internal`, and production `:auto`).
 # - It also includes a targeted cold-start route-selection block comparing:
 #   - heuristic-first `:auto` route selection,
 #   - timing-only baseline route selection (`_hom_dimension_auto_timing_baseline`).
@@ -34,17 +34,17 @@ using Random
 using SparseArrays
 
 try
-    using PosetModules
+    using TamerOp
 catch
-    include(joinpath(@__DIR__, "..", "src", "PosetModules.jl"))
-    using .PosetModules
+    include(joinpath(@__DIR__, "..", "src", "TamerOp.jl"))
+    using .TamerOp
 end
 
-const PM = PosetModules.Advanced
-const FF = PM.FiniteFringe
-const EN = PM.Encoding
-const CM = PM.CoreModules
-const FL = PosetModules.FieldLinAlg
+const TO = TamerOp.Advanced
+const FF = TO.FiniteFringe
+const EN = TO.Encoding
+const CM = TO.CoreModules
+const FL = TamerOp.FieldLinAlg
 
 function _parse_int_arg(args, key::String, default::Int)
     for a in args
@@ -121,7 +121,7 @@ end
 
 function _fixture_uptight(P::FF.AbstractPoset, ny::Int; seed::Int=0x5151)
     rng = Random.MersenneTwister(seed)
-    n = PM.nvertices(P)
+    n = TO.nvertices(P)
     Y = Vector{FF.Upset}(undef, ny)
     @inbounds for i in 1:ny
         mask = BitVector(rand(rng, Bool, n))
@@ -132,7 +132,7 @@ end
 
 function _uptight_regions_old(Q::FF.AbstractPoset, Y::Vector{FF.Upset})
     sigs = Dict{Tuple{Vararg{Bool}}, Vector{Int}}()
-    @inbounds for q in 1:PM.nvertices(Q)
+    @inbounds for q in 1:TO.nvertices(Q)
         key = ntuple(i -> Y[i].mask[q], length(Y))
         vec = get!(sigs, key) do
             Int[]
@@ -161,7 +161,7 @@ function _random_fringe_module(P::FF.AbstractPoset, field::CM.AbstractCoeffField
                                nu::Int=24, nd::Int=24, density::Float64=0.15, seed::Int=0x6161)
     rng = Random.MersenneTwister(seed)
     K = CM.coeff_type(field)
-    n = PM.nvertices(P)
+    n = TO.nvertices(P)
 
     U = Vector{FF.Upset}(undef, nu)
     D = Vector{FF.Downset}(undef, nd)
@@ -376,7 +376,7 @@ function main(args=ARGS)
     K = CM.coeff_type(field)
     Mf = _random_fringe_module(P, field; nu=max(nu, 28), nd=max(nd, 28), density=0.16, seed=Int(0x7019))
     rng = MersenneTwister(0x7031)
-    fiber_qs = rand(rng, 1:PM.nvertices(P), fiber_queries)
+    fiber_qs = rand(rng, 1:TO.nvertices(P), fiber_queries)
     sum_old_fiber = _fiber_dimension_batch_old(Mf, fiber_qs)
     sum_new_fiber = _fiber_dimension_batch_new(Mf, fiber_qs)
     sum_old_fiber == sum_new_fiber || error("fiber_dimension parity failed: old=$(sum_old_fiber), new=$(sum_new_fiber)")
@@ -398,16 +398,14 @@ function main(args=ARGS)
     # Parity checks for hom dimension.
     h_old = _hom_dimension_old(M, N)
     h_sparse_path = FF._hom_dimension_with_path(M, N, :sparse_path)
-    h_dense_path = FF._hom_dimension_with_path(M, N, :dense_path)
     h_denseidx = FF._hom_dimension_with_path(M, N, :dense_idx_internal)
     h_auto = FF.hom_dimension(M, N)
-    h_old == h_sparse_path == h_dense_path == h_denseidx == h_auto ||
-        error("hom_dimension parity failed: old=$(h_old), sparse_path=$(h_sparse_path), dense_path=$(h_dense_path), dense_idx=$(h_denseidx), auto=$(h_auto)")
+    h_old == h_sparse_path == h_denseidx == h_auto ||
+        error("hom_dimension parity failed: old=$(h_old), sparse_path=$(h_sparse_path), dense_idx=$(h_denseidx), auto=$(h_auto)")
 
     println("== Hom dimension assembly ==")
     b_old_h = _bench("hom_dimension old (dict+mask)", () -> _hom_dimension_old(M, N); reps=reps)
     b_sparse_h = _bench("hom_dimension path=:sparse_path", () -> FF._hom_dimension_with_path(M, N, :sparse_path); reps=reps)
-    b_dense_path_h = _bench("hom_dimension path=:dense_path", () -> FF._hom_dimension_with_path(M, N, :dense_path); reps=reps)
     b_dense_h = _bench("hom_dimension path=:dense_idx_internal", () -> FF._hom_dimension_with_path(M, N, :dense_idx_internal); reps=reps)
     b_auto_h = _bench("hom_dimension auto", () -> FF.hom_dimension(M, N); reps=reps)
     b_auto_cold_first_h = _bench("hom_dimension auto cold first", () -> begin
@@ -433,7 +431,6 @@ function main(args=ARGS)
         nothing
     end
     println("speedup(sparse_path/old): ", round(b_old_h.ms / b_sparse_h.ms, digits=2), "x")
-    println("speedup(dense_path/old): ", round(b_old_h.ms / b_dense_path_h.ms, digits=2), "x")
     println("speedup(dense_idx/old): ", round(b_old_h.ms / b_dense_h.ms, digits=2), "x")
     println("speedup(auto/old): ", round(b_old_h.ms / b_auto_h.ms, digits=2), "x")
     println("warmup gain(auto cold-first/auto warm): ", round(b_auto_cold_first_h.ms / b_auto_h.ms, digits=2), "x")
@@ -446,7 +443,7 @@ function main(args=ARGS)
     _clear_hom_route_memo!(M)
     _ = FF.hom_dimension(M, N)
     selected_sparse = FF._select_hom_internal_path!(M, N)
-    best_h_ms = min(b_sparse_h.ms, b_dense_path_h.ms, b_dense_h.ms)
+    best_h_ms = min(b_sparse_h.ms, b_dense_h.ms)
     auto_delta_pct = 100.0 * (b_auto_h.ms / best_h_ms - 1.0)
     println("auto selected path: ", selected_sparse, " | auto vs best path delta: ",
             round(auto_delta_pct, digits=2), "%")
@@ -456,17 +453,15 @@ function main(args=ARGS)
         N_dense = FF.FringeModule{K}(P, N.U, N.D, Matrix(N.phi); field=field)
         h_old_dense = _hom_dimension_old(M_dense, N_dense)
         h_sparse_path_dense = FF._hom_dimension_with_path(M_dense, N_dense, :sparse_path)
-        h_dense_path_dense = FF._hom_dimension_with_path(M_dense, N_dense, :dense_path)
         h_denseidx_dense = FF._hom_dimension_with_path(M_dense, N_dense, :dense_idx_internal)
         h_auto_dense = FF.hom_dimension(M_dense, N_dense)
-        h_old_dense == h_sparse_path_dense == h_dense_path_dense == h_denseidx_dense == h_auto_dense ||
-            error("hom_dimension dense parity failed: old=$(h_old_dense), sparse_path=$(h_sparse_path_dense), dense_path=$(h_dense_path_dense), dense_idx=$(h_denseidx_dense), auto=$(h_auto_dense)")
+        h_old_dense == h_sparse_path_dense == h_denseidx_dense == h_auto_dense ||
+            error("hom_dimension dense parity failed: old=$(h_old_dense), sparse_path=$(h_sparse_path_dense), dense_idx=$(h_denseidx_dense), auto=$(h_auto_dense)")
 
         println()
         println("== Hom dimension assembly (dense phi storage) ==")
         b_old_hd = _bench("hom_dimension old dense", () -> _hom_dimension_old(M_dense, N_dense); reps=reps)
         b_sparse_hd = _bench("hom_dimension sparse_path dense", () -> FF._hom_dimension_with_path(M_dense, N_dense, :sparse_path); reps=reps)
-        b_dense_path_hd = _bench("hom_dimension dense_path dense", () -> FF._hom_dimension_with_path(M_dense, N_dense, :dense_path); reps=reps)
         b_dense_hd = _bench("hom_dimension dense_idx dense", () -> FF._hom_dimension_with_path(M_dense, N_dense, :dense_idx_internal); reps=reps)
         b_auto_hd = _bench("hom_dimension auto dense", () -> FF.hom_dimension(M_dense, N_dense); reps=reps)
         b_auto_cold_first_hd = _bench("hom_dimension auto dense cold first", () -> begin
@@ -491,7 +486,6 @@ function main(args=ARGS)
             nothing
         end
         println("speedup(sparse_path/old): ", round(b_old_hd.ms / b_sparse_hd.ms, digits=2), "x")
-        println("speedup(dense_path/old): ", round(b_old_hd.ms / b_dense_path_hd.ms, digits=2), "x")
         println("speedup(dense_idx/old): ", round(b_old_hd.ms / b_dense_hd.ms, digits=2), "x")
         println("speedup(auto/old): ", round(b_old_hd.ms / b_auto_hd.ms, digits=2), "x")
         println("warmup gain(auto dense cold-first/auto warm): ", round(b_auto_cold_first_hd.ms / b_auto_hd.ms, digits=2), "x")
@@ -506,7 +500,7 @@ function main(args=ARGS)
         selected_dense = FF._select_hom_internal_path!(M_dense, N_dense)
         d_dense_min = min(FF._matrix_density(M_dense.phi), FF._matrix_density(N_dense.phi))
         println("effective dense-storage density dmin=", round(d_dense_min, digits=4))
-        best_hd_ms = min(b_sparse_hd.ms, b_dense_path_hd.ms, b_dense_hd.ms)
+        best_hd_ms = min(b_sparse_hd.ms, b_dense_hd.ms)
         auto_dense_delta_pct = 100.0 * (b_auto_hd.ms / best_hd_ms - 1.0)
         println("auto selected path (dense fixture): ", selected_dense,
                 " | auto vs best path delta: ", round(auto_dense_delta_pct, digits=2), "%")

@@ -1,7 +1,0 @@
-case,family,stage,cache_mode,median_ms,p90_ms,median_alloc_kib
-h0_chain_sweep_probe_point_rips_d1,point,full,chain_on,2.370893,3.147893,3854.007812
-h0_chain_sweep_probe_point_rips_d1,point,full,chain_off,6.335614,7.439999,5745.140625
-h0_chain_sweep_probe_graph_weight_threshold_d1,graph,full,chain_on,2.185422,2.785115,4550.570312
-h0_chain_sweep_probe_graph_weight_threshold_d1,graph,full,chain_off,14.238471,15.780801,24876.054688
-cache_hit_skip_lazy_probe_rips_d1,point,full,skip_on,1.09453,1.65331,1936.8125
-cache_hit_skip_lazy_probe_rips_d1,point,full,skip_off,1.741879,2.327493,3167.570312

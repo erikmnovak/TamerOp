@@ -3,17 +3,10 @@ module TamerOpNearestNeighborsExt
 using NearestNeighbors
 using Random
 
-const PM = let pm = nothing
-    if isdefined(Main, :PosetModules)
-        pm = getfield(Main, :PosetModules)
-    else
-        @eval import PosetModules
-        pm = PosetModules
-    end
-    pm
-end
+import TamerOp
+const TO = TamerOp
 
-const DI = PM.DataIngestion
+const DI = TO.DataIngestion
 
 @inline function _points_to_matrix(points)
     n = length(points)
@@ -246,10 +239,26 @@ function _knn_distances(points, k::Int; backend::Symbol=:auto, approx_candidates
     return out[3]
 end
 
+function _dtm_values(points, dtm_mass::Real; backend::Symbol=:auto, approx_candidates::Int=0)
+    backend == :bruteforce && return nothing
+    n = length(points)
+    n > 1 || throw(ArgumentError("DTM codensity requires at least 2 points."))
+    k_eff = DI._dtm_neighbor_count(n, dtm_mass)
+    X = _points_to_matrix(points)
+    tree = _build_exact_tree(X)
+    vals = Vector{Float64}(undef, n)
+    @inbounds for i in 1:n
+        _, dists = knn(tree, view(X, :, i), k_eff, true)
+        vals[i] = sqrt(sum(abs2, dists) / k_eff)
+    end
+    return vals
+end
+
 DI._set_pointcloud_nn_impl!(;
     knn_graph=_knn_graph,
     radius_graph=_radius_graph,
     knn_distances=_knn_distances,
+    dtm_values=_dtm_values,
     knn_graph_edges=_knn_graph_edges,
     radius_graph_edges=_radius_graph_edges,
 )

@@ -1,6 +1,6 @@
 # Onboarding Examples
 
-This directory is an ordered, didactic onboarding suite for `PosetModules`.
+This directory is an ordered, didactic onboarding suite for `TamerOp`.
 
 Each example includes:
 - a theme header,
@@ -9,11 +9,26 @@ Each example includes:
 - guardrails for combinatorial blowup,
 - concrete output artifacts under `examples/_outputs/<example_name>/`.
 
-Notebook variants are available for the first four onboarding examples:
+Notebook variants are available for the first four onboarding examples and the
+visualization walk-throughs:
 - `00_quickstart_module_to_features.ipynb`
 - `01_graded_complex_by_hand.ipynb`
 - `02_point_cloud_bifiltration_rips_density.ipynb`
 - `03_image_bifiltration_distance_intensity.ipynb`
+- `10_visualization_engine_basics.ipynb`
+- `11_ingestion_visualization_pipeline.ipynb`
+- `12_graph_ingestion_visualization_pipeline.ipynb`
+- `13_synthetic_families_and_coupled_fringes.ipynb`
+
+Workshop tutorial suite:
+- `combinatorial_cowork_2026/README.md`
+- `combinatorial_cowork_2026/00_kernel_smoke_and_workflow_contract.ipynb`
+- `combinatorial_cowork_2026/01_presentations_to_encodings.ipynb`
+- `combinatorial_cowork_2026/02_resolutions_hom_ext_tor.ipynb`
+- `combinatorial_cowork_2026/03_change_of_posets_and_common_refinement.ipynb`
+- `combinatorial_cowork_2026/04_invariants_and_visual_payoff.ipynb`
+- `combinatorial_cowork_2026/05_noisy_annulus_rips_codensity_h1_2persistence.ipynb`
+- `combinatorial_cowork_2026/90_speaker_appendix_exact_queries_and_extra_derived.ipynb`
 
 Custom-filtration starter template:
 - `99_custom_trigrade_filtration.ipynb` (register a user-defined `P=3` filtration family)
@@ -28,7 +43,13 @@ Custom-filtration starter template:
 6. `05_fibered_slices_landscapes_and_distances.jl`
 7. `06_batch_experiment_spec_and_exports.jl`
 8. `07_serialization_reproducible_runs.jl`
-9. `90_advanced_indicator_resolutions_and_ext.jl` (optional advanced appendix)
+9. `08_fibered2d_exact_queries.jl`
+10. `09_advanced_ingestion_plan_and_preflight.jl`
+11. `10_visualization_engine_basics.jl` (or `10_visualization_engine_basics.ipynb`)
+12. `11_ingestion_visualization_pipeline.jl` (or `11_ingestion_visualization_pipeline.ipynb`)
+13. `12_graph_ingestion_visualization_pipeline.jl` (or `12_graph_ingestion_visualization_pipeline.ipynb`)
+14. `13_synthetic_families_and_coupled_fringes.jl` (or `13_synthetic_families_and_coupled_fringes.ipynb`)
+15. `90_advanced_indicator_resolutions_and_ext.jl` (optional advanced appendix)
 
 ## Running examples
 
@@ -43,6 +64,9 @@ To run the notebook variants, open:
 - `examples/01_graded_complex_by_hand.ipynb`
 - `examples/02_point_cloud_bifiltration_rips_density.ipynb`
 - `examples/03_image_bifiltration_distance_intensity.ipynb`
+- `examples/10_visualization_engine_basics.ipynb`
+- `examples/11_ingestion_visualization_pipeline.ipynb`
+- `examples/12_graph_ingestion_visualization_pipeline.ipynb`
 - `examples/99_custom_trigrade_filtration.ipynb`
 
 or run all in order:
@@ -56,6 +80,12 @@ for f in \
   examples/05_fibered_slices_landscapes_and_distances.jl \
   examples/06_batch_experiment_spec_and_exports.jl \
   examples/07_serialization_reproducible_runs.jl \
+  examples/08_fibered2d_exact_queries.jl \
+  examples/09_advanced_ingestion_plan_and_preflight.jl \
+  examples/10_visualization_engine_basics.jl \
+  examples/11_ingestion_visualization_pipeline.jl \
+  examples/12_graph_ingestion_visualization_pipeline.jl \
+  examples/13_synthetic_families_and_coupled_fringes.jl \
   examples/90_advanced_indicator_resolutions_and_ext.jl
 do
   julia --project "$f"
@@ -82,7 +112,7 @@ done
 For onboarding and reproducible runs, use these as the canonical encoding I/O calls:
 
 ```julia
-using PosetModules
+using TamerOp
 
 enc = encode(data, spec; degree=0)
 
@@ -111,7 +141,7 @@ save_encoding_json("encoding_debug.json", enc; profile=:debug)        # pretty J
 For files on disk, use the canonical `load_data` + `encode(path, ...)` path:
 
 ```julia
-using PosetModules
+using TamerOp
 
 spec = FiltrationSpec(kind=:rips, max_dim=1)
 

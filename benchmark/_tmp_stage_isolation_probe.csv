@@ -1,7 +1,0 @@
-case,family,stage,cache_mode,median_ms,p90_ms,median_alloc_kib
-stage_isolation_probe_point_rips_knn,point,module,auto,39.679279,50.40117,72950.390625
-stage_isolation_probe_point_rips_knn,point,full,auto,34.343613,38.635711,72951.84375
-stage_isolation_probe_point_rips_knn,point,fringe,auto,47.136367,55.825906,94458.695312
-stage_isolation_probe_point_rips_knn,point,module,session,0.540215,7.109988,891.273438
-stage_isolation_probe_point_rips_knn,point,full,session,0.618309,0.833442,892.382812
-stage_isolation_probe_point_rips_knn,point,fringe,session,0.530927,6.851895,891.351562

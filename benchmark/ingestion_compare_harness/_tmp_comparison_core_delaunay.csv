@@ -1,3 +1,0 @@
-case_id,regime,n_points,ambient_dim,max_dim,tamer_cold_ms,multipers_cold_ms,cold_slowdown_tamer_over_multipers,tamer_warm_median_ms,multipers_warm_median_ms,warm_slowdown_tamer_over_multipers,tamer_simplex_count,multipers_simplex_count
-core_delaunay_n200_d2_md2_s11,core_delaunay_parity,200,2,2,19092.909828,119.3465450196527,159.978739,0.33646,117.69934400217608,0.002859,1151,1151
-core_delaunay_n300_d2_md2_s17,core_delaunay_parity,300,2,2,6.834123999999999,343.4862890280783,0.019896,0.42902999999999997,403.72242749435827,0.001063,1759,1759

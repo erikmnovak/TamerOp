@@ -4,7 +4,7 @@ using SparseArrays
 using TOML
 
 @testset "FieldLinAlg engines" begin
-    FL = PosetModules.FieldLinAlg
+    FL = TamerOp.FieldLinAlg
     F2 = CM.F2()
     F2Elem = CM.FpElem{2}
 
@@ -48,6 +48,19 @@ using TOML
             c += 1
         end
         return r
+    end
+
+    function _selection_words(idxs::Vector{Int}, nmax::Int)
+        words = zeros(UInt64, cld(nmax, 64))
+        for idx in idxs
+            wd = ((idx - 1) >>> 6) + 1
+            words[wd] |= UInt64(1) << ((idx - 1) & 63)
+        end
+        return words
+    end
+
+    function _tol(field, A)
+        return (field isa CM.RealField) ? (field.atol + field.rtol * opnorm(Matrix(A), 2)) : 0.0
     end
 
     @testset "F2 rank + rank_dim (dense)" begin
@@ -358,6 +371,112 @@ using TOML
         @test row.val == QQ[1]
     end
 
+    @testset "_row_axpy! merge correctness" begin
+        row = FL.SparseRow{QQ}(Int[1, 3, 6], QQ[2, 5, -1])
+        other = FL.SparseRow{QQ}(Int[2, 3, 5], QQ[4, -5, 7])
+        tmp_idx = Int[]
+        tmp_val = QQ[]
+
+        tmp_idx, tmp_val = FL._row_axpy!(row, QQ(2), other, tmp_idx, tmp_val)
+        @test row.idx == [1, 2, 3, 5, 6]
+        @test row.val == QQ[2, 8, -5, 14, -1]
+        @test isempty(tmp_idx)
+        @test isempty(tmp_val)
+
+        tmp_idx, tmp_val = FL._row_axpy!(row, QQ(-1), FL.SparseRow{QQ}(Int[1, 5], QQ[2, 9]), tmp_idx, tmp_val)
+        @test row.idx == [2, 3, 5, 6]
+        @test row.val == QQ[8, -5, 5, -1]
+        @test isempty(tmp_idx)
+        @test isempty(tmp_val)
+
+        row_one = FL.SparseRow{QQ}(Int[2, 4], QQ[3, -2])
+        tmp_idx, tmp_val = FL._row_axpy!(row_one, one(QQ), FL.SparseRow{QQ}(Int[1, 4], QQ[5, 2]), tmp_idx, tmp_val)
+        @test row_one.idx == [1, 2]
+        @test row_one.val == QQ[5, 3]
+        @test isempty(tmp_idx)
+        @test isempty(tmp_val)
+
+        row_empty = FL.SparseRow{QQ}()
+        tmp_idx, tmp_val = FL._row_axpy!(row_empty, -one(QQ), FL.SparseRow{QQ}(Int[2, 5], QQ[4, -7]), tmp_idx, tmp_val)
+        @test row_empty.idx == [2, 5]
+        @test row_empty.val == QQ[-4, 7]
+        @test isempty(tmp_idx)
+        @test isempty(tmp_val)
+    end
+
+    @testset "_SparseRREF pivot incidence correctness" begin
+        R = FL._SparseRREF{QQ}(6)
+
+        @test FL._sparse_rref_push_homogeneous!(R, FL.SparseRow{QQ}(Int[1, 2], QQ[1, 1]))
+        @test FL._sparse_rref_push_homogeneous!(R, FL.SparseRow{QQ}(Int[2, 5], QQ[1, 1]))
+        @test FL._sparse_rref_push_homogeneous!(R, FL.SparseRow{QQ}(Int[5], QQ[1]))
+
+        @test R.pivot_cols == [1, 2, 5]
+        @test FL._row_coeff(R.pivot_rows[1], 5) == QQ(0)
+        @test FL._row_coeff(R.pivot_rows[2], 5) == QQ(0)
+    end
+
+    @testset "_SparseRREF exact incidence" begin
+        function exact_incidence_ok(R)
+            for j in 1:R.nvars
+                expected = Int[]
+                for (pos, row) in pairs(R.pivot_rows)
+                    if j in row.idx[2:end]
+                        push!(expected, pos)
+                    end
+                end
+                sort!(expected)
+                actual = sort!(collect(R.col_rows[j]))
+                actual == expected || return false
+            end
+            return true
+        end
+
+        rows = [
+            FL.SparseRow{QQ}(Int[1, 2, 4], QQ[1, 1, 1]),
+            FL.SparseRow{QQ}(Int[2, 4, 5], QQ[1, -1, 1]),
+            FL.SparseRow{QQ}(Int[3, 4, 6], QQ[1, 1, 1]),
+            FL.SparseRow{QQ}(Int[1, 3, 5], QQ[1, -1, 1]),
+        ]
+
+        R = FL._SparseRREF{QQ}(6)
+        for row in rows
+            FL._sparse_rref_push_homogeneous!(R, copy(row))
+        end
+
+        @test R.pivot_cols == [1, 2, 3]
+        @test exact_incidence_ok(R)
+    end
+
+    @testset "_SparseRREF recursive pivot elimination" begin
+        R = FL._SparseRREF{QQ}(3)
+        @test FL._sparse_rref_push_homogeneous!(R, FL.SparseRow{QQ}(Int[1, 2], QQ[1, 1]))
+        @test FL._sparse_rref_push_homogeneous!(R, FL.SparseRow{QQ}(Int[2], QQ[1]))
+        @test !FL._sparse_rref_push_homogeneous!(R, FL.SparseRow{QQ}(Int[1], QQ[1]))
+        @test R.pivot_cols == [1, 2]
+    end
+
+    @testset "_SparseREF rank parity" begin
+        rows = [
+            FL.SparseRow{QQ}(Int[1, 3, 6], QQ[2, 1, -1]),
+            FL.SparseRow{QQ}(Int[2, 4], QQ[3, 1]),
+            FL.SparseRow{QQ}(Int[1, 2, 5], QQ[1, -2, 4]),
+            FL.SparseRow{QQ}(Int[3, 5, 6], QQ[5, 2, 1]),
+            FL.SparseRow{QQ}(Int[4, 6], QQ[1, -3]),
+        ]
+        RR = FL._SparseRREF{QQ}(6)
+        RE = FL._SparseREF{QQ}(6)
+        rank_rref = 0
+        rank_ref = 0
+        for row in rows
+            rank_rref += FL._sparse_rref_push_homogeneous!(RR, copy(row)) ? 1 : 0
+            rank_ref += FL._sparse_ref_push_homogeneous!(RE, copy(row)) ? 1 : 0
+        end
+        @test rank_ref == rank_rref == 5
+        @test RE.pivot_cols == RR.pivot_cols
+        @test length(RE.pivot_inv) == length(RE.pivot_cols)
+    end
+
     @testset "backend matrix storage hooks" begin
         FQ = CM.QQField()
         K = CM.coeff_type(FQ)
@@ -548,7 +667,7 @@ using TOML
             return field isa CM.RealField
         end
 
-        function _tol(field, A)
+        function _contract_tol(field, A)
             field isa CM.RealField || return zero(eltype(A))
             return field.atol + field.rtol * opnorm(Matrix(A), 1)
         end
@@ -567,7 +686,7 @@ using TOML
                 @test size(N, 1) == n
                 @test size(N, 2) == n - r
                 if _is_real(field)
-                    @test norm(Matrix(A) * N) <= _tol(field, A) + 1e-8
+                    @test norm(Matrix(A) * N) <= _contract_tol(field, A) + 1e-8
                 else
                     @test A * N == zeros(K, m, size(N, 2))
                 end
@@ -583,7 +702,7 @@ using TOML
                 Y = B * X
                 Xhat = FL.solve_fullcolumn(field, B, Y)
                 if _is_real(field)
-                    @test norm(Matrix(B) * Xhat - Matrix(Y)) <= _tol(field, B) + 1e-8
+                    @test norm(Matrix(B) * Xhat - Matrix(Y)) <= _contract_tol(field, B) + 1e-8
                 else
                     @test B * Xhat == Y
                 end
@@ -592,15 +711,6 @@ using TOML
     end
 
     @testset "rank_restricted API parity (dense + sparse)" begin
-        function _selection_words(idxs::Vector{Int}, nmax::Int)
-            words = zeros(UInt64, cld(nmax, 64))
-            for idx in idxs
-                wd = ((idx - 1) >>> 6) + 1
-                words[wd] |= UInt64(1) << ((idx - 1) & 63)
-            end
-            return words
-        end
-
         with_fields(FIELDS_FULL) do field
             @testset "restricted rank over $(field)" begin
                 Aint = [
@@ -626,6 +736,41 @@ using TOML
                                                    nrows=size(A, 1), ncols=size(A, 2))
                 @test rd_words == rd_ref
 
+                Cd_words, cpiv_words = FL.colspace_restricted_words(field, A, row_words, col_words,
+                                                                    length(rows), length(cols);
+                                                                    nrows=size(A, 1), ncols=size(A, 2),
+                                                                    pivots=true)
+                @test size(Cd_words, 1) == length(rows)
+                @test size(Cd_words, 2) == rd_ref
+                ref_pivots = cols[collect(last(FL.rref(field, A[rows, cols]; pivots=true)))]
+                if field isa CM.RealField
+                    @test length(cpiv_words) == rd_ref
+                    @test FL.rank(field, A[rows, cpiv_words]) == rd_ref
+                    @test norm(Matrix(Cd_words) - Matrix(A[rows, cpiv_words])) <= _tol(field, A[rows, cpiv_words]) + 1e-8
+                else
+                    @test cpiv_words == ref_pivots
+                end
+
+                tiny_rows = [2, 5]
+                tiny_cols = [3, 6]
+                tiny_row_words = _selection_words(tiny_rows, size(A, 1))
+                tiny_col_words = _selection_words(tiny_cols, size(A, 2))
+                tiny_ref = FL.rank(field, A[tiny_rows, tiny_cols])
+                @test FL.rank_restricted_words(field, A, tiny_row_words, tiny_col_words,
+                                               length(tiny_rows), length(tiny_cols);
+                                               nrows=size(A, 1), ncols=size(A, 2)) == tiny_ref
+                if field isa CM.QQField
+                    @test FL.rank_restricted_words(field, A, row_words, col_words, length(rows), length(cols);
+                                                   nrows=size(A, 1), ncols=size(A, 2),
+                                                   backend=:exact) == rd_ref
+                    @test FL.rank_restricted_words(field, A, row_words, col_words, length(rows), length(cols);
+                                                   nrows=size(A, 1), ncols=size(A, 2),
+                                                   backend=:modular) == rd_ref
+                    @test FL.rank_restricted_words(field, A, row_words, col_words, length(rows), length(cols);
+                                                   nrows=size(A, 1), ncols=size(A, 2),
+                                                   backend=:nemo) == rd_ref
+                end
+
                 rs = FL.rank_restricted(field, As, rows, cols)
                 rs_ref = FL.rank(field, Matrix(As)[rows, cols])
                 @test rs == rs_ref
@@ -633,6 +778,21 @@ using TOML
                 rs_words = FL.rank_restricted_words(field, As, row_words, col_words, length(rows), length(cols);
                                                    nrows=size(A, 1), ncols=size(A, 2))
                 @test rs_words == rs_ref
+
+                Cs_words, cspiv_words = FL.colspace_restricted_words(field, As, row_words, col_words,
+                                                                     length(rows), length(cols);
+                                                                     nrows=size(A, 1), ncols=size(A, 2),
+                                                                     pivots=true)
+                @test size(Cs_words, 1) == length(rows)
+                @test size(Cs_words, 2) == rs_ref
+                ref_pivots_s = cols[collect(last(FL.rref(field, A[rows, cols]; pivots=true)))]
+                if field isa CM.RealField
+                    @test length(cspiv_words) == rs_ref
+                    @test FL.rank(field, A[rows, cspiv_words]) == rs_ref
+                    @test norm(Matrix(Cs_words) - Matrix(A[rows, cspiv_words])) <= _tol(field, A[rows, cspiv_words]) + 1e-8
+                else
+                    @test cspiv_words == ref_pivots_s
+                end
 
                 @test FL.rank_restricted_words(field, A, row_words, zeros(UInt64, length(col_words)), length(rows), 0;
                                                nrows=size(A, 1), ncols=size(A, 2)) == 0
@@ -686,14 +846,27 @@ using TOML
                 Yfull = Bfull * Xtrue
                 srows = [1, 2, 3, 5]
                 scols = [1, 2, 3]
+                ycols = collect(axes(Yfull, 2))
                 Xd = FL.solve_fullcolumn_restricted(field, Bfull, srows, scols, Yfull)
                 Xs = FL.solve_fullcolumn_restricted(field, sparse(Bfull), srows, scols, Yfull)
+                row_words = _selection_words(srows, size(Bfull, 1))
+                col_words = _selection_words(ycols, size(Yfull, 2))
+                Xdw = FL.solve_fullcolumn_restricted_words(field, Bfull[srows, scols], Yfull,
+                                                          row_words, col_words, length(srows), length(ycols);
+                                                          nrows=size(Bfull, 1), ncols=size(Yfull, 2))
+                Xsw = FL.solve_fullcolumn_restricted_words(field, sparse(Bfull[srows, scols]), Yfull,
+                                                          row_words, col_words, length(srows), length(ycols);
+                                                          nrows=size(Bfull, 1), ncols=size(Yfull, 2))
                 if is_real
                     @test norm(Matrix(Bfull[srows, scols]) * Xd - Matrix(Yfull[srows, :])) <= tol
                     @test norm(Matrix(Bfull[srows, scols]) * Xs - Matrix(Yfull[srows, :])) <= tol
+                    @test norm(Matrix(Bfull[srows, scols]) * Xdw - Matrix(Yfull[srows, :])) <= tol
+                    @test norm(Matrix(Bfull[srows, scols]) * Xsw - Matrix(Yfull[srows, :])) <= tol
                 else
                     @test Bfull[srows, scols] * Xd == Yfull[srows, :]
                     @test Bfull[srows, scols] * Xs == Yfull[srows, :]
+                    @test Bfull[srows, scols] * Xdw == Yfull[srows, :]
+                    @test Bfull[srows, scols] * Xsw == Yfull[srows, :]
                 end
 
                 @test size(FL.nullspace_restricted(field, A, Int[], cols), 2) == length(cols)
@@ -882,6 +1055,71 @@ using TOML
         @test haskey(FL._NEMO_FULLCOLUMN_FACTOR_CACHE_QQ, B)
         xn2 = FL.solve_fullcolumn(CM.QQField(), B, y; backend=:nemo, cache=true)
         @test xn2 == xn
+    end
+
+    @testset "QQ factor_fullcolumn public wrapper + multi-RHS parity" begin
+        F = CM.QQField()
+        B = FL._qq_sparse_fullcolumn_rand(120, 40, 0.08; rng=MersenneTwister(0xA11CE))
+        X = reshape(QQ[mod1(2i + 3j, 11) for i in 1:40, j in 1:12], 40, 12)
+        Y = B * X
+
+        fac = FL.factor_fullcolumn(F, B; backend=:auto, cache=false)
+        @test fac isa FL.FullColumnSolveFactor
+        @test FL.factor_backend(fac) == :julia_sparse
+        Xhat = FL.solve_fullcolumn(F, B, Y; factor=fac, cache=false, check_rhs=true)
+        @test Xhat == X
+
+        jfac = FL._factor_fullcolumnQQ(B)
+        Xraw = FL.solve_fullcolumn(F, B, Y; factor=jfac, cache=false, check_rhs=true)
+        @test Xraw == Xhat
+
+        @test_throws ErrorException FL.solve_fullcolumn(F, B, Y; backend=:nemo, factor=fac, cache=false)
+    end
+
+    @testset "QQ factor solve narrow/wide RHS gate parity" begin
+        F = CM.QQField()
+        B = FL._qq_sparse_fullcolumn_rand(90, 30, 0.09; rng=MersenneTwister(0xBEEF))
+        fac = FL._factor_fullcolumnQQ(B)
+        Xsmall = reshape(QQ[mod1(i + 2j, 7) for i in 1:30, j in 1:4], 30, 4)
+        Ysmall = B * Xsmall
+        Xwide = reshape(QQ[mod1(2i + 3j, 13) for i in 1:30, j in 1:12], 30, 12)
+        Ywide = B * Xwide
+        oldgate = FL._QQ_FACTOR_GATHER_MIN_RHS[]
+        try
+            FL._QQ_FACTOR_GATHER_MIN_RHS[] = typemax(Int)
+            Xsmall_direct = FL.solve_fullcolumn(F, B, Ysmall; factor=fac, cache=false, check_rhs=true)
+            Xwide_direct = FL.solve_fullcolumn(F, B, Ywide; factor=fac, cache=false, check_rhs=true)
+            FL._QQ_FACTOR_GATHER_MIN_RHS[] = 1
+            Xsmall_gather = FL.solve_fullcolumn(F, B, Ysmall; factor=fac, cache=false, check_rhs=true)
+            Xwide_gather = FL.solve_fullcolumn(F, B, Ywide; factor=fac, cache=false, check_rhs=true)
+            @test Xsmall_direct == Xsmall_gather == Xsmall
+            @test Xwide_direct == Xwide_gather == Xwide
+        finally
+            FL._QQ_FACTOR_GATHER_MIN_RHS[] = oldgate
+        end
+    end
+
+    @testset "QQ elimination_summary parity" begin
+        F = CM.QQField()
+
+        Ad = QQ[1 2 0;
+                0 1 1;
+                1 3 1;
+                0 0 0]
+        Sd = FL.elimination_summary(F, Ad; backend=:julia_exact)
+        @test FL.rank(Sd) == FL.rank(F, Ad; backend=:julia_exact)
+        @test FL.nullspace(Sd) == FL.nullspace(F, Ad; backend=:julia_exact)
+        @test FL.colspace(Sd) == FL.colspace(F, Ad; backend=:julia_exact)
+        @test FL._kernel_image_summary(Sd) == FL._kernel_image_summary(F, Ad; backend=:julia_exact)
+
+        As = sparse(Ad)
+        Ss = FL.elimination_summary(F, As)
+        @test FL.rank(Ss) == FL.rank(F, As; backend=:julia_sparse)
+        @test FL.nullspace(Ss) == FL.nullspace(F, As; backend=:julia_sparse)
+        @test FL.colspace(Ss) == FL.colspace(F, As; backend=:julia_sparse)
+        @test FL._kernel_image_summary(Ss) == FL._kernel_image_summary(F, As; backend=:julia_sparse)
+
+        @test_throws ErrorException FL.elimination_summary(CM.F3(), Ad)
     end
 
     @testset "Nemo conversion counters" begin
@@ -1614,6 +1852,7 @@ using TOML
         @test haskey(old, "modular_min_primes")
         @test haskey(old, "modular_max_primes")
         @test haskey(old, "rankqq_dim_small_threshold")
+        @test haskey(old, "rankqq_restricted_words_nemo_threshold")
         @test haskey(old, "qq_nemo_rank_threshold_square")
         @test haskey(old, "qq_nemo_nullspace_threshold_tall")
         @test haskey(old, "qq_nemo_solve_threshold_wide")
@@ -1736,6 +1975,28 @@ using TOML
                 @test FL._choose_linalg_backend(F, As_wide; op=:nullspace) == :nemo
                 @test FL._choose_linalg_backend(F, As_tall; op=:solve) == :nemo
             end
+        finally
+            @test FL._apply_linalg_thresholds!(old)
+        end
+    end
+
+    @testset "QQ restricted-words Nemo threshold persists + applies" begin
+        old = FL._current_linalg_thresholds()
+        path = joinpath(mktempdir(), "linalg_thresholds.toml")
+        try
+            @test FL._apply_linalg_thresholds!(merge(
+                old,
+                Dict("rankqq_restricted_words_nemo_threshold" => 37)
+            ))
+            @test FL.RANKQQ_RESTRICTED_WORDS_NEMO_THRESHOLD[] == 37
+            FL._save_linalg_thresholds!(; path=path)
+            @test FL._apply_linalg_thresholds!(merge(
+                old,
+                Dict("rankqq_restricted_words_nemo_threshold" => 11)
+            ))
+            @test FL.RANKQQ_RESTRICTED_WORDS_NEMO_THRESHOLD[] == 11
+            @test FL._load_linalg_thresholds!(; path=path, warn_on_mismatch=false)
+            @test FL.RANKQQ_RESTRICTED_WORDS_NEMO_THRESHOLD[] == 37
         finally
             @test FL._apply_linalg_thresholds!(old)
         end
@@ -1876,8 +2137,8 @@ using TOML
         B = FL._qq_sparse_fullcolumn_rand(500, 100, 0.05; rng=MersenneTwister(0x5EED))
         Xtrue = reshape(QQ[mod1(i + j, 5) for i in 1:100, j in 1:3], 100, 3)
         Y = B * Xtrue
-        expected_auto = FL._have_nemo() ? :nemo : :julia_sparse
-        @test FL._choose_linalg_backend(F, B; op=:solve) == expected_auto
+        @test FL._choose_solve_backend(F, B; factor=nothing) ==
+              FL._choose_linalg_backend(F, B; op=:solve)
 
         jfac = FL._factor_fullcolumnQQ(B)
         @test FL._choose_solve_backend(F, B; factor=jfac) == :julia_sparse
@@ -1890,6 +2151,32 @@ using TOML
             Xn = FL.solve_fullcolumn(F, B, Y; backend=:auto, cache=false, factor=nfac, check_rhs=true)
             @test Xn == Xtrue
         end
+    end
+
+    @testset "QQ reusable analysis and factor summary" begin
+        F = CM.QQField()
+        A = FL._qq_sparse_rand(80, 50, 0.08; rng=MersenneTwister(0xA11CE))
+        S = FL.elimination_summary(F, A)
+        Ana = FL.analyze_matrix(F, A)
+        @test FL.analysis_backend(Ana) in (:julia_exact, :julia_sparse, :nemo)
+        @test FL.rank(Ana) == FL.rank(S)
+        @test FL.nullspace(Ana) == FL.nullspace(S)
+        @test FL.colspace(Ana) == FL.colspace(S)
+        @test FL._kernel_image_summary(Ana) == FL._kernel_image_summary(S)
+
+        B = FL._qq_sparse_fullcolumn_rand(120, 40, 0.06; rng=MersenneTwister(0xBEEF))
+        Xtrue = reshape(QQ[CM.coerce(F, mod1(i + 2j, 7)) for i in 1:40, j in 1:6], 40, 6)
+        Y = B * Xtrue
+        Fac = FL.factor_fullcolumn(F, B; backend=:auto, cache=false)
+        AnaF = FL.analyze_matrix(F, B; fullcolumn_factor=true, cache=false)
+        @test FL.rank(Fac) == FL.rank(F, B)
+        @test FL.colspace(Fac) == FL.colspace(F, B)
+        @test FL.rank(AnaF) == FL.rank(F, B)
+        @test FL.fullcolumn_factor(AnaF) !== nothing
+        @test FL.solve_fullcolumn(F, B, Y; factor=Fac, check_rhs=true) == Xtrue
+        @test FL.solve_fullcolumn(F, B, Y; analysis=AnaF, check_rhs=true) == Xtrue
+        @test FL.elimination_summary(Fac) == FL.elimination_summary(AnaF)
+        @test_throws ErrorException FL.solve_fullcolumn(F, B, Y; factor=Fac, analysis=AnaF)
     end
 
     @testset "Tiny <=4x4 fast-path parity" begin

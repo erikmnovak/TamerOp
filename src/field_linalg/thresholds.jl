@@ -3,12 +3,35 @@
 #
 # Scope:
 #   Threshold state, backend-trait plumbing, tiny-kernel heuristics, threshold
-#   persistence helpers, and shared configuration for PosetModules.FieldLinAlg.
+#   persistence helpers, and shared configuration for TamerOp.FieldLinAlg.
+# Owns:
+#   - global threshold refs and schema versioning,
+#   - backend trait definitions shared by all kernels,
+#   - threshold load/save/apply helpers.
+# Does not own:
+#   - backend choice logic (`backend_routing.jl`),
+#   - QQ/non-QQ kernel implementations,
+#   - public API wrappers.
+# Depends on:
+#   - no later private fragment; this file is loaded first and provides shared
+#     state consumed by the rest of FieldLinAlg.
 # -----------------------------------------------------------------------------
 
 # -----------------------------------------------------------------------------
 # Backend selection + Nemo hooks
 # -----------------------------------------------------------------------------
+
+# Threshold semantics by operation:
+# - `*_RANK_*` thresholds govern backend crossover for rank and rank-like
+#   restricted helpers.
+# - `*_NULLSPACE_*` thresholds govern nullspace backend crossover.
+# - `*_COLSPACE_*` logic is expressed through routing helpers below rather than
+#   a large standalone threshold family.
+# - `*_SOLVE_*` thresholds govern full-column solve backend crossover, including
+#   sparse-shape/density buckets.
+# - `RANKQQ_RESTRICTED_WORDS_NEMO_THRESHOLD` and
+#   `ZN_QQ_DIMAT_SUBMATRIX_WORK_THRESHOLD` are restricted/words-path controls
+#   used by Flange/Zn/derived kernels that call into FieldLinAlg.
 
 const _NEMO_ENABLED = Ref(true)
 _have_nemo() = _NEMO_ENABLED[]
@@ -59,6 +82,7 @@ const MODULAR_SOLVE_THRESHOLD = Ref(120_000)
 const MODULAR_MIN_PRIMES = Ref(2)
 const MODULAR_MAX_PRIMES = Ref(6)
 const RANKQQ_DIM_SMALL_THRESHOLD = Ref(20_000)
+const RANKQQ_RESTRICTED_WORDS_NEMO_THRESHOLD = Ref(16)
 const ROWPOS_STAMP_MIN_ROWS = Ref(128)
 const ROWPOS_STAMP_DENSITY_NUM = Ref(1) # use stamp when nr/m >= 1/5
 const ROWPOS_STAMP_DENSITY_DEN = Ref(5)
@@ -337,7 +361,7 @@ end
 @inline _row_lookup(loc::_RowLocatorDict, r::Int) = get(loc.rowpos, r, 0)
 @inline _row_lookup(loc::_RowLocatorStamp, r::Int) = @inbounds (loc.marks[r] == loc.tag ? loc.pos[r] : 0)
 
-@inline _linalg_repo_root() = normpath(joinpath(@__DIR__, ".."))
+@inline _linalg_repo_root() = normpath(joinpath(@__DIR__, "..", ".."))
 
 function _linalg_thresholds_path(; root::AbstractString=_linalg_repo_root())
     return joinpath(root, "linalg_thresholds.toml")
@@ -399,6 +423,7 @@ function _current_linalg_thresholds()
         "modular_min_primes" => Int(MODULAR_MIN_PRIMES[]),
         "modular_max_primes" => Int(MODULAR_MAX_PRIMES[]),
         "rankqq_dim_small_threshold" => Int(RANKQQ_DIM_SMALL_THRESHOLD[]),
+        "rankqq_restricted_words_nemo_threshold" => Int(RANKQQ_RESTRICTED_WORDS_NEMO_THRESHOLD[]),
         "float_nullspace_svd_threshold" => Int(FLOAT_NULLSPACE_SVD_THRESHOLD[]),
         "float_sparse_svds_min_dim" => Int(FLOAT_SPARSE_SVDS_MIN_DIM[]),
         "float_sparse_svds_min_nnz" => Int(FLOAT_SPARSE_SVDS_MIN_NNZ[]),
@@ -458,6 +483,8 @@ function _apply_linalg_thresholds!(vals)::Bool
         MODULAR_MIN_PRIMES[] = Int(get(vals, "modular_min_primes", MODULAR_MIN_PRIMES[]))
         MODULAR_MAX_PRIMES[] = Int(get(vals, "modular_max_primes", MODULAR_MAX_PRIMES[]))
         RANKQQ_DIM_SMALL_THRESHOLD[] = Int(get(vals, "rankqq_dim_small_threshold", RANKQQ_DIM_SMALL_THRESHOLD[]))
+        RANKQQ_RESTRICTED_WORDS_NEMO_THRESHOLD[] = Int(get(vals, "rankqq_restricted_words_nemo_threshold",
+                                                           RANKQQ_RESTRICTED_WORDS_NEMO_THRESHOLD[]))
         FLOAT_NULLSPACE_SVD_THRESHOLD[] = Int(get(vals, "float_nullspace_svd_threshold", FLOAT_NULLSPACE_SVD_THRESHOLD[]))
         FLOAT_SPARSE_SVDS_MIN_DIM[] = Int(get(vals, "float_sparse_svds_min_dim", FLOAT_SPARSE_SVDS_MIN_DIM[]))
         FLOAT_SPARSE_SVDS_MIN_NNZ[] = Int(get(vals, "float_sparse_svds_min_nnz", FLOAT_SPARSE_SVDS_MIN_NNZ[]))
@@ -467,6 +494,7 @@ function _apply_linalg_thresholds!(vals)::Bool
         MODULAR_MIN_PRIMES[] = max(1, MODULAR_MIN_PRIMES[])
         MODULAR_MAX_PRIMES[] = max(MODULAR_MIN_PRIMES[], MODULAR_MAX_PRIMES[])
         RANKQQ_DIM_SMALL_THRESHOLD[] = max(1, RANKQQ_DIM_SMALL_THRESHOLD[])
+        RANKQQ_RESTRICTED_WORDS_NEMO_THRESHOLD[] = max(1, RANKQQ_RESTRICTED_WORDS_NEMO_THRESHOLD[])
         QQ_NEMO_RANK_THRESHOLD_SQUARE[] = max(1, QQ_NEMO_RANK_THRESHOLD_SQUARE[])
         QQ_NEMO_RANK_THRESHOLD_TALL[] = max(1, QQ_NEMO_RANK_THRESHOLD_TALL[])
         QQ_NEMO_RANK_THRESHOLD_WIDE[] = max(1, QQ_NEMO_RANK_THRESHOLD_WIDE[])
@@ -563,4 +591,3 @@ function _load_linalg_thresholds!(; path::AbstractString=_linalg_thresholds_path
     end
     return true
 end
-

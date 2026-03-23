@@ -3,18 +3,18 @@ module TamerOpArpackExt
 using Arpack
 using SparseArrays
 
-const PM = let pm = nothing
-    if isdefined(Main, :PosetModules)
-        pm = getfield(Main, :PosetModules)
+const TO = let pm = nothing
+    if isdefined(Main, :TamerOp)
+        pm = getfield(Main, :TamerOp)
     else
-        @eval import PosetModules
-        pm = PosetModules
+        @eval import TamerOp
+        pm = TamerOp
     end
     pm
 end
 
-const FL = PM.FieldLinAlg
-const CM = PM.CoreModules
+const FL = TO.FieldLinAlg
+const CM = TO.CoreModules
 
 function _svds_nullspace_impl(F::CM.RealField, A)
     S = A isa SparseMatrixCSC ? A : sparse(A)

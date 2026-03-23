@@ -2,18 +2,18 @@ using Random
 using Printf
 
 try
-    using PosetModules
+    using TamerOp
 catch
-    include(joinpath(@__DIR__, "..", "src", "PosetModules.jl"))
-    using .PosetModules
+    include(joinpath(@__DIR__, "..", "src", "TamerOp.jl"))
+    using .TamerOp
 end
 
-const CM = PosetModules.CoreModules
-const RG = PosetModules.RegionGeometry
-const EC = PosetModules.EncodingCore
-const FF = PosetModules.FiniteFringe
-const PLP = PosetModules.PLPolyhedra
-const PLB = PosetModules.PLBackend
+const CM = TamerOp.CoreModules
+const RG = TamerOp.RegionGeometry
+const EC = TamerOp.EncodingCore
+const FF = TamerOp.FiniteFringe
+const PLP = TamerOp.PLPolyhedra
+const PLB = TamerOp.PLBackend
 
 function _parse_flag(args::Vector{String}, key::String, default)
     prefix = key * "="
@@ -46,24 +46,25 @@ function _with_region_toggles(
     fast_wrappers::Bool,
     direct_volume::Bool,
     workspace_reuse::Bool,
-    blocked_projection::Bool,
     sampled_summary_cache::Bool,
+    cached_locate_style::Bool,
 )
     prev_batched = RG._REGION_BATCHED_LOCATE[]
     prev_fast = RG._REGION_FAST_WRAPPERS[]
     prev_thresh = RG._REGION_BATCHED_LOCATE_MIN_PROPOSALS[]
     prev_direct = RG._REGION_DIRECT_VOLUME[]
     prev_work = RG._REGION_WORKSPACE_REUSE[]
-    prev_block = RG._REGION_BLOCKED_PROJECTION[]
     prev_summary = RG._REGION_SAMPLED_SUMMARY_CACHE[]
+    prev_style = EC._ENCODINGCORE_CACHED_LOCATE_STYLE[]
     RG._REGION_BATCHED_LOCATE[] = batched
     RG._REGION_FAST_WRAPPERS[] = fast_wrappers
     RG._REGION_BATCHED_LOCATE_MIN_PROPOSALS[] = 1
     RG._REGION_DIRECT_VOLUME[] = direct_volume
     RG._REGION_WORKSPACE_REUSE[] = workspace_reuse
-    RG._REGION_BLOCKED_PROJECTION[] = blocked_projection
     RG._REGION_SAMPLED_SUMMARY_CACHE[] = sampled_summary_cache
+    EC._ENCODINGCORE_CACHED_LOCATE_STYLE[] = cached_locate_style
     RG._clear_region_geometry_runtime_caches!()
+    EC._clear_locate_style_cache!()
     try
         return f()
     finally
@@ -72,19 +73,21 @@ function _with_region_toggles(
         RG._REGION_BATCHED_LOCATE_MIN_PROPOSALS[] = prev_thresh
         RG._REGION_DIRECT_VOLUME[] = prev_direct
         RG._REGION_WORKSPACE_REUSE[] = prev_work
-        RG._REGION_BLOCKED_PROJECTION[] = prev_block
         RG._REGION_SAMPLED_SUMMARY_CACHE[] = prev_summary
+        EC._ENCODINGCORE_CACHED_LOCATE_STYLE[] = prev_style
         RG._clear_region_geometry_runtime_caches!()
+        EC._clear_locate_style_cache!()
     end
 end
 
 function _grid_fixture()
     P = FF.ProductOfChainsPoset((2, 2))
     pi = EC.GridEncodingMap(P, ([0.0, 1.0], [0.0, 2.0]))
+    enc = EC.compile_encoding(P, pi; meta=CM.EncodingCache())
     box = ([0.0, 0.0], [2.0, 3.0])
     r = EC.locate(pi, [0.5, 1.0])
     dirs = RG._random_unit_directions(2, 96; rng=MersenneTwister(17))
-    return (; pi, box, r, dirs)
+    return (; pi, enc, box, r, dirs)
 end
 
 function _poly_fixture()
@@ -113,8 +116,8 @@ const _BEFORE_TOGGLES = (
     fast_wrappers=false,
     direct_volume=false,
     workspace_reuse=false,
-    blocked_projection=false,
     sampled_summary_cache=false,
+    cached_locate_style=false,
 )
 
 const _AFTER_TOGGLES = (
@@ -122,8 +125,8 @@ const _AFTER_TOGGLES = (
     fast_wrappers=true,
     direct_volume=true,
     workspace_reuse=true,
-    blocked_projection=true,
     sampled_summary_cache=true,
+    cached_locate_style=true,
 )
 
 function main(args)
@@ -143,29 +146,41 @@ function main(args)
                 box=grid.box, nsamples=2048, max_proposals=8192,
                 rng=MersenneTwister(11), strict=true)
         end),
+        ("principal_directions_info_grid", () -> begin
+            RG.region_principal_directions(grid.pi, grid.r;
+                box=grid.box, nsamples=2048, max_proposals=8192,
+                rng=MersenneTwister(13), strict=true, return_info=true, nbatches=8)
+        end),
         ("mean_width_grid", () -> begin
             RG.region_mean_width(grid.pi, grid.r;
                 box=grid.box, method=:mc, ndirs=size(grid.dirs, 2), directions=grid.dirs,
                 nsamples=2048, max_proposals=8192, rng=MersenneTwister(19), strict=true)
         end),
         ("anisotropy_descriptor_pair_grid", () -> begin
-            RG.region_covariance_anisotropy(grid.pi, grid.r;
+            RG.region_covariance_anisotropy(grid.enc, grid.r;
                 box=grid.box, nsamples=2048, max_proposals=8192,
                 rng=MersenneTwister(23), strict=true)
-            RG.region_covariance_eccentricity(grid.pi, grid.r;
+            RG.region_covariance_eccentricity(grid.enc, grid.r;
                 box=grid.box, nsamples=2048, max_proposals=8192,
                 rng=MersenneTwister(23), strict=true)
         end),
         ("mean_width_repeat_grid", () -> begin
-            RG.region_mean_width(grid.pi, grid.r;
-                box=grid.box, method=:mc, ndirs=size(grid.dirs, 2), directions=grid.dirs,
+            RG.region_mean_width(grid.enc, grid.r;
+                box=grid.box, method=:mc, ndirs=size(grid.dirs, 2),
                 nsamples=2048, max_proposals=8192, rng=MersenneTwister(29), strict=true)
-            RG.region_mean_width(grid.pi, grid.r;
-                box=grid.box, method=:mc, ndirs=size(grid.dirs, 2), directions=grid.dirs,
+            RG.region_mean_width(grid.enc, grid.r;
+                box=grid.box, method=:mc, ndirs=size(grid.dirs, 2),
                 nsamples=2048, max_proposals=8192, rng=MersenneTwister(29), strict=true)
         end),
         ("centroid_boxes", () -> begin
             RG.region_centroid(boxes.pi, boxes.r; box=boxes.box)
+        end),
+        ("boundary_to_volume_boxes", () -> begin
+            RG.region_boundary_to_volume_ratio(boxes.pi, boxes.r; box=boxes.box)
+        end),
+        ("minkowski_boxes", () -> begin
+            RG.region_minkowski_functionals(boxes.pi, boxes.r;
+                box=boxes.box, mean_width_method=:cauchy)
         end),
     ]
     if poly !== nothing

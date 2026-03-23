@@ -1,3 +1,0 @@
-case,family,stage,cache_mode,median_ms,p90_ms,median_alloc_kib
-h0_active_chain_incremental_probe_rips_d1,point,module,incremental_on,0.683077,1.52875,2028.734375
-h0_active_chain_incremental_probe_rips_d1,point,module,incremental_off,1.098595,1.527645,2384.4375

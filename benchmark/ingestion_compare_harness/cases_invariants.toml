@@ -1,0 +1,150 @@
+[meta]
+version = 1
+description = "End-to-end invariant comparison cases for tamer-op vs multipers."
+
+[invariant_eligibility]
+rips_parity = ["euler_signed_measure"]
+degree_rips_parity = []
+rips_codensity_parity = ["euler_signed_measure"]
+rips_lowerstar_parity = ["euler_signed_measure"]
+landmark_parity = ["euler_signed_measure"]
+delaunay_lowerstar_parity = []
+alpha_parity = ["euler_signed_measure"]
+core_delaunay_parity = []
+cubical_parity = ["euler_signed_measure"]
+
+[[cases]]
+id = "inv_rips_n1000_d2_s11"
+regime = "rips_parity"
+dataset = "gaussian_shell"
+n_points = 1000
+ambient_dim = 2
+seed = 11
+max_dim = 1
+
+[[cases]]
+id = "inv_rips_n1000_d8_s11"
+regime = "rips_parity"
+dataset = "gaussian_shell"
+n_points = 1000
+ambient_dim = 8
+seed = 11
+max_dim = 1
+
+[[cases]]
+id = "inv_degree_rips_n1000_d2_s11"
+regime = "degree_rips_parity"
+dataset = "gaussian_shell"
+n_points = 1000
+ambient_dim = 2
+seed = 11
+max_dim = 1
+
+[[cases]]
+id = "inv_degree_rips_n1000_d8_s11"
+regime = "degree_rips_parity"
+dataset = "gaussian_shell"
+n_points = 1000
+ambient_dim = 8
+seed = 11
+max_dim = 1
+
+[[cases]]
+id = "inv_rips_codensity_n750_d2_s11"
+regime = "rips_codensity_parity"
+dataset = "gaussian_shell"
+n_points = 750
+ambient_dim = 2
+seed = 11
+max_dim = 1
+
+[[cases]]
+id = "inv_rips_codensity_n750_d8_s11"
+regime = "rips_codensity_parity"
+dataset = "gaussian_shell"
+n_points = 750
+ambient_dim = 8
+seed = 11
+max_dim = 1
+
+[[cases]]
+id = "inv_rips_lowerstar_n1000_d2_s11"
+regime = "rips_lowerstar_parity"
+dataset = "gaussian_shell"
+n_points = 1000
+ambient_dim = 2
+seed = 11
+max_dim = 1
+
+[[cases]]
+id = "inv_rips_lowerstar_n1000_d8_s11"
+regime = "rips_lowerstar_parity"
+dataset = "gaussian_shell"
+n_points = 1000
+ambient_dim = 8
+seed = 11
+max_dim = 1
+
+[[cases]]
+id = "inv_delaunay_lowerstar_n200_d2_md2_s11"
+regime = "delaunay_lowerstar_parity"
+dataset = "gaussian_shell"
+n_points = 200
+ambient_dim = 2
+seed = 11
+max_dim = 2
+
+[[cases]]
+id = "inv_delaunay_lowerstar_n300_d2_md2_s17"
+regime = "delaunay_lowerstar_parity"
+dataset = "gaussian_shell"
+n_points = 300
+ambient_dim = 2
+seed = 17
+max_dim = 2
+
+[[cases]]
+id = "inv_alpha_n150_d2_md2_s11"
+regime = "alpha_parity"
+dataset = "gaussian_shell"
+n_points = 150
+ambient_dim = 2
+seed = 11
+max_dim = 2
+
+[[cases]]
+id = "inv_landmark_n5000_d2_md1_s11"
+regime = "landmark_parity"
+dataset = "gaussian_shell"
+n_points = 5000
+ambient_dim = 2
+seed = 11
+max_dim = 1
+
+[[cases]]
+id = "inv_landmark_n5000_d8_md1_s11"
+regime = "landmark_parity"
+dataset = "gaussian_shell"
+n_points = 5000
+ambient_dim = 8
+seed = 11
+max_dim = 1
+
+[[cases]]
+id = "inv_core_delaunay_n150_d2_md2_s11"
+regime = "core_delaunay_parity"
+dataset = "gaussian_shell"
+n_points = 150
+ambient_dim = 2
+seed = 11
+max_dim = 2
+
+[[cases]]
+id = "inv_cubical_side24_s11"
+regime = "cubical_parity"
+dataset = "image_sine"
+n_points = 576
+ambient_dim = 2
+seed = 11
+max_dim = 2
+image_side = 24

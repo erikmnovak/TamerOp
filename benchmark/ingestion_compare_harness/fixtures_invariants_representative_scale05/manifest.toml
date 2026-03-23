@@ -1,0 +1,71 @@
+[meta]
+version = 1
+cases_file = "benchmark/ingestion_compare_harness/cases_invariants_representative.toml"
+scale = 0.5
+
+[invariant_eligibility]
+alpha_parity = ["euler_signed_measure"]
+cubical_parity = ["euler_signed_measure"]
+
+[[cases]]
+id = "inv_alpha_n150_d2_md2_s11"
+regime = "alpha_parity"
+dataset = "gaussian_shell"
+path = "inv_alpha_n150_d2_md2_s11.csv"
+n_points = 75
+ambient_dim = 2
+seed = 11
+max_dim = 2
+
+[[cases]]
+id = "inv_alpha_n1500_d2_md2_s11"
+regime = "alpha_parity"
+dataset = "gaussian_shell"
+path = "inv_alpha_n1500_d2_md2_s11.csv"
+n_points = 750
+ambient_dim = 2
+seed = 11
+max_dim = 2
+
+[[cases]]
+id = "inv_alpha_n15000_d2_md2_s11"
+regime = "alpha_parity"
+dataset = "gaussian_shell"
+path = "inv_alpha_n15000_d2_md2_s11.csv"
+n_points = 7500
+ambient_dim = 2
+seed = 11
+max_dim = 2
+
+[[cases]]
+id = "inv_cubical_side24_s11"
+regime = "cubical_parity"
+dataset = "image_sine"
+path = "inv_cubical_side24_s11.csv"
+n_points = 289
+ambient_dim = 2
+seed = 11
+max_dim = 2
+image_side = 17
+
+[[cases]]
+id = "inv_cubical_side80_s11"
+regime = "cubical_parity"
+dataset = "image_sine"
+path = "inv_cubical_side80_s11.csv"
+n_points = 3249
+ambient_dim = 2
+seed = 11
+max_dim = 2
+image_side = 57
+
+[[cases]]
+id = "inv_cubical_side253_s11"
+regime = "cubical_parity"
+dataset = "image_sine"
+path = "inv_cubical_side253_s11.csv"
+n_points = 32041
+ambient_dim = 2
+seed = 11
+max_dim = 2
+image_side = 179

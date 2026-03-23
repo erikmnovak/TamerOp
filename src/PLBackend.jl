@@ -21,8 +21,13 @@ module PLBackend
 # =============================================================================
 
 using ..FiniteFringe
-import ..FiniteFringe: AbstractPoset, nvertices
-import ..ZnEncoding: SignaturePoset
+import ..FiniteFringe: AbstractPoset, nvertices, birth_upsets, death_downsets
+import ..ZnEncoding: SignaturePoset, nregions, critical_coordinates,
+                     critical_coordinate_counts, region_representatives,
+                     region_representative, region_signature, cell_shape,
+                     has_direct_lookup, region_poset, poset_kind
+import ..DataTypes: ambient_dim
+import ..FlangeZn: generator_counts
 using ..CoreModules: QQ
 using ..Options: EncodingOptions, validate_pl_mode
 using ..EncodingCore: AbstractPLikeEncodingMap, CompiledEncoding
@@ -37,7 +42,10 @@ import ..RegionGeometry: region_weights, region_volume, region_bbox, region_diam
                          region_chebyshev_ball, region_circumradius, region_mean_width,
                          _region_bbox_fast, _region_centroid_fast,
                          _region_volume_fast, _region_boundary_measure_fast,
-                         _region_circumradius_fast, _region_minkowski_functionals_fast
+                         _region_circumradius_fast, _region_minkowski_functionals_fast,
+                         _region_geometry_summary_fast, _region_weights_closure,
+                         _region_boundary_measure_strict, _region_bbox_strict,
+                         _region_centroid_closure
 
 # ------------------------------- Shapes ---------------------------------------
 
@@ -412,6 +420,172 @@ end
 # Return the axis coordinate lists for this encoding.
 axes_from_encoding(pi::PLEncodingMapBoxes) = pi.coords
 
+function lower_bounds end
+function upper_bounds end
+function axes_uniformity end
+
+"""
+    ambient_dim(U::BoxUpset) -> Int
+    ambient_dim(D::BoxDownset) -> Int
+    ambient_dim(pi::PLEncodingMapBoxes) -> Int
+
+Return the ambient Euclidean dimension of an axis-aligned PL-backend object.
+"""
+@inline ambient_dim(U::BoxUpset) = length(U.ell)
+@inline ambient_dim(D::BoxDownset) = length(D.u)
+@inline ambient_dim(pi::PLEncodingMapBoxes) = pi.n
+@inline ambient_dim(enc::CompiledEncoding{<:PLEncodingMapBoxes}) = ambient_dim(enc.pi)
+
+"""
+    lower_bounds(U::BoxUpset) -> Vector{Float64}
+    upper_bounds(D::BoxDownset) -> Vector{Float64}
+
+Return the defining threshold vector of an axis-aligned upset or downset.
+
+These are the semantic alternatives to inspecting `U.ell` or `D.u` directly.
+For notebook and REPL exploration, prefer these accessors over field
+inspection so code reads in the mathematical language of lower and upper
+bounds.
+"""
+@inline lower_bounds(U::BoxUpset) = U.ell
+@inline upper_bounds(D::BoxDownset) = D.u
+
+"""
+    birth_upsets(pi::PLEncodingMapBoxes)
+    death_downsets(pi::PLEncodingMapBoxes)
+
+Return the birth-upset and death-downset generators used to build the
+axis-aligned encoding map.
+
+These are the canonical accessors for the generator families carried by the
+box backend. Use them when you want to inspect the original box presentation
+without reading raw fields.
+"""
+@inline birth_upsets(pi::PLEncodingMapBoxes) = pi.Ups
+@inline birth_upsets(enc::CompiledEncoding{<:PLEncodingMapBoxes}) = birth_upsets(enc.pi)
+@inline death_downsets(pi::PLEncodingMapBoxes) = pi.Downs
+@inline death_downsets(enc::CompiledEncoding{<:PLEncodingMapBoxes}) = death_downsets(enc.pi)
+
+"""
+    nregions(pi) -> Int
+
+Return the number of encoded full-dimensional regions carried by a box backend
+encoding object.
+
+This is the preferred cheap scalar accessor when you only need the size of the
+region decomposition, not the region representatives or signatures themselves.
+"""
+@inline nregions(pi::PLEncodingMapBoxes) = length(pi.reps)
+@inline nregions(enc::CompiledEncoding{<:PLEncodingMapBoxes}) = nregions(enc.pi)
+
+"""
+    critical_coordinates(pi)
+
+Return the stored split coordinates along each axis of a box backend encoding.
+
+This is the owner-local alias to the coordinate grid used by the dense
+cell-to-region lookup table. Keep this as the cheap/default inspection path for
+the axis grid; only inspect cell-level or region-level data when you need a
+specific query or bounded geometry computation.
+"""
+@inline critical_coordinates(pi::PLEncodingMapBoxes) = pi.coords
+@inline critical_coordinates(enc::CompiledEncoding{<:PLEncodingMapBoxes}) = critical_coordinates(enc.pi)
+
+"""
+    critical_coordinate_counts(pi) -> Tuple
+
+Return the number of stored split coordinates along each axis.
+
+This is the preferred cheap scalar accessor when you only need the per-axis
+grid complexity, not the full coordinate lists returned by
+[`critical_coordinates`](@ref).
+"""
+@inline critical_coordinate_counts(pi::PLEncodingMapBoxes) = _box_critical_coordinate_counts(pi)
+@inline critical_coordinate_counts(enc::CompiledEncoding{<:PLEncodingMapBoxes}) =
+    critical_coordinate_counts(enc.pi)
+
+"""
+    generator_counts(pi) -> NamedTuple
+
+Return the number of birth-upset and death-downset generators as
+`(; upsets=..., downsets=...)`.
+
+This is the preferred cheap scalar accessor when you only need presentation
+sizes rather than the full generator objects returned by
+[`birth_upsets`](@ref) and [`death_downsets`](@ref).
+"""
+@inline generator_counts(pi::PLEncodingMapBoxes) = _box_generator_counts(pi)
+@inline generator_counts(enc::CompiledEncoding{<:PLEncodingMapBoxes}) = generator_counts(enc.pi)
+
+"""
+    axes_uniformity(pi) -> Tuple
+
+Return a boolean tuple indicating which axes have uniformly spaced split
+coordinates.
+
+This is the semantic scalar view of the per-axis arithmetic fast-path metadata
+used by the box backend locator.
+"""
+@inline axes_uniformity(pi::PLEncodingMapBoxes) = _box_axis_uniformity(pi)
+@inline axes_uniformity(enc::CompiledEncoding{<:PLEncodingMapBoxes}) = axes_uniformity(enc.pi)
+
+"""
+    region_representatives(pi)
+    region_representative(pi, r)
+
+Return all stored region representatives, or the representative for region `r`,
+of a box backend encoding object.
+
+Use these as the cheap/default region-level accessors before asking for heavier
+bounded geometry such as exact region boxes or adjacency.
+"""
+@inline region_representatives(pi::PLEncodingMapBoxes) = pi.reps
+@inline region_representatives(enc::CompiledEncoding{<:PLEncodingMapBoxes}) = region_representatives(enc.pi)
+@inline region_representative(pi::PLEncodingMapBoxes, r::Integer) =
+    (@boundscheck checkbounds(pi.reps, r); pi.reps[r])
+@inline region_representative(enc::CompiledEncoding{<:PLEncodingMapBoxes}, r::Integer) =
+    region_representative(enc.pi, r)
+
+"""
+    region_signature(pi, r) -> NamedTuple
+
+Return the `(y, z)` signature of region `r` as materialized boolean vectors.
+
+Use this for notebook or REPL inspection when you want the actual signature
+bits of a specific region rather than the cheap/default summary surfaces such
+as [`box_encoding_summary`](@ref) or [`box_query_summary`](@ref).
+"""
+@inline function region_signature(pi::PLEncodingMapBoxes, r::Integer)
+    @boundscheck begin
+        checkbounds(pi.sig_y, r)
+        checkbounds(pi.sig_z, r)
+    end
+    return (; y=collect(Bool, pi.sig_y[r]), z=collect(Bool, pi.sig_z[r]))
+end
+@inline region_signature(enc::CompiledEncoding{<:PLEncodingMapBoxes}, r::Integer) =
+    region_signature(enc.pi, r)
+
+"""
+    cell_shape(pi) -> Vector{Int}
+
+Return the slab-cell grid shape used by the box backend direct lookup table.
+"""
+@inline cell_shape(pi::PLEncodingMapBoxes) = pi.cell_shape
+@inline cell_shape(enc::CompiledEncoding{<:PLEncodingMapBoxes}) = cell_shape(enc.pi)
+
+"""
+    has_direct_lookup(pi) -> Bool
+
+Return whether the box backend encoding stores the dense cell-to-region lookup
+table needed for the cheap/default [`locate`](@ref) path.
+
+For `encode_fringe_boxes(...)` outputs this should normally be `true`. It is
+useful as an inspectable contract when comparing raw owner objects and compiled
+wrappers.
+"""
+@inline has_direct_lookup(pi::PLEncodingMapBoxes) = !isempty(pi.cell_to_region)
+@inline has_direct_lookup(enc::CompiledEncoding{<:PLEncodingMapBoxes}) = has_direct_lookup(enc.pi)
+
 # --- Fast locate -------------------------------------------------------------
 
 @inline function _slab_index(ci::Vector{Float64}, xi::Real,
@@ -543,6 +717,54 @@ function locate(pi::PLEncodingMapBoxes{N,MY,MZ}, x::NTuple{N,T}; mode::Symbol=:f
 
     # Only for measure-zero ambiguous boundary points:
     return get(pi.sig_to_region, _sigkey(pi, x), 0)
+end
+
+function locate_many!(
+    dest::AbstractVector{<:Integer},
+    pi::PLEncodingMapBoxes{N,MY,MZ},
+    X::AbstractMatrix{<:AbstractFloat};
+    mode::Symbol = :fast,
+    threaded::Bool = false,
+) where {N,MY,MZ}
+    _ = validate_pl_mode(mode)
+    _ = threaded
+    size(X, 1) == pi.n || error("locate_many!: X must have size ($(pi.n), npoints)")
+    length(dest) == size(X, 2) || error("locate_many!: destination length mismatch")
+    isempty(pi.cell_to_region) && error("locate_many!: missing cell_to_region table; construct via encode_fringe_boxes")
+
+    @inbounds for j in 1:size(X, 2)
+        lin = 1
+        ambiguous = false
+        for i in 1:N
+            ci = pi.coords[i]
+            xi = X[i, j]
+            s = _slab_index(ci, xi, pi.axis_is_uniform[i], pi.axis_min[i], pi.axis_step[i])
+            if 1 <= s <= length(ci) && xi == ci[s]
+                flag = pi.coord_flags[i][s]
+                if flag == 0x02
+                    s -= 1
+                elseif flag == 0x03
+                    ambiguous = true
+                end
+            end
+            lin += s * pi.cell_strides[i]
+        end
+        dest[j] = ambiguous ? get(pi.sig_to_region, _sigkey(pi, view(X, :, j)), 0) : pi.cell_to_region[lin]
+    end
+    return dest
+end
+
+function locate_many!(
+    dest::AbstractVector{<:Integer},
+    pi::PLEncodingMapBoxes{N,MY,MZ},
+    X::AbstractMatrix{<:Real};
+    kwargs...,
+) where {N,MY,MZ}
+    Xf = Matrix{Float64}(undef, size(X, 1), size(X, 2))
+    @inbounds for j in axes(X, 2), i in axes(X, 1)
+        Xf[i, j] = float(X[i, j])
+    end
+    return locate_many!(dest, pi, Xf; kwargs...)
 end
 
 # ------------------------- Region geometry / sizes ----------------------------
@@ -1179,8 +1401,10 @@ Important: This backend can represent nonconvex unions, so the planar Cauchy for
 """
 function region_mean_width(pi::PLEncodingMapBoxes, r::Integer; box=nothing,
     method::Symbol=:auto, ndirs::Integer=256,
+    nsamples::Integer=0, max_proposals::Integer=0,
     rng=Random.default_rng(), directions=nothing,
     strict::Bool=true, closure::Bool=true, cache=nothing)
+    _ = (nsamples, max_proposals)
 
     box === nothing && error("region_mean_width: box=(a,b) is required")
     a_box, b_box = box
@@ -2162,14 +2386,6 @@ function encode_fringe_boxes(Ups::Vector{BoxUpset},
     return P, H, pi
 end
 
-encode_fringe_boxes(Ups::Vector{BoxUpset},
-                    Downs::Vector{BoxDownset},
-                    Phi_in::AbstractMatrix{QQ};
-                    opts::EncodingOptions=EncodingOptions(),
-                    poset_kind::Symbol = :signature) =
-    encode_fringe_boxes(Ups, Downs, Phi_in, opts; poset_kind = poset_kind)
-
-
 # Convenience overload: Phi defaults to all-ones.
 function encode_fringe_boxes(Ups::Vector{BoxUpset}, 
                              Downs::Vector{BoxDownset}, 
@@ -2180,12 +2396,6 @@ function encode_fringe_boxes(Ups::Vector{BoxUpset},
     Phi = reshape(ones(QQ, r * m), r, m)
     return encode_fringe_boxes(Ups, Downs, Phi, opts; poset_kind = poset_kind)
 end
-
-encode_fringe_boxes(Ups::Vector{BoxUpset},
-                    Downs::Vector{BoxDownset};
-                    opts::EncodingOptions=EncodingOptions(),
-                    poset_kind::Symbol = :signature) =
-    encode_fringe_boxes(Ups, Downs, opts; poset_kind = poset_kind)
 
 # Convenience overload: accept Phi as a length (r*m) vector.
 function encode_fringe_boxes(Ups::Vector{BoxUpset},
@@ -2200,12 +2410,624 @@ function encode_fringe_boxes(Ups::Vector{BoxUpset},
     return encode_fringe_boxes(Ups, Downs, Phi, opts; poset_kind = poset_kind)
 end
 
-encode_fringe_boxes(Ups::Vector{BoxUpset},
-                    Downs::Vector{BoxDownset},
-                    Phi_vec::AbstractVector{QQ};
-                    opts::EncodingOptions=EncodingOptions(),
-                    poset_kind::Symbol = :signature) =
-    encode_fringe_boxes(Ups, Downs, Phi_vec, opts; poset_kind = poset_kind)
+# -----------------------------------------------------------------------------
+# UX layer: summaries, validation, and semantic accessors
+# -----------------------------------------------------------------------------
+
+@inline _unwrap_box_pi(pi::PLEncodingMapBoxes) = pi
+@inline _unwrap_box_pi(enc::CompiledEncoding{<:PLEncodingMapBoxes}) = enc.pi
+@inline _maybe_unwrap_box_pi(pi::PLEncodingMapBoxes) = pi
+@inline _maybe_unwrap_box_pi(enc::CompiledEncoding{<:PLEncodingMapBoxes}) = enc.pi
+@inline _maybe_unwrap_box_pi(::Any) = nothing
+
+@inline _box_generator_counts(pi::PLEncodingMapBoxes) = (; upsets=m(pi), downsets=r(pi))
+@inline _box_critical_coordinate_counts(pi::PLEncodingMapBoxes) = ntuple(i -> length(pi.coords[i]), pi.n)
+@inline _box_axis_uniformity(pi::PLEncodingMapBoxes) = ntuple(i -> Bool(pi.axis_is_uniform[i]), length(pi.axis_is_uniform))
+@inline _box_issue_report(kind::Symbol, valid::Bool; kwargs...) = (; kind, valid, kwargs...)
+
+@inline function _throw_invalid_plbackend(fn::Symbol, issues::Vector{String})
+    msg = isempty(issues) ? "invalid PLBackend object." :
+          "invalid PLBackend object:\n - " * join(issues, "\n - ")
+    throw(ArgumentError(string(fn) * ": " * msg))
+end
+
+@inline _box_point_length(x::AbstractVector) = length(x)
+@inline _box_point_length(x::Tuple) = length(x)
+@inline _box_point_length(::Any) = nothing
+
+@inline _box_point_kind(x::AbstractVector{<:Integer}) = :integer_vector
+@inline _box_point_kind(x::AbstractVector{<:AbstractFloat}) = :float_vector
+@inline _box_point_kind(x::AbstractVector{<:Real}) = :real_vector
+@inline _box_point_kind(x::Tuple) = all(v -> v isa Integer, x) ? :integer_tuple :
+                                    all(v -> v isa AbstractFloat, x) ? :float_tuple :
+                                    all(v -> v isa Real, x) ? :real_tuple : :invalid
+@inline _box_point_kind(::Any) = :invalid
+
+@inline _box_matrix_kind(X::AbstractMatrix{<:Integer}) = :integer_matrix
+@inline _box_matrix_kind(X::AbstractMatrix{<:AbstractFloat}) = :float_matrix
+@inline _box_matrix_kind(X::AbstractMatrix{<:Real}) = :real_matrix
+@inline _box_matrix_kind(::Any) = :invalid
+
+@inline _box_endpoint_kind(x::AbstractVector{<:Integer}) = :integer_vector
+@inline _box_endpoint_kind(x::AbstractVector{<:AbstractFloat}) = :float_vector
+@inline _box_endpoint_kind(x::AbstractVector{<:Real}) = :real_vector
+@inline _box_endpoint_kind(x::Tuple) = all(v -> v isa Integer, x) ? :integer_tuple :
+                                       all(v -> v isa AbstractFloat, x) ? :float_tuple :
+                                       all(v -> v isa Real, x) ? :real_tuple : :invalid
+@inline _box_endpoint_kind(::Any) = :invalid
+
+@inline _box_endpoint_length(x::AbstractVector) = length(x)
+@inline _box_endpoint_length(x::Tuple) = length(x)
+@inline _box_endpoint_length(::Any) = nothing
+
+"""
+    PLBackendValidationSummary
+
+Notebook-friendly wrapper for PLBackend validation reports.
+"""
+struct PLBackendValidationSummary{R}
+    report::R
+end
+
+"""
+    plbackend_validation_summary(report) -> PLBackendValidationSummary
+
+Wrap a raw validation report returned by `check_box_*` in a compact user-facing
+container with a readable `show`.
+"""
+@inline plbackend_validation_summary(report::NamedTuple) = PLBackendValidationSummary(report)
+
+"""
+    check_box_upset(U; throw=false) -> NamedTuple
+
+Validate a hand-built [`BoxUpset`](@ref).
+
+This is the preferred validation helper when users construct axis-aligned birth
+generators directly. The report checks ambient dimension and finiteness of the
+stored lower bounds. Use `throw=true` to turn invalid reports into
+`ArgumentError`s for early contract enforcement.
+"""
+function check_box_upset(U::BoxUpset; throw::Bool=false)
+    issues = String[]
+    n0 = ambient_dim(U)
+    all(isfinite, U.ell) || push!(issues, "lower bounds must be finite.")
+    valid = isempty(issues)
+    throw && !valid && _throw_invalid_plbackend(:check_box_upset, issues)
+    return _box_issue_report(:box_upset, valid;
+                             ambient_dim=n0,
+                             lower_bounds=lower_bounds(U),
+                             issues=issues)
+end
+
+"""
+    check_box_downset(D; throw=false) -> NamedTuple
+
+Validate a hand-built [`BoxDownset`](@ref).
+
+This is the preferred validation helper when users construct axis-aligned death
+generators directly. The report checks ambient dimension and finiteness of the
+stored upper bounds. Use `throw=true` to request strict contract enforcement.
+"""
+function check_box_downset(D::BoxDownset; throw::Bool=false)
+    issues = String[]
+    n0 = ambient_dim(D)
+    all(isfinite, D.u) || push!(issues, "upper bounds must be finite.")
+    valid = isempty(issues)
+    throw && !valid && _throw_invalid_plbackend(:check_box_downset, issues)
+    return _box_issue_report(:box_downset, valid;
+                             ambient_dim=n0,
+                             upper_bounds=upper_bounds(D),
+                             issues=issues)
+end
+
+"""
+    check_box_encoding_map(pi; throw=false) -> NamedTuple
+
+Validate a box-backend encoding map or compiled encoding wrapper.
+
+The report checks ambient dimension consistency, region/signature array lengths,
+grid-shape metadata, and whether the dense direct-lookup table is present.
+
+This is the main notebook-friendly validation helper for owner-level box
+encodings. Prefer it before manually inspecting `coords`, `cell_shape`,
+`sig_y`, `sig_z`, or the cached direct-lookup tables.
+"""
+function check_box_encoding_map(pi_or_enc; throw::Bool=false)
+    pi = _maybe_unwrap_box_pi(pi_or_enc)
+    issues = String[]
+    if pi === nothing
+        push!(issues, "expected PLEncodingMapBoxes or CompiledEncoding{<:PLEncodingMapBoxes}.")
+        throw && _throw_invalid_plbackend(:check_box_encoding_map, issues)
+        return _box_issue_report(:box_encoding_map, false;
+                                 ambient_dim=nothing,
+                                 nregions=nothing,
+                                 generator_counts=nothing,
+                                 cell_shape=nothing,
+                                 direct_lookup_enabled=nothing,
+                                 axes_uniform=nothing,
+                                 issues=issues)
+    end
+
+    n0 = ambient_dim(pi)
+    length(pi.coords) == n0 || push!(issues, "coordinate tuple has length $(length(pi.coords)), expected $n0.")
+    length(pi.cell_shape) == n0 || push!(issues, "cell_shape has length $(length(pi.cell_shape)), expected $n0.")
+    length(pi.cell_strides) == n0 || push!(issues, "cell_strides has length $(length(pi.cell_strides)), expected $n0.")
+    length(pi.coord_flags) == n0 || push!(issues, "coord_flags has length $(length(pi.coord_flags)), expected $n0.")
+    length(pi.axis_is_uniform) == n0 || push!(issues, "axis_is_uniform has length $(length(pi.axis_is_uniform)), expected $n0.")
+    length(pi.axis_step) == n0 || push!(issues, "axis_step has length $(length(pi.axis_step)), expected $n0.")
+    length(pi.axis_min) == n0 || push!(issues, "axis_min has length $(length(pi.axis_min)), expected $n0.")
+
+    @inbounds for i in 1:min(length(pi.coords), n0)
+        axis = pi.coords[i]
+        all(isfinite, axis) || push!(issues, "axis $i coordinates must be finite.")
+        issorted(axis) || push!(issues, "axis $i coordinates must be sorted.")
+        allunique(axis) || push!(issues, "axis $i coordinates must be unique.")
+    end
+
+    expected_shape = [length(axis) + 1 for axis in pi.coords]
+    pi.cell_shape == expected_shape || push!(issues, "cell_shape $(pi.cell_shape) does not match coordinates $(expected_shape).")
+    pi.cell_strides == _cell_strides(pi.cell_shape) || push!(issues, "cell_strides do not match cell_shape.")
+
+    expected_regions = length(pi.reps)
+    length(pi.sig_y) == expected_regions || push!(issues, "sig_y has length $(length(pi.sig_y)), expected $expected_regions.")
+    length(pi.sig_z) == expected_regions || push!(issues, "sig_z has length $(length(pi.sig_z)), expected $expected_regions.")
+    @inbounds for t in eachindex(pi.reps)
+        length(pi.reps[t]) == n0 || push!(issues, "representative $t has length $(length(pi.reps[t])), expected $n0.")
+    end
+    @inbounds for t in eachindex(pi.sig_y)
+        length(pi.sig_y[t]) == m(pi) || push!(issues, "sig_y[$t] has length $(length(pi.sig_y[t])), expected $(m(pi)).")
+    end
+    @inbounds for t in eachindex(pi.sig_z)
+        length(pi.sig_z[t]) == r(pi) || push!(issues, "sig_z[$t] has length $(length(pi.sig_z[t])), expected $(r(pi)).")
+    end
+
+    direct_lookup_enabled = has_direct_lookup(pi)
+    direct_lookup_enabled || push!(issues, "missing cell_to_region table for direct lookup.")
+    expected_cells = isempty(pi.cell_shape) ? 1 : prod(pi.cell_shape)
+    length(pi.cell_to_region) == expected_cells ||
+        push!(issues, "cell_to_region has length $(length(pi.cell_to_region)), expected $expected_cells.")
+    @inbounds for rid in pi.cell_to_region
+        (1 <= rid <= expected_regions) || push!(issues, "cell_to_region contains out-of-range region id $rid.")
+    end
+    for rid in values(pi.sig_to_region)
+        (1 <= rid <= expected_regions) || push!(issues, "sig_to_region contains out-of-range region id $rid.")
+    end
+    @inbounds for i in 1:min(length(pi.coord_flags), length(pi.coords))
+        length(pi.coord_flags[i]) == length(pi.coords[i]) ||
+            push!(issues, "coord_flags[$i] has length $(length(pi.coord_flags[i])), expected $(length(pi.coords[i])).")
+    end
+
+    valid = isempty(issues)
+    throw && !valid && _throw_invalid_plbackend(:check_box_encoding_map, issues)
+    return _box_issue_report(:box_encoding_map, valid;
+                             ambient_dim=n0,
+                             nregions=nregions(pi),
+                             generator_counts=_box_generator_counts(pi),
+                             cell_shape=cell_shape(pi),
+                             direct_lookup_enabled=direct_lookup_enabled,
+                             axes_uniform=_box_axis_uniformity(pi),
+                             issues=issues)
+end
+
+"""
+    check_box_point(pi, x; throw=false) -> NamedTuple
+
+Validate a single tuple/vector point query for [`locate`](@ref).
+
+Accepted queries are real tuples or real vectors of ambient dimension
+`ambient_dim(pi)`. This is the preferred cheap validation path before repeated
+REPL experimentation with `locate`.
+"""
+function check_box_point(pi_or_enc, x; throw::Bool=false)
+    pi = _maybe_unwrap_box_pi(pi_or_enc)
+    issues = String[]
+    ambient = pi === nothing ? nothing : ambient_dim(pi)
+    kind = _box_point_kind(x)
+    len = _box_point_length(x)
+
+    pi === nothing && push!(issues, "expected PLEncodingMapBoxes or CompiledEncoding{<:PLEncodingMapBoxes}.")
+    kind === :invalid && push!(issues, "point query must be a real tuple or real vector.")
+    if ambient !== nothing && len !== nothing && len != ambient
+        push!(issues, "point query has length $len, expected ambient dimension $ambient.")
+    end
+    if kind !== :invalid && (x isa AbstractVector{<:Real} || x isa Tuple)
+        all(isfinite, x) || push!(issues, "point query coordinates must be finite.")
+    end
+
+    valid = isempty(issues)
+    throw && !valid && _throw_invalid_plbackend(:check_box_point, issues)
+    return _box_issue_report(:box_point, valid;
+                             ambient_dim=ambient,
+                             query_kind=kind,
+                             point_length=len,
+                             direct_lookup_enabled=(pi === nothing ? nothing : has_direct_lookup(pi)),
+                             issues=issues)
+end
+
+"""
+    check_box_points(pi, X; throw=false) -> NamedTuple
+
+Validate a column-batch matrix query for [`locate_many!`](@ref).
+
+Accepted queries are real matrices whose columns are points in `R^n`, so the
+matrix must have `ambient_dim(pi)` rows. Use this before batched query
+workflows when the point-shape contract might be ambiguous.
+"""
+function check_box_points(pi_or_enc, X; throw::Bool=false)
+    pi = _maybe_unwrap_box_pi(pi_or_enc)
+    issues = String[]
+    ambient = pi === nothing ? nothing : ambient_dim(pi)
+    kind = _box_matrix_kind(X)
+    matrix_size = X isa AbstractMatrix ? size(X) : nothing
+
+    pi === nothing && push!(issues, "expected PLEncodingMapBoxes or CompiledEncoding{<:PLEncodingMapBoxes}.")
+    kind === :invalid && push!(issues, "query matrix must be a real matrix with points stored by columns.")
+    if ambient !== nothing && X isa AbstractMatrix && size(X, 1) != ambient
+        push!(issues, "query matrix has $(size(X, 1)) rows, expected ambient dimension $ambient.")
+    end
+    if X isa AbstractMatrix{<:Real}
+        all(isfinite, X) || push!(issues, "query matrix entries must be finite.")
+    end
+
+    valid = isempty(issues)
+    throw && !valid && _throw_invalid_plbackend(:check_box_points, issues)
+    return _box_issue_report(:box_points, valid;
+                             ambient_dim=ambient,
+                             query_kind=kind,
+                             matrix_size=matrix_size,
+                             direct_lookup_enabled=(pi === nothing ? nothing : has_direct_lookup(pi)),
+                             issues=issues)
+end
+
+"""
+    check_box_query_box(pi, box; throw=false) -> NamedTuple
+
+Validate a finite axis-aligned query box `box=(a,b)` for bounded region-geometry
+calls.
+
+The report explicitly records that a finite box is required for bounded region
+queries in this backend. This is the preferred validation path before
+`region_weights`, `region_bbox`, `region_adjacency`, and related box-sensitive
+geometry calls.
+"""
+function check_box_query_box(pi_or_enc, box; throw::Bool=false)
+    pi = _maybe_unwrap_box_pi(pi_or_enc)
+    issues = String[]
+    ambient = pi === nothing ? nothing : ambient_dim(pi)
+    endpoint_types = nothing
+    endpoint_lengths = nothing
+
+    pi === nothing && push!(issues, "expected PLEncodingMapBoxes or CompiledEncoding{<:PLEncodingMapBoxes}.")
+    if !(box isa Tuple && length(box) == 2)
+        push!(issues, "box must be a pair (a, b) of real endpoints.")
+    else
+        a, b = box
+        kind_a = _box_endpoint_kind(a)
+        kind_b = _box_endpoint_kind(b)
+        endpoint_types = (kind_a, kind_b)
+        kind_a === :invalid && push!(issues, "box lower endpoint must be a real tuple or real vector.")
+        kind_b === :invalid && push!(issues, "box upper endpoint must be a real tuple or real vector.")
+        len_a = _box_endpoint_length(a)
+        len_b = _box_endpoint_length(b)
+        endpoint_lengths = (len_a, len_b)
+        if ambient !== nothing && len_a !== nothing && len_a != ambient
+            push!(issues, "box lower endpoint has length $len_a, expected ambient dimension $ambient.")
+        end
+        if ambient !== nothing && len_b !== nothing && len_b != ambient
+            push!(issues, "box upper endpoint has length $len_b, expected ambient dimension $ambient.")
+        end
+        if isempty(issues)
+            av = Float64[float(v) for v in a]
+            bv = Float64[float(v) for v in b]
+            all(isfinite, av) || push!(issues, "box lower endpoint must be finite.")
+            all(isfinite, bv) || push!(issues, "box upper endpoint must be finite.")
+            @inbounds for i in eachindex(av, bv)
+                av[i] <= bv[i] || push!(issues, "box endpoint mismatch on axis $i: expected a[$i] <= b[$i].")
+            end
+        end
+    end
+
+    valid = isempty(issues)
+    throw && !valid && _throw_invalid_plbackend(:check_box_query_box, issues)
+    return _box_issue_report(:box_query_box, valid;
+                             ambient_dim=ambient,
+                             endpoint_types=endpoint_types,
+                             endpoint_lengths=endpoint_lengths,
+                             finite_box_required=true,
+                             issues=issues)
+end
+
+@inline function _box_region_bbox_if_available(pi_or_enc, r::Int, box)
+    box === nothing && return nothing
+    try
+        return region_bbox(pi_or_enc, r; box=box, strict=false)
+    catch
+        return nothing
+    end
+end
+
+"""
+    check_box_region(pi, r; box=nothing, throw=false) -> NamedTuple
+
+Validate a region id `r` against a box-backend encoding object.
+
+This helper reports whether `r` is in range, exposes the stored region
+representative and signature support sizes when available, and explicitly marks
+that bounded region geometry requires a finite `box=(a,b)` in this backend.
+
+If a valid finite box is supplied, the report also includes a best-effort
+`bbox` payload for quick inspection.
+"""
+function check_box_region(pi_or_enc, r; box=nothing, throw::Bool=false)
+    pi = _maybe_unwrap_box_pi(pi_or_enc)
+    issues = String[]
+    ambient = pi === nothing ? nothing : ambient_dim(pi)
+    nreg = pi === nothing ? nothing : nregions(pi)
+    region_in_range = false
+    representative = nothing
+    signature_support_sizes = nothing
+    bbox = nothing
+    box_report = nothing
+
+    pi === nothing && push!(issues, "expected PLEncodingMapBoxes or CompiledEncoding{<:PLEncodingMapBoxes}.")
+    r isa Integer || push!(issues, "region id must be an integer.")
+    if pi !== nothing && r isa Integer
+        region_in_range = 1 <= Int(r) <= nreg
+        region_in_range || push!(issues, "region index $(repr(r)) is out of range for nregions=$nreg.")
+        if region_in_range
+            rr = Int(r)
+            representative = region_representative(pi, rr)
+            sig = region_signature(pi, rr)
+            signature_support_sizes = (; y=count(identity, sig.y), z=count(identity, sig.z))
+        end
+    end
+
+    if box !== nothing
+        box_report = check_box_query_box(pi_or_enc, box; throw=false)
+        box_report.valid || append!(issues, ["box: " * issue for issue in box_report.issues])
+    end
+    if pi !== nothing && region_in_range && box !== nothing && (box_report === nothing || box_report.valid)
+        bbox = _box_region_bbox_if_available(pi_or_enc, Int(r), box)
+    end
+
+    valid = isempty(issues)
+    throw && !valid && _throw_invalid_plbackend(:check_box_region, issues)
+    return _box_issue_report(:box_region, valid;
+                             ambient_dim=ambient,
+                             nregions=nreg,
+                             region=(r isa Integer ? Int(r) : r),
+                             region_in_range=region_in_range,
+                             representative=representative,
+                             signature_support_sizes=signature_support_sizes,
+                             finite_box_required=true,
+                             box_provided=(box !== nothing),
+                             bbox=bbox,
+                             issues=issues)
+end
+
+@inline function _plbackend_describe(U::BoxUpset)
+    return (;
+        kind=:box_upset,
+        ambient_dim=ambient_dim(U),
+        lower_bounds=lower_bounds(U),
+    )
+end
+
+@inline function _plbackend_describe(D::BoxDownset)
+    return (;
+        kind=:box_downset,
+        ambient_dim=ambient_dim(D),
+        upper_bounds=upper_bounds(D),
+    )
+end
+
+@inline function _plbackend_describe(pi::PLEncodingMapBoxes)
+    return (;
+        kind=:pl_backend_encoding_map,
+        ambient_dim=ambient_dim(pi),
+        generator_counts=generator_counts(pi),
+        nregions=nregions(pi),
+        cell_shape=cell_shape(pi),
+        direct_lookup_enabled=has_direct_lookup(pi),
+        axes_uniform=axes_uniformity(pi),
+        all_axes_uniform=all(pi.axis_is_uniform),
+        critical_coordinate_counts=critical_coordinate_counts(pi),
+    )
+end
+
+function Base.show(io::IO, U::BoxUpset)
+    d = _plbackend_describe(U)
+    print(io, "BoxUpset(n=", d.ambient_dim, ", ell=", d.lower_bounds, ")")
+end
+
+function Base.show(io::IO, ::MIME"text/plain", U::BoxUpset)
+    d = _plbackend_describe(U)
+    print(io, "BoxUpset",
+          "\n  ambient_dim = ", d.ambient_dim,
+          "\n  lower_bounds = ", d.lower_bounds)
+end
+
+function Base.show(io::IO, D::BoxDownset)
+    d = _plbackend_describe(D)
+    print(io, "BoxDownset(n=", d.ambient_dim, ", u=", d.upper_bounds, ")")
+end
+
+function Base.show(io::IO, ::MIME"text/plain", D::BoxDownset)
+    d = _plbackend_describe(D)
+    print(io, "BoxDownset",
+          "\n  ambient_dim = ", d.ambient_dim,
+          "\n  upper_bounds = ", d.upper_bounds)
+end
+
+function Base.show(io::IO, pi::PLEncodingMapBoxes)
+    d = _plbackend_describe(pi)
+    print(io, "PLEncodingMapBoxes(n=", d.ambient_dim,
+          ", regions=", d.nregions,
+          ", generators=", d.generator_counts,
+          ", cell_shape=", d.cell_shape,
+          ", direct_lookup=", d.direct_lookup_enabled, ")")
+end
+
+function Base.show(io::IO, ::MIME"text/plain", pi::PLEncodingMapBoxes)
+    d = _plbackend_describe(pi)
+    print(io, "PLEncodingMapBoxes",
+          "\n  ambient_dim = ", d.ambient_dim,
+          "\n  generator_counts = ", d.generator_counts,
+          "\n  nregions = ", d.nregions,
+          "\n  cell_shape = ", d.cell_shape,
+          "\n  direct_lookup_enabled = ", d.direct_lookup_enabled,
+          "\n  axes_uniform = ", d.axes_uniform,
+          "\n  all_axes_uniform = ", d.all_axes_uniform,
+          "\n  critical_coordinate_counts = ", d.critical_coordinate_counts)
+end
+
+function Base.show(io::IO, summary::PLBackendValidationSummary)
+    r0 = summary.report
+    print(io, "PLBackendValidationSummary(kind=", r0.kind,
+          ", valid=", r0.valid,
+          ", issues=", length(r0.issues), ")")
+end
+
+function Base.show(io::IO, ::MIME"text/plain", summary::PLBackendValidationSummary)
+    r0 = summary.report
+    println(io, "PLBackendValidationSummary")
+    println(io, "  kind: ", r0.kind)
+    println(io, "  valid: ", r0.valid)
+    for key in propertynames(r0)
+        key in (:kind, :valid, :issues) && continue
+        println(io, "  ", key, ": ", repr(getproperty(r0, key)))
+    end
+    if isempty(r0.issues)
+        print(io, "  issues: []")
+    else
+        println(io, "  issues:")
+        for issue in r0.issues
+            println(io, "    - ", issue)
+        end
+    end
+end
+
+"""
+    box_encoding_summary(pi) -> NamedTuple
+
+Owner-local inspection surface for box-backend encoding objects.
+
+Use this as the discoverable `PLBackend` summary entrypoint when you want the
+ambient dimension, generator counts, region count, cell-grid shape, and direct
+lookup status without inspecting storage fields directly.
+
+Cheap/default path:
+- call `box_encoding_summary(pi)` first when you want high-level information
+  about the axis grid and region decomposition;
+- keep [`describe(pi)`](@ref) as the shared cross-subsystem inspection surface;
+- only ask for region-level or bounded-geometry data when you actually need a
+  specific query result.
+
+# Examples
+
+```julia
+using TamerOp
+
+PLB = TamerOp.PLBackend
+CC = TamerOp.ChainComplexes
+opts = TamerOp.Options.EncodingOptions(backend=:pl_backend)
+
+Ups = [PLB.BoxUpset([0.0])]
+Downs = [PLB.BoxDownset([2.0])]
+Phi = reshape(TamerOp.QQ[1], 1, 1)
+
+P, H, pi = PLB.encode_fringe_boxes(Ups, Downs, Phi, opts)
+
+CC.describe(pi)
+PLB.box_encoding_summary(pi)
+
+r = PLB.locate(pi, [1.0])
+PLB.box_query_summary(pi, [1.0])
+PLB.box_region_summary(pi, r; box=(Float64[0.0], Float64[2.0]))
+```
+"""
+@inline box_encoding_summary(pi::PLEncodingMapBoxes) = _plbackend_describe(pi)
+@inline function box_encoding_summary(enc::CompiledEncoding{<:PLEncodingMapBoxes})
+    return (; _plbackend_describe(enc.pi)...,
+            compiled=true,
+            poset_kind=(enc.P isa SignaturePoset ? :signature : :dense),
+            poset_size=nvertices(enc.P))
+end
+
+@inline _box_query_point_key(x::Tuple) = x
+@inline _box_query_point_key(x::AbstractVector) = Tuple(x)
+@inline _box_query_point_key(x) = x
+
+"""
+    box_query_summary(pi, x) -> NamedTuple
+
+Return a cheap semantic summary of a single point query against a box backend
+encoding map.
+
+The summary reports:
+- the query point and query kind,
+- the located region id,
+- the stored region representative when a region is found,
+- the support sizes of the region signature,
+- whether direct cell lookup was available, and
+- whether the query landed outside the represented region set (`0` from
+  [`locate`](@ref)).
+
+Use this as the cheap/default notebook or REPL inspection path for a single
+query before asking for heavier region geometry.
+"""
+function box_query_summary(pi_or_enc, x)
+    pi = _unwrap_box_pi(pi_or_enc)
+    report = check_box_point(pi_or_enc, x; throw=true)
+    rid = locate(pi_or_enc, x)
+    sig_counts = if rid == 0
+        nothing
+    else
+        sig = region_signature(pi, rid)
+        (; y=count(identity, sig.y), z=count(identity, sig.z))
+    end
+    return (;
+        kind=:box_query,
+        point=_box_query_point_key(x),
+        query_kind=report.query_kind,
+        region=rid,
+        representative=(rid == 0 ? nothing : region_representative(pi, rid)),
+        signature_support_sizes=sig_counts,
+        direct_lookup_enabled=has_direct_lookup(pi),
+        outside=(rid == 0),
+    )
+end
+
+"""
+    box_region_summary(pi, r; box=nothing) -> NamedTuple
+
+Return a compact semantic summary of region `r` in a box-backend encoding.
+
+The summary reports region validity, the stored representative, signature
+support sizes, whether a finite query box is required for bounded geometry, and
+an optional `bbox` payload when `box=(a,b)` is supplied.
+
+Use this when you already know the region id and want the canonical region-level
+inspection payload in one place instead of separately calling
+[`region_representative`](@ref), [`region_signature`](@ref), and
+[`region_bbox`](@ref).
+"""
+function box_region_summary(pi_or_enc, r; box=nothing)
+    pi = _unwrap_box_pi(pi_or_enc)
+    report = check_box_region(pi_or_enc, r; box=box, throw=true)
+    return (;
+        kind=:box_region,
+        ambient_dim=ambient_dim(pi),
+        nregions=nregions(pi),
+        region=Int(r),
+        representative=report.representative,
+        signature_support_sizes=report.signature_support_sizes,
+        finite_box_required=report.finite_box_required,
+        box_provided=(box !== nothing),
+        bbox=report.bbox,
+        direct_lookup_enabled=has_direct_lookup(pi),
+    )
+end
 
 # -----------------------------------------------------------------------------
 # CompiledEncoding forwarding (treat compiled encodings as primary)
@@ -2237,6 +3059,32 @@ region_circumradius(pi::CompiledEncoding{<:PLEncodingMapBoxes}, r; kwargs...) =
     region_circumradius(_unwrap_encoding(pi), r; kwargs...)
 region_mean_width(pi::CompiledEncoding{<:PLEncodingMapBoxes}, r; kwargs...) =
     region_mean_width(_unwrap_encoding(pi), r; kwargs...)
+
+_region_weights_closure(pi::PLEncodingMapBoxes; box, closure::Bool=true, kwargs...) =
+    region_weights(pi; box=box, strict=true, kwargs...)
+
+_region_weights_closure(pi::CompiledEncoding{<:PLEncodingMapBoxes}; box, closure::Bool=true, kwargs...) =
+    _region_weights_closure(_unwrap_encoding(pi); box=box, closure=closure, kwargs...)
+
+_region_boundary_measure_strict(pi::PLEncodingMapBoxes, r::Integer; box, strict::Bool=true) =
+    region_boundary_measure(pi, r; box=box, strict=strict)
+
+_region_boundary_measure_strict(pi::CompiledEncoding{<:PLEncodingMapBoxes}, r::Integer; box, strict::Bool=true) =
+    _region_boundary_measure_strict(_unwrap_encoding(pi), r; box=box, strict=strict)
+
+_region_bbox_strict(pi::PLEncodingMapBoxes, r::Integer; box, strict::Bool=true) =
+    region_bbox(pi, r; box=box, strict=strict)
+
+_region_bbox_strict(pi::CompiledEncoding{<:PLEncodingMapBoxes}, r::Integer; box, strict::Bool=true) =
+    _region_bbox_strict(_unwrap_encoding(pi), r; box=box, strict=strict)
+
+_region_centroid_closure(pi::PLEncodingMapBoxes, r::Integer;
+    box, method::Symbol=:bbox, closure::Bool=true) =
+    _region_centroid_fast(pi, r; box=box, method=method, closure=closure, cache=nothing)
+
+_region_centroid_closure(pi::CompiledEncoding{<:PLEncodingMapBoxes}, r::Integer;
+    box, method::Symbol=:bbox, closure::Bool=true) =
+    _region_centroid_closure(_unwrap_encoding(pi), r; box=box, method=method, closure=closure)
 
 function _region_bbox_fast(pi::PLEncodingMapBoxes, r::Integer;
     box, strict::Bool=true, closure::Bool=true, cache=nothing)
@@ -2306,7 +3154,7 @@ function _region_minkowski_functionals_fast(pi::PLEncodingMapBoxes, r::Integer;
     V = volume === nothing ? region_volume(pi, r; box=box, strict=strict) : float(volume)
     S = boundary === nothing ? region_boundary_measure(pi, r; box=box, strict=strict) : float(boundary)
     mw = if (mean_width_method === :auto || mean_width_method === :cauchy) && length(box[1]) == 2
-        S / pi
+        S / Base.MathConstants.pi
     else
         region_mean_width(pi, r; box=box, method=mean_width_method,
             ndirs=mean_width_ndirs, rng=mean_width_rng,
@@ -2325,5 +3173,39 @@ _region_minkowski_functionals_fast(pi::CompiledEncoding{<:PLEncodingMapBoxes}, r
         mean_width_method=mean_width_method, mean_width_ndirs=mean_width_ndirs,
         mean_width_rng=mean_width_rng, mean_width_directions=mean_width_directions,
         strict=strict, closure=closure, cache=cache)
+
+function _region_geometry_summary_fast(pi::PLEncodingMapBoxes, r::Integer;
+    box, strict::Bool=true, closure::Bool=true, cache=nothing,
+    mean_width_method::Symbol=:auto, mean_width_ndirs::Integer=256,
+    mean_width_rng=Random.default_rng(), mean_width_directions=nothing,
+    need_mean_width::Bool=false)
+    _ = (closure, cache)
+    V = region_volume(pi, r; box=box, strict=strict)
+    S = region_boundary_measure(pi, r; box=box, strict=strict)
+    mw = if !need_mean_width
+        NaN
+    elseif (mean_width_method === :auto || mean_width_method === :cauchy) && length(box[1]) == 2
+        S / Base.MathConstants.pi
+    else
+        region_mean_width(pi, r; box=box, method=mean_width_method,
+            ndirs=mean_width_ndirs, rng=mean_width_rng,
+            directions=mean_width_directions, strict=strict)
+    end
+    # Keep the fast summary contract minimal. Boundary-to-volume and Minkowski
+    # callers only consume these scalars, so computing bbox/centroid/circumradius
+    # here just adds overhead without improving the hot path.
+    return (volume=float(V), boundary_measure=float(S), mean_width=float(mw))
+end
+
+_region_geometry_summary_fast(pi::CompiledEncoding{<:PLEncodingMapBoxes}, r::Integer;
+    box, strict::Bool=true, closure::Bool=true, cache=nothing,
+    mean_width_method::Symbol=:auto, mean_width_ndirs::Integer=256,
+    mean_width_rng=Random.default_rng(), mean_width_directions=nothing,
+    need_mean_width::Bool=false) =
+    _region_geometry_summary_fast(_unwrap_encoding(pi), r;
+        box=box, strict=strict, closure=closure, cache=cache,
+        mean_width_method=mean_width_method, mean_width_ndirs=mean_width_ndirs,
+        mean_width_rng=mean_width_rng, mean_width_directions=mean_width_directions,
+        need_mean_width=need_mean_width)
 
 end # module PLBackend

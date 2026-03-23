@@ -2,18 +2,18 @@ module TamerOpKernelFunctionsExt
 
 using KernelFunctions
 
-const PM = let pm = nothing
-    if isdefined(Main, :PosetModules)
-        pm = getfield(Main, :PosetModules)
+const TO = let pm = nothing
+    if isdefined(Main, :TamerOp)
+        pm = getfield(Main, :TamerOp)
     else
-        @eval import PosetModules
-        pm = PosetModules
+        @eval import TamerOp
+        pm = TamerOp
     end
     pm
 end
 
-const FEA = PM.Featurizers
-const Inv = PM.Invariants
+const FEA = TO.Featurizers
+const Inv = TO.Invariants
 
 abstract type AbstractTamerKernel <: KernelFunctions.Kernel end
 

@@ -15,19 +15,25 @@ using SparseArrays
 # 2) Script mode (convenient during development):
 #        julia test/runtests.jl
 #
-# In script mode, `using PosetModules` fails unless the repo is on LOAD_PATH.
-# So we fall back to a direct include of src/PosetModules.jl.
+# In script mode, `using TamerOp` fails unless the repo is on LOAD_PATH.
+# So we fall back to a direct include of src/TamerOp.jl.
 # -----------------------------------------------------------------------------
 
+const _TO_SRC_DIR = let here = @__DIR__
+    direct = normpath(joinpath(here, "src"))
+    parent = normpath(joinpath(here, "..", "src"))
+    isdir(direct) ? direct : parent
+end
+
 try
-    using PosetModules
+    using TamerOp
 catch
-    include(joinpath(@__DIR__, "..", "src", "PosetModules.jl"))
-    using .PosetModules
+    include(joinpath(_TO_SRC_DIR, "TamerOp.jl"))
+    using .TamerOp
 end
 
 # Keep API-surface contract checks explicit.
-const PMA = PosetModules.Advanced
+const TOA = TamerOp.Advanced
 
 # Test-facing namespace:
 # resolve symbols directly from owner modules to avoid coupling correctness tests
@@ -35,35 +41,41 @@ const PMA = PosetModules.Advanced
 struct _TestSurface end
 
 const _TEST_SURFACE_MODULES = (
-    PosetModules,
-    PosetModules.CoreModules,
-    PosetModules.Stats,
-    PosetModules.Options,
-    PosetModules.DataTypes,
-    PosetModules.EncodingCore,
-    PosetModules.Results,
-    PosetModules.RegionGeometry,
-    PosetModules.FiniteFringe,
-    PosetModules.IndicatorTypes,
-    PosetModules.Encoding,
-    PosetModules.Modules,
-    PosetModules.AbelianCategories,
-    PosetModules.IndicatorResolutions,
-    PosetModules.FlangeZn,
-    PosetModules.ZnEncoding,
-    PosetModules.PLPolyhedra,
-    PosetModules.PLBackend,
-    PosetModules.ChainComplexes,
-    PosetModules.DerivedFunctors,
-    PosetModules.ModuleComplexes,
-    PosetModules.ChangeOfPosets,
-    PosetModules.Serialization,
-    PosetModules.DataFileIO,
-    PosetModules.Invariants,
-    PosetModules.Workflow,
-    PosetModules.DataIngestion,
-    PosetModules.Featurizers,
-    PosetModules.Viz2D,
+    TamerOp,
+    TamerOp.CoreModules,
+    TamerOp.Stats,
+    TamerOp.Options,
+    TamerOp.DataTypes,
+    TamerOp.EncodingCore,
+    TamerOp.Results,
+    TamerOp.RegionGeometry,
+    TamerOp.FiniteFringe,
+    TamerOp.IndicatorTypes,
+    TamerOp.Encoding,
+    TamerOp.Modules,
+    TamerOp.AbelianCategories,
+    TamerOp.IndicatorResolutions,
+    TamerOp.FlangeZn,
+    TamerOp.ZnEncoding,
+    TamerOp.PLPolyhedra,
+    TamerOp.PLBackend,
+    TamerOp.ChainComplexes,
+    TamerOp.DerivedFunctors,
+    TamerOp.ModuleComplexes,
+    TamerOp.ChangeOfPosets,
+    TamerOp.Serialization,
+    TamerOp.SyntheticData,
+    TamerOp.DataFileIO,
+    TamerOp.InvariantCore,
+    TamerOp.SignedMeasures,
+    TamerOp.SliceInvariants,
+    TamerOp.Fibered2D,
+    TamerOp.MultiparameterImages,
+    TamerOp.Visualization,
+    TamerOp.Invariants,
+    TamerOp.Workflow,
+    TamerOp.DataIngestion,
+    TamerOp.Featurizers,
 )
 
 @inline function Base.getproperty(::_TestSurface, s::Symbol)
@@ -75,32 +87,35 @@ const _TEST_SURFACE_MODULES = (
     throw(UndefVarError(s))
 end
 
-const PM = _TestSurface()
+const TO = _TestSurface()
 
 # Convenient aliases used throughout the test suite.
-const DF  = PosetModules.DerivedFunctors
-const FF  = PosetModules.FiniteFringe
-const EN  = PosetModules.Encoding
+const DF  = TamerOp.DerivedFunctors
+const FF  = TamerOp.FiniteFringe
+const EN  = TamerOp.Encoding
 const HE  = DF.HomExtEngine
-const MD  = PosetModules.Modules
-const IR  = PosetModules.IndicatorResolutions
-const FZ  = PosetModules.FlangeZn
-const SER = PosetModules.Serialization
-const PLP = PosetModules.PLPolyhedra
-const PLB = PosetModules.PLBackend
-const CC  = PosetModules.ChainComplexes
-const OPT = PosetModules.Options
-const DT  = PosetModules.DataTypes
-const EC  = PosetModules.EncodingCore
-const RES = PosetModules.Results
-const QQ  = PosetModules.CoreModules.QQ
-const CM  = PosetModules.CoreModules
-const Inv = PosetModules.Invariants
+const MD  = TamerOp.Modules
+const IR  = TamerOp.IndicatorResolutions
+const FZ  = TamerOp.FlangeZn
+const SER = TamerOp.Serialization
+const PLP = TamerOp.PLPolyhedra
+const PLB = TamerOp.PLBackend
+const CC  = TamerOp.ChainComplexes
+const OPT = TamerOp.Options
+const DT  = TamerOp.DataTypes
+const EC  = TamerOp.EncodingCore
+const RES = TamerOp.Results
+const QQ  = TamerOp.CoreModules.QQ
+const CM  = TamerOp.CoreModules
+const IC  = TamerOp.InvariantCore
+const Inv = TamerOp.Invariants
+const SM  = TamerOp.SignedMeasures
+const SD  = TamerOp.SyntheticData
 
 using SparseArrays
 
 # NOTE:
-# PLBackend is now always loaded by src/PosetModules.jl, so the historical test-time
+# PLBackend is now always loaded by src/TamerOp.jl, so the historical test-time
 # "force include PLBackend.jl regardless of ENV toggles" hack is no longer needed.
 
 # ---------------- Helpers used by multiple test files -------------------------
@@ -269,7 +284,7 @@ with_fields(f::Function, fields) = foreach(f, fields)
         return nothing
     end
 
-    src_guess = normpath(joinpath(@__DIR__, "..", "src"))
+    src_guess = _TO_SRC_DIR
     src_dir  = isdir(src_guess) ? src_guess : normpath(@__DIR__)
     test_dir = normpath(@__DIR__)
 
@@ -286,7 +301,7 @@ end
 # ---------------- Export hygiene ----------------------------------------------
 
 @testset "No submodule export blocks" begin
-    src_dir = normpath(joinpath(@__DIR__, "..", "src"))
+    src_dir = _TO_SRC_DIR
 
     function jl_files_under(dir::AbstractString)
         files = String[]
@@ -300,14 +315,14 @@ end
         return files
     end
 
-    allowed_exports = Set([normpath(joinpath(src_dir, "PosetModules.jl"))])
+    allowed_exports = Set([normpath(joinpath(src_dir, "TamerOp.jl"))])
     pat = r"(?m)^\s*export\b"
 
     for f in jl_files_under(src_dir)
         f in allowed_exports && continue
         has_export = occursin(pat, read(f, String))
         if has_export
-            @info "Unexpected export statement outside PosetModules.jl" file=f
+            @info "Unexpected export statement outside TamerOp.jl" file=f
         end
         @test !has_export
     end
@@ -317,118 +332,123 @@ end
 
 @testset "Public API smoke test" begin
     # Finite-poset primitives
-    @test isdefined(PMA, :FinitePoset)
-    @test isdefined(PMA, :Upset)
-    @test isdefined(PMA, :Downset)
-    @test isdefined(PMA, :FringeModule)
-    @test isdefined(PMA, :principal_upset)
-    @test isdefined(PMA, :principal_downset)
-    @test isdefined(PMA, :upset_from_generators)
-    @test isdefined(PMA, :downset_from_generators)
-    @test isdefined(PMA, :one_by_one_fringe)
-    @test isdefined(PMA, :cover_edges)
+    @test isdefined(TOA, :FinitePoset)
+    @test isdefined(TOA, :Upset)
+    @test isdefined(TOA, :Downset)
+    @test isdefined(TOA, :FringeModule)
+    @test isdefined(TOA, :principal_upset)
+    @test isdefined(TOA, :principal_downset)
+    @test isdefined(TOA, :upset_from_generators)
+    @test isdefined(TOA, :downset_from_generators)
+    @test isdefined(TOA, :one_by_one_fringe)
+    @test isdefined(TOA, :cover_edges)
 
     # Encoding-map layer
-    @test isdefined(PMA, :EncodingMap)
-    @test isdefined(PMA, :UptightEncoding)
-    @test isdefined(PMA.Encoding, :build_uptight_encoding_from_fringe)
-    @test isdefined(PMA.Encoding, :pullback_fringe_along_encoding)
-    @test isdefined(PMA.Encoding, :pushforward_fringe_along_encoding)
+    @test isdefined(TOA, :EncodingMap)
+    @test isdefined(TOA, :UptightEncoding)
+    @test isdefined(TOA.Encoding, :build_uptight_encoding_from_fringe)
+    @test isdefined(TOA.Encoding, :pullback_fringe_along_encoding)
+    @test isdefined(TOA.Encoding, :pushforward_fringe_along_encoding)
 
     # JSON IO helpers
-    @test isdefined(PMA, :parse_finite_fringe_json)
-    @test isdefined(PMA, :finite_fringe_from_m2)
-    @test isdefined(PMA, :save_flange_json)
-    @test isdefined(PMA, :load_flange_json)
-    @test isdefined(PMA, :parse_flange_json)
-    @test isdefined(PMA, :save_pl_fringe_json)
-    @test isdefined(PMA, :load_pl_fringe_json)
-    @test isdefined(PMA, :parse_pl_fringe_json)
-    @test isdefined(PMA.Serialization, :parse_finite_fringe_json)
-    @test isdefined(PMA.Serialization, :finite_fringe_from_m2)
-    @test isdefined(PMA.Serialization, :save_encoding_json)
-    @test isdefined(PMA.Serialization, :load_encoding_json)
-    @test isdefined(PMA.Serialization, :save_mpp_decomposition_json)
-    @test isdefined(PMA.Serialization, :load_mpp_decomposition_json)
-    @test isdefined(PMA.Serialization, :save_mpp_image_json)
-    @test isdefined(PMA.Serialization, :load_mpp_image_json)
-    @test isdefined(PMA, :save_dataset_json)
-    @test isdefined(PMA, :load_dataset_json)
-    @test isdefined(PMA, :save_pipeline_json)
-    @test isdefined(PMA, :load_pipeline_json)
+    @test isdefined(TOA, :parse_finite_fringe_json)
+    @test isdefined(TOA, :finite_fringe_from_m2)
+    @test isdefined(TOA, :save_flange_json)
+    @test isdefined(TOA, :load_flange_json)
+    @test isdefined(TOA, :parse_flange_json)
+    @test isdefined(TOA, :save_pl_fringe_json)
+    @test isdefined(TOA, :load_pl_fringe_json)
+    @test isdefined(TOA, :parse_pl_fringe_json)
+    @test isdefined(TOA.Serialization, :parse_finite_fringe_json)
+    @test isdefined(TOA.Serialization, :finite_fringe_from_m2)
+    @test isdefined(TOA.Serialization, :save_encoding_json)
+    @test isdefined(TOA.Serialization, :load_encoding_json)
+    @test isdefined(TOA.Serialization, :save_mpp_decomposition_json)
+    @test isdefined(TOA.Serialization, :load_mpp_decomposition_json)
+    @test isdefined(TOA.Serialization, :save_mpp_image_json)
+    @test isdefined(TOA.Serialization, :load_mpp_image_json)
+    @test isdefined(TOA, :save_dataset_json)
+    @test isdefined(TOA, :load_dataset_json)
+    @test isdefined(TOA, :save_pipeline_json)
+    @test isdefined(TOA, :load_pipeline_json)
 
     # Data ingestion entrypoints
-    @test isdefined(PMA, :encode)
-    @test isdefined(PMA, :hom_dimension)
-    @test !isdefined(PMA, :encode_from_data)
-    @test !isdefined(PMA, :ingest)
-    @test isdefined(PMA, :one_criticalify)
-    @test isdefined(PMA, :criticality)
-    @test isdefined(PMA, :normalize_multicritical)
-    @test isdefined(PMA, :fringe_presentation)
-    @test isdefined(PMA, :PipelineOptions)
-    @test isdefined(PMA, :DataFileOptions)
-    @test isdefined(PMA, :load_data)
-    @test isdefined(PMA, :inspect_data_file)
-    @test isdefined(PMA, :DataIngestion)
-    @test isdefined(PMA, :DataFileIO)
-    @test isdefined(PMA.DataIngestion, :AbstractFiltration)
-    @test isdefined(PMA.DataIngestion, :RipsFiltration)
-    @test isdefined(PMA.DataIngestion, :LandmarkRipsFiltration)
-    @test isdefined(PMA.DataIngestion, :GraphLowerStarFiltration)
-    @test isdefined(PMA.DataIngestion, :DelaunayLowerStarFiltration)
-    @test isdefined(PMA.DataIngestion, :FunctionDelaunayFiltration)
-    @test isdefined(PMA.DataIngestion, :CoreFiltration)
-    @test isdefined(PMA.DataIngestion, :RhomboidFiltration)
-    @test isdefined(PMA.DataIngestion, :to_filtration)
-    @test isdefined(PMA.DataIngestion, :estimate_ingestion)
-    @test isdefined(PMA, :IngestionPlan)
-    @test isdefined(PMA, :plan_ingestion)
-    @test isdefined(PMA, :run_ingestion)
+    @test isdefined(TOA, :encode)
+    @test isdefined(TOA, :hom_dimension)
+    @test !isdefined(TOA, :encode_from_data)
+    @test !isdefined(TOA, :ingest)
+    @test isdefined(TOA, :one_criticalify)
+    @test isdefined(TOA, :criticality)
+    @test isdefined(TOA, :normalize_multicritical)
+    @test isdefined(TOA, :fringe_presentation)
+    @test isdefined(TOA, :PipelineOptions)
+    @test isdefined(TOA, :DataFileOptions)
+    @test isdefined(TOA, :load_data)
+    @test isdefined(TOA, :inspect_data_file)
+    @test isdefined(TOA, :DataIngestion)
+    @test isdefined(TOA, :DataFileIO)
+    @test isdefined(TOA.DataIngestion, :AbstractFiltration)
+    @test isdefined(TOA.DataIngestion, :RipsFiltration)
+    @test isdefined(TOA.DataIngestion, :LandmarkRipsFiltration)
+    @test isdefined(TOA.DataIngestion, :GraphLowerStarFiltration)
+    @test isdefined(TOA.DataIngestion, :DelaunayLowerStarFiltration)
+    @test isdefined(TOA.DataIngestion, :FunctionDelaunayFiltration)
+    @test isdefined(TOA.DataIngestion, :CoreFiltration)
+    @test isdefined(TOA.DataIngestion, :RhomboidFiltration)
+    @test isdefined(TOA.DataIngestion, :to_filtration)
+    @test isdefined(TOA.DataIngestion, :estimate_ingestion)
+    @test isdefined(TOA, :IngestionPlan)
+    @test isdefined(TOA, :IngestionEstimate)
+    @test isdefined(TOA, :GradedComplexBuildResult)
+    @test isdefined(TOA, :estimate_ingestion)
+    @test isdefined(TOA, :plan_ingestion)
+    @test isdefined(TOA, :run_ingestion)
+    @test isdefined(TOA, :check_data_filtration)
+    @test isdefined(TOA, :ingestion_plan_summary)
 
     # Indicator-resolution and module hot-path entrypoints.
-    @test isdefined(PMA, :pmodule_from_fringe)
-    @test isdefined(PMA, :projective_cover)
-    @test isdefined(PMA, :injective_hull)
-    @test isdefined(PMA, :upset_resolution)
-    @test isdefined(PMA, :downset_resolution)
-    @test isdefined(PMA, :indicator_resolutions)
-    @test isdefined(PMA, :verify_upset_resolution)
-    @test isdefined(PMA, :verify_downset_resolution)
-    @test isdefined(PMA, :map_leq)
-    @test isdefined(PMA, :map_leq_many)
-    @test isdefined(PMA, :map_leq_many!)
-    @test isdefined(PMA, :direct_sum_with_maps)
+    @test isdefined(TOA, :pmodule_from_fringe)
+    @test isdefined(TOA, :projective_cover)
+    @test isdefined(TOA, :injective_hull)
+    @test isdefined(TOA, :upset_resolution)
+    @test isdefined(TOA, :downset_resolution)
+    @test isdefined(TOA, :indicator_resolutions)
+    @test isdefined(TOA, :verify_upset_resolution)
+    @test isdefined(TOA, :verify_downset_resolution)
+    @test isdefined(TOA, :map_leq)
+    @test isdefined(TOA, :map_leq_many)
+    @test isdefined(TOA, :map_leq_many!)
+    @test isdefined(TOA, :direct_sum_with_maps)
 
     # Core advanced options and deeper change-of-poset hooks.
-    @test isdefined(PMA, :EncodingOptions)
-    @test isdefined(PMA, :ResolutionOptions)
-    @test isdefined(PMA, :InvariantOptions)
-    @test isdefined(PMA, :DerivedFunctorOptions)
-    @test isdefined(PMA, :left_kan_extension)
-    @test isdefined(PMA, :right_kan_extension)
-    @test isdefined(PMA, :derived_pushforward_left)
-    @test isdefined(PMA, :derived_pushforward_right)
+    @test isdefined(TOA, :EncodingOptions)
+    @test isdefined(TOA, :ResolutionOptions)
+    @test isdefined(TOA, :InvariantOptions)
+    @test isdefined(TOA, :DerivedFunctorOptions)
+    @test isdefined(TOA, :left_kan_extension)
+    @test isdefined(TOA, :right_kan_extension)
+    @test isdefined(TOA, :derived_pushforward_left)
+    @test isdefined(TOA, :derived_pushforward_right)
 
     # Resolution tables
-    @test isdefined(PMA, :betti_table)
-    @test isdefined(PMA, :bass_table)
+    @test isdefined(TOA, :betti_table)
+    @test isdefined(TOA, :bass_table)
 end
 
 @testset "API surface contracts" begin
-    root_exports = Set(names(PosetModules; all=false, imported=false))
-    adv_exports = Set(names(PosetModules.Advanced; all=false, imported=false))
+    root_exports = Set(names(TamerOp; all=false, imported=false))
+    adv_exports = Set(names(TamerOp.Advanced; all=false, imported=false))
 
     # Root exports are strictly the curated simple surface.
-    for sym in PosetModules.SIMPLE_API
+    for sym in TamerOp.SIMPLE_API
         @test sym in root_exports
     end
-    for sym in PosetModules.ADVANCED_ONLY_API
+    for sym in TamerOp.ADVANCED_ONLY_API
         @test !(sym in root_exports)
     end
 
     # Advanced exports the full curated power-user superset.
-    for sym in PosetModules.ADVANCED_API
+    for sym in TamerOp.ADVANCED_API
         @test sym in adv_exports
     end
 end
@@ -442,13 +462,14 @@ include("test_finite_fringe.jl")
 include("test_encoding.jl")
 include("test_poset_interface.jl")
 
-# Backends + geometry
-include("test_pl_backend.jl")
+# Encoding tests
 include("test_zn_backend.jl")
+include("test_pl_backend.jl")
 include("test_geometry.jl")
 
 # Data pipeline
 include("test_data_pipeline.jl")
+include("test_synthetic_data.jl")
 
 # Algebra
 include("test_indicator_resolutions.jl")
@@ -459,6 +480,7 @@ include("test_functoriality_ext_tor_maps.jl")
 
 # Invariants
 include("test_invariants.jl")
+include("test_visualization.jl")
 include("test_featurizers.jl")
 
 # Stress tests last

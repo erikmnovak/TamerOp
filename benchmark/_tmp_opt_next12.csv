@@ -1,8 +1,0 @@
-case,family,stage,cache_mode,median_ms,p90_ms,median_alloc_kib
-lowdim_h0_probe_rips_d1,point,module,fastpath_forced,0.643734,1.107667,2734.804688
-lowdim_h0_probe_rips_d1,point,module,fastpath_disabled_dispatch,44.489678,56.414409,67917.023438
-lowdim_h0_probe_rips_d1,point,module,generic_direct,33.309746,41.127427,69146.171875
-structural_inclusion_probe_rips_d1,point,full,structural_on,1.653677,2.623883,4808.195312
-structural_inclusion_probe_rips_d1,point,full,structural_off,1.6785,2.308419,4811.179688
-term_materialization_probe_rips_d1,point,module,structural_on,0.079644,0.123091,227.5
-term_materialization_probe_rips_d1,point,module,structural_off,0.394739,0.441756,812.34375

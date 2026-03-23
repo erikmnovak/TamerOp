@@ -3,7 +3,18 @@
 #
 # Scope:
 #   Exact rational linear algebra kernels, sparse/full-column solve helpers,
-#   modular accelerators, and QQ-specific hot paths for PosetModules.FieldLinAlg.
+#   modular accelerators, and QQ-specific hot paths for TamerOp.FieldLinAlg.
+# Owns:
+#   - QQ rank/rref/nullspace/solve kernels,
+#   - Nemo/modular QQ accelerators and crossover helpers,
+#   - QQ-specific restricted-word and full-column factor paths.
+# Does not own:
+#   - public API wrappers,
+#   - backend-choice policy,
+#   - non-QQ kernels.
+# Depends on:
+#   - `thresholds.jl` and `backend_routing.jl` for backend choice,
+#   - `sparse_rref.jl` for shared sparse exact elimination support.
 # -----------------------------------------------------------------------------
 
 # -----------------------------------------------------------------------------
@@ -146,6 +157,30 @@ struct NemoFullColumnFactorFp{p}
     invB::Any
 end
 
+const _QQ_FACTOR_GATHER_MIN_RHS = Ref(9)
+
+@inline function _gather_rows!(dest::AbstractMatrix{QQ}, Y::AbstractMatrix{<:QQ}, rows::AbstractVector{Int})
+    n = length(rows)
+    rhs = size(Y, 2)
+    size(dest, 1) == n || throw(DimensionMismatch("gather destination has wrong row count"))
+    size(dest, 2) == rhs || throw(DimensionMismatch("gather destination has wrong column count"))
+    @inbounds for j in 1:rhs
+        for i in 1:n
+            dest[i, j] = Y[rows[i], j]
+        end
+    end
+    return dest
+end
+
+@inline function _gather_rows!(dest::AbstractVector{QQ}, Y::AbstractVector{<:QQ}, rows::AbstractVector{Int})
+    n = length(rows)
+    length(dest) == n || throw(DimensionMismatch("gather destination has wrong length"))
+    @inbounds for i in 1:n
+        dest[i] = Y[rows[i]]
+    end
+    return dest
+end
+
 # Cache of factors keyed by the left matrix B.
 # IMPORTANT: values do not reference the key, so WeakKeyDict works correctly.
 const _FULLCOLUMN_FACTOR_CACHE = WeakKeyDict{Any,Any}()
@@ -210,7 +245,8 @@ function _factor_fullcolumnQQ(B::AbstractMatrix{<:QQ})::FullColumnFactor{QQ}
 end
 
 # Ground-truth RREF solver, always exact, no caching
-function _solve_fullcolumn_rrefQQ(B::AbstractMatrix{<:QQ}, Y::AbstractVecOrMat{<:QQ})
+function _solve_fullcolumn_rrefQQ(B::AbstractMatrix{<:QQ}, Y::AbstractVecOrMat{<:QQ};
+                                  check_rhs::Bool=true)
     want_vec = false
     Ymat = Y
     if Y isa AbstractVector
@@ -231,8 +267,10 @@ function _solve_fullcolumn_rrefQQ(B::AbstractMatrix{<:QQ}, Y::AbstractVecOrMat{<
     for j in 1:n
         (j in pivs) || error("expected full column rank; missing pivot in column $j")
     end
-    for pj in pivs
-        pj > n && error("right-hand side is not in column space of B")
+    if check_rhs
+        for pj in pivs
+            pj > n && error("right-hand side is not in column space of B")
+        end
     end
 
     X = R[1:n, n+1:end]
@@ -243,39 +281,37 @@ end
 function _solve_fullcolumn_factorQQ(B::AbstractMatrix{<:QQ}, fac::FullColumnFactor{QQ},
                                     Y::AbstractVecOrMat{<:QQ};
                                     check_rhs::Bool=true)
-    want_vec = false
-    Ymat = Y
-    if Y isa AbstractVector
-        want_vec = true
-        Ymat = reshape(Y, :, 1)
-    end
-
     m, n = size(B)
-    size(Ymat, 1) == m || throw(DimensionMismatch("B and Y must have same row count"))
     length(fac.rows) == n || error("stale FullColumnFactor: wrong row set length")
-
-    Ysub = Matrix{QQ}(Ymat[fac.rows, :])
-    X = fac.invB * Ysub
-
-    if check_rhs
-        # Verify B*X == Y
-        if B isa Matrix{QQ}
-            k = size(X, 2)
-            @inbounds for j in 1:k
-                for i in 1:m
-                    s = zero(QQ)
-                    for t in 1:n
-                        s += B[i, t] * X[t, j]
-                    end
-                    s == Ymat[i, j] || error("right-hand side is not in column space of B")
-                end
-            end
-        else
-            Matrix{QQ}(B * X) == Matrix{QQ}(Ymat) || error("right-hand side is not in column space of B")
+    if Y isa AbstractVector
+        length(Y) == m || throw(DimensionMismatch("B and Y must have same row count"))
+        ysub = Vector{QQ}(undef, n)
+        _gather_rows!(ysub, Y, fac.rows)
+        x = fac.invB * ysub
+        if check_rhs && !_verify_solveQQ(B, x, Y)
+            error("right-hand side is not in column space of B")
         end
+        return x
     end
 
-    return want_vec ? vec(X) : X
+    Ymat = Y
+    size(Ymat, 1) == m || throw(DimensionMismatch("B and Y must have same row count"))
+    rhs = size(Ymat, 2)
+    X = if rhs < _QQ_FACTOR_GATHER_MIN_RHS[]
+        fac.invB * view(Ymat, fac.rows, :)
+    else
+        Ysub = Matrix{QQ}(undef, n, rhs)
+        _gather_rows!(Ysub, Ymat, fac.rows)
+        Xtmp = Matrix{QQ}(undef, n, rhs)
+        mul!(Xtmp, fac.invB, Ysub)
+        Xtmp
+    end
+
+    if check_rhs && !_verify_solveQQ(B, X, Ymat)
+        error("right-hand side is not in column space of B")
+    end
+
+    return X
 end
 
 """
@@ -304,7 +340,7 @@ function _solve_fullcolumnQQ(B::AbstractMatrix{<:QQ}, Y::AbstractVecOrMat{<:QQ};
         return _solve_fullcolumn_factorQQ(B, fac, Y; check_rhs=check_rhs)
     end
 
-    return _solve_fullcolumn_rrefQQ(B, Y)
+    return _solve_fullcolumn_rrefQQ(B, Y; check_rhs=check_rhs)
 end
 
 @inline function _choose_solve_backend(field::QQField, B;
@@ -379,7 +415,14 @@ function _solve_fullcolumn_nemoQQ(B::AbstractMatrix{<:QQ}, Y::AbstractVecOrMat{<
         end
     end
 
-    Ysub = Matrix{QQ}(Ymat[fac.rows, :])
+    Ysub = if want_vec
+        reshape(_gather_rows!(Vector{QQ}(undef, n), vec(Ymat), fac.rows), :, 1)
+    elseif size(Ymat, 2) < _QQ_FACTOR_GATHER_MIN_RHS[]
+        Matrix{QQ}(view(Ymat, fac.rows, :))
+    else
+        tmp = Matrix{QQ}(undef, n, size(Ymat, 2))
+        _gather_rows!(tmp, Ymat, fac.rows)
+    end
     Xn = fac.invB * _to_fmpq_mat(Ysub)
     X = _from_fmpq_mat(Xn)
 
@@ -1513,5 +1556,3 @@ function _solve_fullcolumn_tiny(field::AbstractCoeffField, B, Y; check_rhs::Bool
     end
     return want_vec ? vec(X) : X
 end
-
-

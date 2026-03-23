@@ -76,7 +76,7 @@ end
                 @test FF.fiber_dimension(M, q) == 0
             else
                 Aq = Matrix(M.phi[rows, cols])
-            @test FF.fiber_dimension(M, q) == PosetModules.FieldLinAlg.rank(field, Aq)
+            @test FF.fiber_dimension(M, q) == TamerOp.FieldLinAlg.rank(field, Aq)
             end
         end
 
@@ -149,25 +149,25 @@ end
 
         # Ext dims: indicator-resolution method vs DerivedFunctors.Ext
         ext_dims = DF.ext_dimensions_via_indicator_resolutions(Hm, Hn; maxlen=3)
-        E = DF.Ext(M, N, PM.DerivedFunctorOptions(maxdeg=2))
+        E = DF.Ext(M, N, TO.DerivedFunctorOptions(maxdeg=2))
         for t in 0:2
-            @test PM.dim(E,t) == get(ext_dims, t, 0)
+            @test TO.dim(E,t) == get(ext_dims, t, 0)
         end
 
         # Ext dims: injective model agrees with projective model
-        resN = DF.injective_resolution(N, PM.ResolutionOptions(maxlen=3))
-        Einj = PM.ExtInjective(M, resN)
+        resN = DF.injective_resolution(N, TO.ResolutionOptions(maxlen=3))
+        Einj = TO.ExtInjective(M, resN)
         for t in 0:2
-            @test PM.dim(Einj,t) == PM.dim(E,t)
+            @test TO.dim(Einj,t) == TO.dim(E,t)
         end
 
         # Identity naturality on Ext
         idM = IR.id_morphism(M)
         idN = IR.id_morphism(N)
         for t in 0:2
-            d = PM.dim(E,t)
-            A = PM.ext_map_first(E, E, idM; t=t)
-            B = PM.ext_map_second(E, E, idN; t=t)
+            d = TO.dim(E,t)
+            A = TO.ext_map_first(E, E, idM; t=t)
+            B = TO.ext_map_second(E, E, idN; t=t)
             @test Matrix(A) == Matrix{K}(I,d,d)
             @test Matrix(B) == Matrix{K}(I,d,d)
         end
@@ -178,7 +178,7 @@ end
         Rop = IR.pmodule_from_fringe(Hr)
         L   = IR.pmodule_from_fringe(Hl)
 
-        T = DF.Tor(Rop, L, PM.DerivedFunctorOptions(maxdeg=2))
+        T = DF.Tor(Rop, L, TO.DerivedFunctorOptions(maxdeg=2))
 
         if length(T.bd) >= 2
             @test nnz(T.bd[1] * T.bd[2]) == 0
@@ -187,9 +187,9 @@ end
         idR = IR.id_morphism(Rop)
         idL = IR.id_morphism(L)
         for s in 0:2
-            d = PM.dim(T,s)
-            A = PM.tor_map_first(T, T, idR; s=s)
-            B = PM.tor_map_second(T, T, idL; s=s)
+            d = TO.dim(T,s)
+            A = TO.tor_map_first(T, T, idR; s=s)
+            B = TO.tor_map_second(T, T, idL; s=s)
             @test Matrix(A) == Matrix{K}(I,d,d)
             @test Matrix(B) == Matrix{K}(I,d,d)
         end

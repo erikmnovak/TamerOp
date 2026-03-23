@@ -115,7 +115,7 @@ max_dim = 1
 # max_dim=2 sweep (small-n, still apples-to-apples and combinatorially nontrivial)
 [[cases]]
 id = "matrix_parity_n200_d2_md2_s11"
-regime = "normalized_parity"
+regime = "rips_parity"
 dataset = "gaussian_shell"
 n_points = 200
 ambient_dim = 2
@@ -124,7 +124,7 @@ max_dim = 2
 
 [[cases]]
 id = "matrix_parity_n300_d2_md2_s17"
-regime = "normalized_parity"
+regime = "rips_parity"
 dataset = "gaussian_shell"
 n_points = 300
 ambient_dim = 2
@@ -133,7 +133,7 @@ max_dim = 2
 
 [[cases]]
 id = "matrix_parity_n200_d8_md2_s11"
-regime = "normalized_parity"
+regime = "rips_parity"
 dataset = "gaussian_shell"
 n_points = 200
 ambient_dim = 8

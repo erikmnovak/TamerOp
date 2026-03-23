@@ -1,0 +1,62 @@
+[meta]
+version = 1
+description = "End-to-end invariant comparison cases for Rips-family Euler parity."
+
+[invariant_eligibility]
+rips_parity = ["euler_signed_measure"]
+rips_codensity_parity = ["euler_signed_measure"]
+rips_lowerstar_parity = ["euler_signed_measure"]
+
+[[cases]]
+id = "inv_rips_n1000_d2_s11"
+regime = "rips_parity"
+dataset = "gaussian_shell"
+n_points = 1000
+ambient_dim = 2
+seed = 11
+max_dim = 1
+
+[[cases]]
+id = "inv_rips_n1000_d8_s11"
+regime = "rips_parity"
+dataset = "gaussian_shell"
+n_points = 1000
+ambient_dim = 8
+seed = 11
+max_dim = 1
+
+[[cases]]
+id = "inv_rips_codensity_n750_d2_s11"
+regime = "rips_codensity_parity"
+dataset = "gaussian_shell"
+n_points = 750
+ambient_dim = 2
+seed = 11
+max_dim = 1
+
+[[cases]]
+id = "inv_rips_codensity_n750_d8_s11"
+regime = "rips_codensity_parity"
+dataset = "gaussian_shell"
+n_points = 750
+ambient_dim = 8
+seed = 11
+max_dim = 1
+
+[[cases]]
+id = "inv_rips_lowerstar_n1000_d2_s11"
+regime = "rips_lowerstar_parity"
+dataset = "gaussian_shell"
+n_points = 1000
+ambient_dim = 2
+seed = 11
+max_dim = 1
+
+[[cases]]
+id = "inv_rips_lowerstar_n1000_d8_s11"
+regime = "rips_lowerstar_parity"
+dataset = "gaussian_shell"
+n_points = 1000
+ambient_dim = 8
+seed = 11
+max_dim = 1

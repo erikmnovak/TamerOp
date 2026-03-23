@@ -1,3 +1,0 @@
-case,family,stage,cache_mode,median_ms,p90_ms,median_alloc_kib
-lazy_diff_thread_probe_rips_d2,point,cochain,serial,6.747381,7.014431,9885.335938
-lazy_diff_thread_probe_rips_d2,point,cochain,threaded,7.44054,9.022616,9889.007812

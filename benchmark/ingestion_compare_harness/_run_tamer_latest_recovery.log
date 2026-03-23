@@ -2,10 +2,10 @@ NearestNeighbors package loaded: true
 claim_n50000_d2_s11          regime=claim_matching cold_ms=294.077 warm_med_ms=2.286 simplices=4283
 claim_n50000_d2_s17          regime=claim_matching cold_ms=1.482 warm_med_ms=1.375 simplices=4382
 claim_n50000_d8_s11          regime=claim_matching cold_ms=1.621 warm_med_ms=1.793 simplices=4419
-parity_n5000_d2_s11          regime=normalized_parity cold_ms=321.69 warm_med_ms=0.322 simplices=1275
-parity_n5000_d2_s17          regime=normalized_parity cold_ms=0.39 warm_med_ms=0.333 simplices=1275
-parity_n10000_d2_s11         regime=normalized_parity cold_ms=1.381 warm_med_ms=1.19 simplices=5050
-parity_n20000_d2_s11         regime=normalized_parity cold_ms=4.065 warm_med_ms=5.344 simplices=20100
-parity_n5000_d8_s11          regime=normalized_parity cold_ms=0.438 warm_med_ms=0.349 simplices=1275
-parity_n10000_d8_s11         regime=normalized_parity cold_ms=1.154 warm_med_ms=1.212 simplices=5050
+parity_n5000_d2_s11          regime=rips_parity cold_ms=321.69 warm_med_ms=0.322 simplices=1275
+parity_n5000_d2_s17          regime=rips_parity cold_ms=0.39 warm_med_ms=0.333 simplices=1275
+parity_n10000_d2_s11         regime=rips_parity cold_ms=1.381 warm_med_ms=1.19 simplices=5050
+parity_n20000_d2_s11         regime=rips_parity cold_ms=4.065 warm_med_ms=5.344 simplices=20100
+parity_n5000_d8_s11          regime=rips_parity cold_ms=0.438 warm_med_ms=0.349 simplices=1275
+parity_n10000_d8_s11         regime=rips_parity cold_ms=1.154 warm_med_ms=1.212 simplices=5050
 Wrote tamer results: benchmark/ingestion_compare_harness/results_tamer_latest_recovery.csv

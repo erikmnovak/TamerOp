@@ -41,12 +41,12 @@ include(joinpath(@__DIR__, "..", "src", "Modules.jl"))
 include(joinpath(@__DIR__, "..", "src", "AbelianCategories.jl"))
 end
 
-const PM = _AbelianBenchEnv
-const AC = PM.AbelianCategories
-const MD = PM.Modules
-const FF = PM.FiniteFringe
-const CM = PM.CoreModules
-const FL = PM.FieldLinAlg
+const TO = _AbelianBenchEnv
+const AC = TO.AbelianCategories
+const MD = TO.Modules
+const FF = TO.FiniteFringe
+const CM = TO.CoreModules
+const FL = TO.FieldLinAlg
 
 function _parse_int_arg(args, key::String, default::Int)
     for a in args

@@ -1,0 +1,19 @@
+[profile] probe (reps=1, trim_between_reps=false, trim_between_cases=true)
+NearestNeighbors package loaded: true
+Invariants: all
+[skip] inv_rips_codensity_n750_d2_s11 euler_signed_measure: kNN k=16 exceeds number of neighbors.
+ERROR: LoadError: No invariant benchmark rows were produced. manifest=benchmark/ingestion_compare_harness/fixtures_invariants_euler_probe_scale002/manifest.toml, regime=all, case=inv_rips_codensity_n750_d2_s11, invariants=nothing
+Stacktrace:
+ [1] error(s::String)
+   @ Base ./error.jl:44
+ [2] main()
+   @ Main ~/Documents/duke_fall_2025/tamer-op/benchmark/ingestion_compare_harness/run_tamer_invariants.jl:499
+ [3] top-level scope
+   @ ~/Documents/duke_fall_2025/tamer-op/benchmark/ingestion_compare_harness/run_tamer_invariants.jl:504
+ [4] include(mod::Module, _path::String)
+   @ Base ./Base.jl:306
+ [5] exec_options(opts::Base.JLOptions)
+   @ Base ./client.jl:317
+ [6] _start()
+   @ Base ./client.jl:550
+in expression starting at /home/eriknovak/Documents/duke_fall_2025/tamer-op/benchmark/ingestion_compare_harness/run_tamer_invariants.jl:504

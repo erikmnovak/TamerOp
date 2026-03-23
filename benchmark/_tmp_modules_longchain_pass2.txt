@@ -1,6 +1,0 @@
-PASS=1
-map_leq old long-chain (>=3 hops)            median_time=167.088 ms  median_alloc=163529.0 KiB
-map_leq new long-chain cold                  median_time=160.929 ms  median_alloc=176498.3 KiB
-map_leq batch long-chain cold (one-off)      median_time=171.46 ms  median_alloc=174802.9 KiB
-speedup(new/old) long-chain: 1.04x
-speedup(batch/old) long-chain: 0.97x

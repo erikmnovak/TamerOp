@@ -1,7 +1,0 @@
-tool,case_id,regime,repeat,cold_ms,timestamp_utc
-tamer_op,matrix_claim_n5000_d2_md1_s11,claim_matching,1,6596.857274000001,2026-02-23T06:30:31.943735+00:00
-multipers,matrix_claim_n5000_d2_md1_s11,claim_matching,1,79.0234990126919,2026-02-23T06:30:35.411681+00:00
-tamer_op,matrix_claim_n5000_d2_md1_s11,claim_matching,2,5515.181243,2026-02-23T06:31:26.335647+00:00
-multipers,matrix_claim_n5000_d2_md1_s11,claim_matching,2,53.05637000128627,2026-02-23T06:31:29.674258+00:00
-tamer_op,matrix_claim_n5000_d2_md1_s11,claim_matching,3,9029.95395,2026-02-23T06:32:37.559762+00:00
-multipers,matrix_claim_n5000_d2_md1_s11,claim_matching,3,73.45991401234642,2026-02-23T06:32:43.508554+00:00

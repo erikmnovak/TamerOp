@@ -1,3 +1,0 @@
-FiniteFringe microbench
-reps=3, poset_n=120, y=96, y_cases=[32, 96], nu=18, nd=18, fiber_queries=1200, hom_dense_case=false
-

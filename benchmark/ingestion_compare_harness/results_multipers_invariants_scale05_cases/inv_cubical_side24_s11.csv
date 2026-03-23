@@ -1,0 +1,2 @@
+tool,case_id,regime,invariant_kind,degree,n_points,ambient_dim,max_dim,cold_ms,cold_alloc_kib,warm_median_ms,warm_p90_ms,warm_alloc_median_kib,output_term_count,output_abs_mass,notes,timestamp_utc
+multipers,inv_cubical_side24_s11,cubical_parity,euler_signed_measure,0,289,2,2,8.169497001290438,,8.0622655004845,8.166064999386435,,30,31.0,cold_mode=warm_uncached;cache=none;stage=filtered_complex_to_signed_measure;builder=filtrations.Cubical,2026-03-19T13:26:09.632229+00:00

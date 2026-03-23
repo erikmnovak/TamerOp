@@ -1,0 +1,5 @@
+case_id,regime,invariant_kind,degree,n_points,ambient_dim,max_dim,tamer_cold_ms,multipers_cold_ms,cold_slowdown_tamer_over_multipers,tamer_warm_median_ms,multipers_warm_median_ms,warm_slowdown_tamer_over_multipers,tamer_output_term_count,multipers_output_term_count,tamer_output_abs_mass,multipers_output_abs_mass,parity_status,parity_reason,summary_included
+inv_rips_codensity_n750_d2_s11,rips_codensity_parity,euler_signed_measure,0,22,2,1,0.6391720000000001,1.9248579992563464,0.332062,0.620843,1.9320235005579889,0.321343,184,184,184.0,184.0,matched,matched,yes
+inv_rips_codensity_n750_d8_s11,rips_codensity_parity,euler_signed_measure,0,22,8,1,1.068113,2.154452999093337,0.495770,0.6560615000000001,2.034414500485582,0.322482,189,189,189.0,189.0,matched,matched,yes
+inv_rips_lowerstar_n1000_d2_s11,rips_lowerstar_parity,euler_signed_measure,0,30,2,1,0.684644,1.863769999545184,0.367344,0.595356,1.8993055009559612,0.313460,248,248,248.0,248.0,matched,matched,yes
+inv_rips_lowerstar_n1000_d8_s11,rips_lowerstar_parity,euler_signed_measure,0,30,8,1,0.8914110000000001,1.9182310006726766,0.464705,0.67409,2.2318620003716205,0.302030,266,266,266.0,266.0,matched,matched,yes

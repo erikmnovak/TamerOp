@@ -3,8 +3,42 @@
 #
 # Scope:
 #   Internal benchmarking and autotuning routines for FieldLinAlg backend and
-#   threshold selection. This file is private to the owner module.
+#   threshold selection.
+# Owns:
+#   - microbenchmark probes used to fit threshold refs,
+#   - startup/full-profile autotune routines,
+#   - persistence-facing threshold selection workflow.
+# Does not own:
+#   - the thresholds themselves (`thresholds.jl`),
+#   - runtime backend routing decisions (`backend_routing.jl`),
+#   - kernel implementations.
+# Depends on:
+#   - `thresholds.jl` for mutable threshold refs and persistence schema,
+#   - `backend_routing.jl` / kernel files for the code paths being benchmarked.
 # -----------------------------------------------------------------------------
+#
+# Benchmark selection strategy:
+# - Routing benchmarks:
+#   use `benchmark/sparse_qq_backend_microbench.jl` when backend crossover or
+#   threshold policy changes. These scripts answer "which backend should win?"
+#   rather than "is the kernel itself fast?".
+# - Kernel benchmarks:
+#   use `benchmark/field_linalg_sparse_rref_microbench.jl` for sparse exact
+#   elimination changes in `sparse_rref.jl`. These isolate row arithmetic and
+#   elimination behavior without routing noise.
+# - End-to-end benchmarks:
+#   use the owner-module benchmark that calls into FieldLinAlg when a change is
+#   meant to improve subsystem behavior (e.g. FiniteFringe, FlangeZn,
+#   ZnEncoding, ModuleComplexes). These answer "did the user-facing call get
+#   faster?".
+#
+# Autotune parameter grouping:
+# - `_autotune_*_shapes` define the probe matrix families.
+# - `_autotune_*_threshold_candidates` define the candidate values fitted for a
+#   threshold family.
+# - `_autotune_*_reps` / query counts define measurement stability.
+# - `_autotune_*_steps` feed progress accounting only; they do not affect the
+#   fitted thresholds.
 
 function _bench_elapsed(f; reps::Int=2)
     f() # warmup
@@ -81,9 +115,20 @@ end
 @inline _autotune_zn_dimat_queries_per_probe(profile::Symbol=:full) =
     profile == :startup ? 800 : 1_500
 @inline _autotune_zn_dimat_reps(profile::Symbol=:full) = profile == :startup ? 1 : 2
+@inline _autotune_rank_words_probe_shapes(profile::Symbol=:full) =
+    profile == :startup ? ((16, 16), (24, 24)) : ((16, 16), (24, 24), (32, 32), (48, 32), (32, 48))
+@inline _autotune_rank_words_threshold_candidates(profile::Symbol=:full) =
+    profile == :startup ? (4, 8, 12, 16, 24, 32, 48) : (4, 8, 12, 16, 24, 32, 48, 64, 96, 128)
+@inline _autotune_rank_words_grid_width(profile::Symbol=:full) =
+    profile == :startup ? 32 : 64
+@inline _autotune_rank_words_reps(profile::Symbol=:full) = profile == :startup ? 1 : 2
 @inline function _autotune_zn_dimat_steps(profile::Symbol)
     return 2 * length(_autotune_zn_dimat_probe_ncuts(profile)) *
            length(_autotune_zn_dimat_threshold_candidates(profile))
+end
+@inline function _autotune_rank_words_steps(profile::Symbol)
+    return length(_autotune_rank_words_probe_shapes(profile)) *
+           length(_autotune_rank_words_threshold_candidates(profile))
 end
 
 @inline _noop_progress_step(::AbstractString) = nothing
@@ -150,6 +195,7 @@ function _autotune_total_steps(profile::Symbol)
         steps += _autotune_zn_dimat_steps(profile)
     end
     steps += _autotune_qq_routing_steps(profile)
+    steps += _autotune_rank_words_steps(profile)
     return max(steps, 1)
 end
 
@@ -589,13 +635,13 @@ function _bench_qq_probe(op::Symbol, probe, backend::Symbol; reps::Int=1)
             B, Y = probe::Tuple{AbstractMatrix{QQ},Matrix{QQ}}
             exact_backend = _is_sparse_like(B) ? :julia_sparse : :julia_exact
             if backend == :julia_exact
-                return _bench_elapsed(() -> solve_fullcolumn(F, B, Y; backend=exact_backend, check_rhs=false, cache=true); reps=reps)
+                return _bench_elapsed(() -> solve_fullcolumn(F, B, Y; backend=exact_backend, check_rhs=false, cache=false); reps=reps)
             elseif backend == :nemo
                 _have_nemo() || return Inf
-                return _bench_elapsed(() -> solve_fullcolumn(F, B, Y; backend=:nemo, check_rhs=false, cache=true); reps=reps)
+                return _bench_elapsed(() -> solve_fullcolumn(F, B, Y; backend=:nemo, check_rhs=false, cache=false); reps=reps)
             elseif backend == :modular
                 _is_sparse_like(B) && return Inf
-                return _bench_elapsed(() -> solve_fullcolumn(F, B, Y; backend=:modular, check_rhs=false, cache=true); reps=reps)
+                return _bench_elapsed(() -> solve_fullcolumn(F, B, Y; backend=:modular, check_rhs=false, cache=false); reps=reps)
             end
         end
     catch
@@ -690,14 +736,22 @@ function _autotune_qq_shape_thresholds!(op::Symbol, shape::Symbol, profile::Symb
     for (i, case) in enumerate(train_cases)
         m = case.m
         n = case.n
-        probe = _qq_case(op, m, n, rng; sparse=case.sparse, density=case.density)
-        train_probe[i] = probe
+        probe = if op == :solve
+            seed = rand(rng, UInt64)
+            train_probe[i] = seed
+            _qq_case(op, m, n, Random.MersenneTwister(seed); sparse=case.sparse, density=case.density)
+        else
+            p = _qq_case(op, m, n, rng; sparse=case.sparse, density=case.density)
+            train_probe[i] = p
+            p
+        end
         train_work[i] = m * n
         t_exact[i] = _bench_qq_probe(op, probe, :julia_exact; reps=1)
         if op != :rank
             t_mod[i] = _bench_qq_probe(op, probe, :modular; reps=1)
         end
         t_nemo[i] = _bench_qq_probe(op, probe, :nemo; reps=1)
+        op == :solve && _clear_solve_autotune_state!()
         progress_step("qq-$(op)-$(shape) train $(i)/$(ntrain)")
     end
 
@@ -741,10 +795,17 @@ function _autotune_qq_shape_thresholds!(op::Symbol, shape::Symbol, profile::Symb
     else
         thr_mod, thr_nemo, _, _ = _fit_double_threshold(train_work, s_exact, s_mod, s_nemo; margin=margin)
         for idx in union(_nearest_indices(train_work, thr_mod, nnear), _nearest_indices(train_work, thr_nemo, nnear))
-            p = train_probe[idx]
+            p = if op == :solve
+                case = train_cases[idx]
+                _qq_case(op, case.m, case.n, Random.MersenneTwister(train_probe[idx]);
+                         sparse=case.sparse, density=case.density)
+            else
+                train_probe[idx]
+            end
             t_exact[idx] = _bench_qq_probe(op, p, :julia_exact; reps=reps_ref)
             t_mod[idx] = _bench_qq_probe(op, p, :modular; reps=reps_ref)
             t_nemo[idx] = _bench_qq_probe(op, p, :nemo; reps=reps_ref)
+            op == :solve && _clear_solve_autotune_state!()
         end
         s_exact = _smooth_by_work(train_work, t_exact)
         s_mod = _smooth_by_work(train_work, t_mod)
@@ -759,11 +820,17 @@ function _autotune_qq_shape_thresholds!(op::Symbol, shape::Symbol, profile::Symb
         for (i, case) in enumerate(hold_cases)
             m = case.m
             n = case.n
-            p = _qq_case(op, m, n, rng; sparse=case.sparse, density=case.density)
+            p = if op == :solve
+                _qq_case(op, m, n, Random.MersenneTwister(rand(rng, UInt64));
+                         sparse=case.sparse, density=case.density)
+            else
+                _qq_case(op, m, n, rng; sparse=case.sparse, density=case.density)
+            end
             h_work[i] = m * n
             h_e[i] = _bench_qq_probe(op, p, :julia_exact; reps=1)
             h_m[i] = _bench_qq_probe(op, p, :modular; reps=1)
             h_n[i] = _bench_qq_probe(op, p, :nemo; reps=1)
+            op == :solve && _clear_solve_autotune_state!()
             progress_step("qq-$(op)-$(shape) holdout $(i)/$(nh)")
         end
         old_mod = _get_qq_threshold(op, shape, :modular)
@@ -873,6 +940,19 @@ end
     return [(m=s[1], n=s[2], density=dens) for s in shapes]
 end
 
+@inline function _qq_sparse_solve_probe(case, seed::UInt64)
+    rng = Random.MersenneTwister(seed)
+    B = _qq_sparse_fullcolumn_rand(case.m, case.n, case.density; rng=rng)
+    X = _qq_dense_rand(case.n, 4; rng=rng)
+    return (B, B * X)
+end
+
+@inline function _clear_solve_autotune_state!()
+    _clear_fullcolumn_cache!()
+    GC.gc()
+    return nothing
+end
+
 function _autotune_qq_sparse_solve_thresholds!(shape::Symbol, bucket::Symbol, profile::Symbol,
                                                rng::Random.AbstractRNG, progress_step::Function=_noop_progress_step)
     train_cases = _qq_sparse_solve_probe_cases(shape, bucket, profile, false)
@@ -881,18 +961,17 @@ function _autotune_qq_sparse_solve_thresholds!(shape::Symbol, bucket::Symbol, pr
 
     ntrain = length(train_cases)
     train_nnz = Vector{Int}(undef, ntrain)
-    train_probe = Vector{Any}(undef, ntrain)
+    train_seed = Vector{UInt64}(undef, ntrain)
     t_exact = Vector{Float64}(undef, ntrain)
     t_nemo = Vector{Float64}(undef, ntrain)
     for (i, case) in enumerate(train_cases)
-        B = _qq_sparse_fullcolumn_rand(case.m, case.n, case.density; rng=rng)
-        X = _qq_dense_rand(case.n, 4; rng=rng)
-        Y = B * X
-        probe = (B, Y)
-        train_probe[i] = probe
-        train_nnz[i] = _sparse_nnz(B)
+        seed = rand(rng, UInt64)
+        train_seed[i] = seed
+        probe = _qq_sparse_solve_probe(case, seed)
+        train_nnz[i] = _sparse_nnz(probe[1])
         t_exact[i] = _bench_qq_probe(:solve, probe, :julia_exact; reps=1)
         t_nemo[i] = _bench_qq_probe(:solve, probe, :nemo; reps=1)
+        _clear_solve_autotune_state!()
         progress_step("qq-solve-sparse-$(shape)-$(bucket) train $(i)/$(ntrain)")
     end
 
@@ -904,9 +983,10 @@ function _autotune_qq_sparse_solve_thresholds!(shape::Symbol, bucket::Symbol, pr
     thr_ge, _, _ = _fit_single_threshold(train_nnz, s_exact, s_nemo; margin=margin)
     thr_le, _, _ = _fit_single_threshold_le(train_nnz, s_exact, s_nemo; margin=margin)
     for idx in union(_nearest_indices(train_nnz, thr_ge, nnear), _nearest_indices(train_nnz, thr_le, nnear))
-        p = train_probe[idx]
+        p = _qq_sparse_solve_probe(train_cases[idx], train_seed[idx])
         t_exact[idx] = _bench_qq_probe(:solve, p, :julia_exact; reps=reps_ref)
         t_nemo[idx] = _bench_qq_probe(:solve, p, :nemo; reps=reps_ref)
+        _clear_solve_autotune_state!()
     end
     s_exact = _smooth_by_work(train_nnz, t_exact)
     s_nemo = _smooth_by_work(train_nnz, t_nemo)
@@ -918,13 +998,11 @@ function _autotune_qq_sparse_solve_thresholds!(shape::Symbol, bucket::Symbol, pr
     h_e = Vector{Float64}(undef, nh)
     h_n = Vector{Float64}(undef, nh)
     for (i, case) in enumerate(hold_cases)
-        B = _qq_sparse_fullcolumn_rand(case.m, case.n, case.density; rng=rng)
-        X = _qq_dense_rand(case.n, 4; rng=rng)
-        Y = B * X
-        probe = (B, Y)
-        h_nnz[i] = _sparse_nnz(B)
+        probe = _qq_sparse_solve_probe(case, rand(rng, UInt64))
+        h_nnz[i] = _sparse_nnz(probe[1])
         h_e[i] = _bench_qq_probe(:solve, probe, :julia_exact; reps=1)
         h_n[i] = _bench_qq_probe(:solve, probe, :nemo; reps=1)
+        _clear_solve_autotune_state!()
         progress_step("qq-solve-sparse-$(shape)-$(bucket) holdout $(i)/$(nh)")
     end
 
@@ -1386,6 +1464,110 @@ function _zn_sample_box_points(a::NTuple{N,Int}, b::NTuple{N,Int}, nqueries::Int
     return out
 end
 
+function _rank_words_fixture(fz, cm, field; nflats::Int, ninj::Int, seed::UInt)
+    rng = Random.MersenneTwister(seed)
+    K = cm.coeff_type(field)
+    flats = Vector{fz.IndFlat{2}}(undef, nflats)
+    injectives = Vector{fz.IndInj{2}}(undef, ninj)
+    @inbounds for i in 1:nflats
+        b = [rand(rng, -8:12) for _ in 1:2]
+        flats[i] = fz.IndFlat(fz.face(2, [rand(rng) < 0.4 for _ in 1:2]), b; id=Symbol(:F, i))
+    end
+    @inbounds for j in 1:ninj
+        b = [rand(rng, -6:14) for _ in 1:2]
+        injectives[j] = fz.IndInj(fz.face(2, [rand(rng) < 0.4 for _ in 1:2]), b; id=Symbol(:E, j))
+    end
+    phi = Matrix{K}(undef, ninj, nflats)
+    @inbounds for i in 1:ninj, j in 1:nflats
+        phi[i, j] = cm.coerce(field, rand(rng, -2:2))
+    end
+    return fz.Flange{K}(2, flats, injectives, phi; field=field)
+end
+
+function _rank_words_probe_states(fz, FG, nx::Int)
+    pts = Vector{NTuple{2,Int}}(undef, 8 * nx)
+    k = 1
+    @inbounds for j in 0:7, i in 0:(nx - 1)
+        pts[k] = (-16 + i, -6 + 3j)
+        k += 1
+    end
+    probe = fz.FlangeDimCache(FG)
+    seen = Set{UInt64}()
+    states = Tuple{Vector{UInt64},Vector{UInt64},Int,Int}[]
+    @inbounds for p in pts
+        nr = fz._fill_active_injectives_words_kernel!(probe.row_words, probe.kernel, p)
+        nc = fz._fill_active_flats_words_kernel!(probe.col_words, probe.kernel, p)
+        (nr == 0 || nc == 0) && continue
+        key = fz._active_words_hash(probe.row_words, probe.col_words)
+        key in seen && continue
+        push!(seen, key)
+        push!(states, (copy(probe.row_words), copy(probe.col_words), nr, nc))
+    end
+    return states
+end
+
+function _autotune_rank_words_threshold!(profile::Symbol=:full, progress_step::Function=_noop_progress_step)
+    _have_nemo() || return nothing
+    pm = parentmodule(@__MODULE__)
+    if !isdefined(pm, :FlangeZn) || !isdefined(pm, :CoreModules)
+        return nothing
+    end
+    fz = getfield(pm, :FlangeZn)
+    cm = getfield(pm, :CoreModules)
+    field = cm.QQField()
+    nx = _autotune_rank_words_grid_width(profile)
+    reps = _autotune_rank_words_reps(profile)
+    probes = NamedTuple{(:FG, :states, :label),Tuple{Any,Vector{Tuple{Vector{UInt64},Vector{UInt64},Int,Int}},String}}[]
+    for (idx, (nflats, ninj)) in enumerate(_autotune_rank_words_probe_shapes(profile))
+        FG = _rank_words_fixture(fz, cm, field; nflats=nflats, ninj=ninj,
+                                 seed=0x5241575752440000 + UInt(idx))
+        states = _rank_words_probe_states(fz, FG, nx)
+        isempty(states) || push!(probes, (FG=FG, states=states, label="nflat=$(nflats) ninj=$(ninj)"))
+    end
+    isempty(probes) && return nothing
+
+    FG0 = probes[1].FG
+    for (row_words, col_words, nr, nc) in Iterators.take(probes[1].states, min(length(probes[1].states), 8))
+        rank_restricted_words(FG0.field, FG0.phi, row_words, col_words, nr, nc;
+                              nrows=size(FG0.phi, 1), ncols=size(FG0.phi, 2), backend=:auto)
+    end
+
+    old_thr = Int(RANKQQ_RESTRICTED_WORDS_NEMO_THRESHOLD[])
+    best_thr = old_thr
+    best_time = Inf
+    cand_times = Dict{Int,Float64}()
+    for thr in _autotune_rank_words_threshold_candidates(profile)
+        RANKQQ_RESTRICTED_WORDS_NEMO_THRESHOLD[] = thr
+        ttot = 0.0
+        for probe in probes
+            FG = probe.FG
+            ttot += _bench_elapsed_median(() -> begin
+                s = 0
+                @inbounds for (row_words, col_words, nr, nc) in probe.states
+                    s += rank_restricted_words(FG.field, FG.phi, row_words, col_words, nr, nc;
+                                               nrows=size(FG.phi, 1), ncols=size(FG.phi, 2),
+                                               backend=:auto)
+                end
+                s
+            end; reps=reps)
+            progress_step("qq-rank-words threshold=$(thr) $(probe.label)")
+        end
+        cand_times[thr] = ttot
+        if ttot < best_time
+            best_time = ttot
+            best_thr = thr
+        end
+    end
+
+    old_time = get(cand_times, old_thr, Inf)
+    if best_thr != old_thr && !(best_time <= 0.95 * old_time)
+        best_thr = old_thr
+    end
+
+    RANKQQ_RESTRICTED_WORDS_NEMO_THRESHOLD[] = best_thr
+    return nothing
+end
+
 function _autotune_zn_dimat_threshold!(profile::Symbol=:full, progress_step::Function=_noop_progress_step)
     pm = parentmodule(@__MODULE__)
     if !isdefined(pm, :FlangeZn) || !isdefined(pm, :CoreModules)
@@ -1467,6 +1649,7 @@ function autotune_linalg_thresholds!(; path::AbstractString=_linalg_thresholds_p
         _autotune_float_thresholds!(profile, step)
         _autotune_float_sparse_svds_thresholds!(step)
         _autotune_qq_routing_thresholds!(profile, step)
+        _autotune_rank_words_threshold!(profile, step)
         profile == :full && _autotune_zn_dimat_threshold!(profile, step)
     catch err
         _apply_linalg_thresholds!(old)
@@ -1479,4 +1662,3 @@ function autotune_linalg_thresholds!(; path::AbstractString=_linalg_thresholds_p
     quiet || @info "FieldLinAlg: autotuned thresholds." path profile thresholds=_current_linalg_thresholds()
     return _current_linalg_thresholds()
 end
-

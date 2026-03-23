@@ -4,6 +4,17 @@
 # Scope:
 #   Non-QQ linear algebra kernels: F2, F3, floating-point, and generic prime-
 #   field engines, including their exact solve/rref/nullspace helpers.
+# Owns:
+#   - F2/F3/Fp/RealField kernel implementations,
+#   - non-QQ full-column factorization/solve helpers,
+#   - field-specific dense/sparse elimination support outside QQ.
+# Does not own:
+#   - backend routing policy,
+#   - QQ kernels,
+#   - public dispatch wrappers.
+# Depends on:
+#   - `thresholds.jl` and `backend_routing.jl` for backend decisions,
+#   - `sparse_rref.jl` for shared sparse elimination primitives where needed.
 # -----------------------------------------------------------------------------
 
 # -----------------------------------------------------------------------------
@@ -1347,4 +1358,3 @@ function _solve_fullcolumn_f2(B::SparseMatrixCSC{FpElem{2},Int},
 
     return want_vec ? vec(X) : X
 end
-

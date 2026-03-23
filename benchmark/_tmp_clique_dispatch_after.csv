@@ -1,7 +1,0 @@
-case,family,stage,cache_mode,median_ms,p90_ms,median_alloc_kib
-graph_clique_probe_lower_star,graph,graded_complex,auto,0.395438,1.524294,775.367188
-graph_clique_probe_lower_star,graph,graded_complex,intersection,0.227619,0.652962,188.492188
-graph_clique_probe_lower_star,graph,graded_complex,combinations,0.418808,0.767662,773.335938
-graph_clique_probe_weight_threshold,graph,graded_complex,auto,0.443398,0.824378,791.617188
-graph_clique_probe_weight_threshold,graph,graded_complex,intersection,0.240781,0.448434,205.101562
-graph_clique_probe_weight_threshold,graph,graded_complex,combinations,0.425371,0.713763,789.789062

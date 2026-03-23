@@ -28,23 +28,23 @@ outdir = example_outdir("06_experiment_batch")
 stage("1) Build encoded sample set")
 
 clouds, labels = make_pointcloud_dataset(n_per_class=8, n_points=56, seed=6006)
-filtration = PM.RipsDensityFiltration(
+filtration = TO.RipsDensityFiltration(
     ;
     max_dim=1,
     knn=8,
     density_k=8,
     nn_backend=:auto,
-    construction=PM.ConstructionOptions(
+    construction=TO.ConstructionOptions(
         ;
         sparsify=:knn,
         budget=(max_simplices=120_000, max_edges=80_000, memory_budget_bytes=900_000_000),
     ),
 )
-field = PM.CoreModules.F2()
-encodings = [PM.encode(clouds[i], filtration; degree=0, field=field, cache=:auto) for i in eachindex(clouds)]
+field = TO.CoreModules.F2()
+encodings = [TO.encode(clouds[i], filtration; degree=0, field=field, cache=:auto) for i in eachindex(clouds)]
 samples = to_encoding_samples(encodings, labels; prefix="exp")
 
-opts = PM.InvariantOptions(
+opts = TO.InvariantOptions(
     ;
     axes_policy=:encoding,
     max_axis_len=64,
@@ -62,7 +62,7 @@ offs = [
     collect(range(-0.7, stop=0.7, length=5)),
 ]
 
-land_spec = PM.LandscapeSpec(
+land_spec = TO.LandscapeSpec(
     ;
     directions=dirs,
     offsets=offs,
@@ -73,7 +73,7 @@ land_spec = PM.LandscapeSpec(
     threads=true,
 )
 
-euler_spec = PM.EulerSurfaceSpec(
+euler_spec = TO.EulerSurfaceSpec(
     ;
     axes_policy=:encoding,
     max_axis_len=64,
@@ -84,7 +84,7 @@ euler_spec = PM.EulerSurfaceSpec(
 formats = available_experiment_formats()
 println("Available extension-backed formats: ", formats)
 
-io = PM.ExperimentIOConfig(
+io = TO.ExperimentIOConfig(
     ;
     outdir=outdir,
     prefix="pointcloud_batch",
@@ -94,11 +94,11 @@ io = PM.ExperimentIOConfig(
     overwrite=true,
 )
 
-exp = PM.ExperimentSpec(
+exp = TO.ExperimentSpec(
     (land_spec, euler_spec);
     name="pointcloud_batch_demo",
     opts=opts,
-    batch=PM.BatchOptions(threaded=true, backend=:threads, progress=false, deterministic=true),
+    batch=TO.BatchOptions(threaded=true, backend=:threads, progress=false, deterministic=true),
     cache=:auto,
     on_unsupported=:error,
     idfun=s -> s.id,
@@ -109,13 +109,13 @@ exp = PM.ExperimentSpec(
 
 stage("3) Run experiment")
 
-res = PM.run_experiment(exp, samples)
+res = TO.run_experiment(exp, samples)
 println("Total elapsed seconds: ", round(res.total_elapsed_seconds, digits=3))
 println("Run directory: ", res.run_dir)
 println("Manifest path: ", res.manifest_path)
 
 for art in res.artifacts
-    println("Artifact $(art.key): elapsed=$(round(art.elapsed_seconds, digits=3))s, n_features=$(PM.nfeatures(art.features))")
+    println("Artifact $(art.key): elapsed=$(round(art.elapsed_seconds, digits=3))s, n_features=$(TO.nfeatures(art.features))")
     println("  feature_paths: ", art.feature_paths)
 
     # If no extension-backed format was written, still emit manual CSV for usability.
@@ -127,7 +127,7 @@ end
 
 stage("4) Load manifest and inspect metadata-only view")
 
-loaded = PM.load_experiment(res.run_dir; load_features=false, prefer=:none, strict=true)
+loaded = TO.load_experiment(res.run_dir; load_features=false, prefer=:none, strict=true)
 println("Loaded manifest keys: ", sort!(collect(keys(loaded.manifest))))
 println("Loaded artifacts: ", [a.key for a in loaded.artifacts])
 

@@ -1,0 +1,43 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Julia
+        uses: julia-actions/setup-julia@v2
+        with:
+          version: '1.12'
+
+      - name: Cache Julia artifacts
+        uses: julia-actions/cache@v2
+
+      - name: Instantiate project
+        run: |
+          julia --startup-file=no --history-file=no --project=. -e '
+            using Pkg
+            Pkg.instantiate()
+            Pkg.precompile()
+          '
+
+      - name: Package load smoke
+        run: |
+          julia --startup-file=no --history-file=no --project=. -e '
+            using TamerOp
+            println("load ok")
+          '
+
+      - name: Focused package-mode runner
+        env:
+          JULIA_NUM_THREADS: "1"
+        run: |
+          julia --startup-file=no --history-file=no --compile=min -O0 --project=. .codex_focus_tests.jl

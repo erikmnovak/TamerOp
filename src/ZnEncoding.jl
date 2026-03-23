@@ -5,10 +5,11 @@ using SparseArrays
 using Random
 using Base.Threads
 
-using ..CoreModules: AbstractCoeffField, coeff_type, SessionCache, _field_cache_key,
+using ..CoreModules: AbstractCoeffField, coeff_type, eye, SessionCache, _field_cache_key,
                      _session_get_zn_encoding_artifact, _session_set_zn_encoding_artifact!,
                      _session_get_zn_pushforward_plan, _session_set_zn_pushforward_plan!,
                      _session_get_zn_pushforward_fringe, _session_set_zn_pushforward_fringe!
+using ..CoreModules.CoeffFields: QQField, PrimeField, RealField
 using ..Options: EncodingOptions
 using ..EncodingCore: AbstractPLikeEncodingMap, CompiledEncoding
 using ..Stats: _wilson_interval
@@ -23,6 +24,7 @@ using ..FiniteFringe: AbstractPoset, FinitePoset, ProductOfChainsPoset, Upset, D
 import ..FiniteFringe: nvertices, leq, upset_indices, downset_indices, leq_row, leq_col, cover_edges
 using ..Modules: PModule, PosetCache
 using ..FlangeZn: Flange, IndFlat, IndInj, in_flat, in_inj
+import ..FlangeZn: flats, injectives, generator_counts
 
 # Build the finite grid poset on [a,b] subset Z^n, ordered coordinatewise.
 # Returns (Q, coords) where coords[i] is an NTuple{n,Int} in mixed-radix order.
@@ -482,111 +484,95 @@ end
     return nothing
 end
 
-@inline function _remove_sorted_existing!(v::Vector{Int}, x::Int)
-    p = searchsortedfirst(v, x)
-    if p <= length(v) && v[p] == x
-        deleteat!(v, p)
-    end
-    return nothing
+@inline function _word_contains(words::AbstractVector{UInt64}, idx::Int)::Bool
+    wd = ((idx - 1) >>> 6) + 1
+    bit = UInt64(1) << ((idx - 1) & 63)
+    return @inbounds (words[wd] & bit) != 0
 end
 
-@inline function _assign_vec!(dst::Vector{Int}, src::Vector{Int})
-    resize!(dst, length(src))
-    copyto!(dst, src)
+function _decode_words_to_sorted!(dst::Vector{Int},
+                                  words::AbstractVector{UInt64},
+                                  nmax::Int,
+                                  nactive::Int=0)
+    empty!(dst)
+    nactive > 0 && sizehint!(dst, nactive)
+    @inbounds for wd in eachindex(words)
+        w = words[wd]
+        while w != 0
+            tz = trailing_zeros(w)
+            idx = ((wd - 1) << 6) + tz + 1
+            idx <= nmax && push!(dst, idx)
+            w &= w - UInt64(1)
+        end
+    end
     return dst
 end
 
-@inline function _sorted_diff!(added::Vector{Int},
-                               removed::Vector{Int},
-                               oldv::Vector{Int},
-                               newv::Vector{Int})
-    empty!(added)
-    empty!(removed)
-    i = 1
-    j = 1
-    nold = length(oldv)
-    nnew = length(newv)
-    @inbounds while i <= nold && j <= nnew
-        a = oldv[i]
-        b = newv[j]
-        if a == b
-            i += 1
-            j += 1
-        elseif a < b
-            push!(removed, a)
-            i += 1
-        else
-            push!(added, b)
-            j += 1
+function _decode_word_additions!(dst::Vector{Int},
+                                 old_words::AbstractVector{UInt64},
+                                 new_words::AbstractVector{UInt64},
+                                 nmax::Int)
+    empty!(dst)
+    sizehint!(dst, 8)
+    @inbounds for wd in eachindex(new_words)
+        w = new_words[wd] & ~old_words[wd]
+        while w != 0
+            tz = trailing_zeros(w)
+            idx = ((wd - 1) << 6) + tz + 1
+            idx <= nmax && push!(dst, idx)
+            w &= w - UInt64(1)
         end
     end
-    @inbounds while i <= nold
-        push!(removed, oldv[i])
-        i += 1
-    end
-    @inbounds while j <= nnew
-        push!(added, newv[j])
-        j += 1
-    end
-    return nothing
+    return dst
 end
 
-@inline function _sorted_disjoint(a::Vector{Int}, b::Vector{Int})
+@inline function _active_basis_cols!(dst::Vector{Int},
+                                     basis_cols::Vector{Int},
+                                     col_words::AbstractVector{UInt64})
+    empty!(dst)
+    sizehint!(dst, length(basis_cols))
+    @inbounds for col in basis_cols
+        _word_contains(col_words, col) && push!(dst, col)
+    end
+    return dst
+end
+
+@inline function _basis_cols_removed(prev_basis_cols::Vector{Int},
+                                     col_words::AbstractVector{UInt64})::Bool
+    @inbounds for col in prev_basis_cols
+        _word_contains(col_words, col) || return true
+    end
+    return false
+end
+
+@inline function _basis_symdiff_leq(a::Vector{Int}, b::Vector{Int}, limit::Int)::Bool
     i = 1
     j = 1
     na = length(a)
     nb = length(b)
+    miss = 0
     @inbounds while i <= na && j <= nb
         ai = a[i]
         bj = b[j]
         if ai == bj
-            return false
+            i += 1
+            j += 1
         elseif ai < bj
+            miss += 1
+            miss <= limit || return false
             i += 1
         else
+            miss += 1
+            miss <= limit || return false
             j += 1
         end
     end
-    return true
+    miss += (na - i + 1) + (nb - j + 1)
+    return miss <= limit
 end
 
-function _merge_sorted_unique(a::Vector{Int}, b::Vector{Int})
-    out = Vector{Int}(undef, length(a) + length(b))
-    i = 1
-    j = 1
-    k = 0
-    na = length(a)
-    nb = length(b)
-    @inbounds while i <= na && j <= nb
-        ai = a[i]
-        bj = b[j]
-        if ai == bj
-            k += 1
-            out[k] = ai
-            i += 1
-            j += 1
-        elseif ai < bj
-            k += 1
-            out[k] = ai
-            i += 1
-        else
-            k += 1
-            out[k] = bj
-            j += 1
-        end
-    end
-    @inbounds while i <= na
-        k += 1
-        out[k] = a[i]
-        i += 1
-    end
-    @inbounds while j <= nb
-        k += 1
-        out[k] = b[j]
-        j += 1
-    end
-    resize!(out, k)
-    return out
+@inline function _pack_transition_key(u::Int, v::Int)::UInt64
+    return (UInt64(u) << 32) | UInt64(v)
 end
 
 function _build_box_membership_events(flats::Vector{IndFlat{N}},
@@ -635,6 +621,9 @@ end
 
 mutable struct _BoxBasisEntry{K}
     id::Int
+    key::UInt64
+    nrows::Int
+    ncols::Int
     row_words::Vector{UInt64}
     col_words::Vector{UInt64}
     rows::Vector{Int}
@@ -654,7 +643,7 @@ This is a power-user hook; pass via `pmodule_on_box(...; cache=...)`.
 mutable struct ZnBoxBasisCache{K}
     flange_key::UInt64
     basis_cache::Dict{UInt64, Vector{_BoxBasisEntry{K}}}
-    transition_cache::Dict{Tuple{Int,Int}, Matrix{K}}
+    transition_cache::Dict{UInt64, Matrix{K}}
     next_entry_id::Int
     basis_cache_hits::Int
     basis_cache_misses::Int
@@ -664,13 +653,89 @@ mutable struct ZnBoxBasisCache{K}
     transition_cache_misses::Int
     sparse_transition_solves::Int
     dense_transition_solves::Int
+    identity_transition_fastpaths::Int
+    coeff_transition_fastpaths::Int
+    basis_change_transition_fastpaths::Int
+end
+
+# Internal benchmark/diagnostic override for transition solve routing in
+# `pmodule_on_box`. `:auto` uses the field-sensitive heuristic, `:always`
+# forces sparse solves, and `:never` forces dense solves.
+const _ZN_TRANSITION_SPARSE_OVERRIDE = Ref{Symbol}(:auto)
+const _ZN_BASIS_CHANGE_FASTPATH = Ref(true)
+
+@inline function _transition_matrix_density(A::AbstractMatrix)
+    total = length(A)
+    total == 0 && return 0.0
+    nz = 0
+    @inbounds for x in A
+        !iszero(x) && (nz += 1)
+    end
+    return nz / total
+end
+
+@inline function _should_sparse_transition_solve(::QQField,
+                                                 Bv::AbstractMatrix,
+                                                 Im::AbstractMatrix)
+    workB = size(Bv, 1) * size(Bv, 2)
+    workI = size(Im, 1) * size(Im, 2)
+    if workB < 8192 || workI < 2048
+        return false
+    end
+    if min(size(Bv, 1), size(Bv, 2)) < 32
+        return false
+    end
+    return (_transition_matrix_density(Bv) <= 0.10) &&
+           (_transition_matrix_density(Im) <= 0.10)
+end
+
+@inline function _should_sparse_transition_solve(F::PrimeField,
+                                                 Bv::AbstractMatrix,
+                                                 Im::AbstractMatrix)
+    if F.p <= 3
+        return false
+    end
+    workB = size(Bv, 1) * size(Bv, 2)
+    workI = size(Im, 1) * size(Im, 2)
+    densB = _transition_matrix_density(Bv)
+    densI = _transition_matrix_density(Im)
+    if workB < 256 || workI < 128
+        return false
+    end
+    if min(size(Bv, 1), size(Bv, 2)) < 8
+        return false
+    end
+    return densB <= 0.20 && densI <= 0.20
+end
+
+@inline _should_sparse_transition_solve(::RealField, Bv::AbstractMatrix, Im::AbstractMatrix) = false
+
+@inline function _hash_word_state(words::AbstractVector{UInt64}, seed::UInt)
+    h = seed
+    @inbounds for w in words
+        h = hash(w, h)
+    end
+    return UInt64(h)
+end
+
+@inline function _basis_pattern_fingerprint(row_words::AbstractVector{UInt64},
+                                            nrows::Int,
+                                            col_words::AbstractVector{UInt64},
+                                            ncols::Int)
+    h = hash(nrows)
+    h = hash(length(row_words), h)
+    h = _hash_word_state(row_words, h)
+    h = hash(ncols, h)
+    h = hash(length(col_words), h)
+    h = _hash_word_state(col_words, h)
+    return UInt64(h)
 end
 
 ZnBoxBasisCache{K}() where {K} = ZnBoxBasisCache{K}(0x0,
                                                     Dict{UInt64, Vector{_BoxBasisEntry{K}}}(),
-                                                    Dict{Tuple{Int,Int}, Matrix{K}}(),
+                                                    Dict{UInt64, Matrix{K}}(),
                                                     1,
-                                                    0, 0, 0, 0, 0, 0, 0, 0)
+                                                    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
 
 @inline function _flange_fingerprint(FG::Flange)
     h = hash(FG.n)
@@ -741,9 +806,9 @@ end
 function compile_zn_box_cache(FG::Flange{K}) where {K}
     return ZnBoxBasisCache{K}(_flange_fingerprint(FG),
                               Dict{UInt64, Vector{_BoxBasisEntry{K}}}(),
-                              Dict{Tuple{Int,Int}, Matrix{K}}(),
+                              Dict{UInt64, Matrix{K}}(),
                               1,
-                              0, 0, 0, 0, 0, 0, 0, 0)
+                              0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
 end
 
 """
@@ -775,6 +840,9 @@ function box_cache_stats(cache::ZnBoxBasisCache)
         transition_hit_rate = ttot == 0 ? 0.0 : cache.transition_cache_hits / ttot,
         sparse_transition_solves = cache.sparse_transition_solves,
         dense_transition_solves = cache.dense_transition_solves,
+        identity_transition_fastpaths = cache.identity_transition_fastpaths,
+        coeff_transition_fastpaths = cache.coeff_transition_fastpaths,
+        basis_change_transition_fastpaths = cache.basis_change_transition_fastpaths,
     )
 end
 
@@ -830,29 +898,27 @@ function pmodule_on_box(FG::Flange{K};
         inj_viol[jidx] = cnt
     end
 
-    rows_now = Int[]
-    cols_now = Int[]
-    sizehint!(rows_now, r)
-    sizehint!(cols_now, c)
     row_words = zeros(UInt64, row_words_len)
     col_words = zeros(UInt64, col_words_len)
+    nrows_now = 0
+    ncols_now = 0
 
     @inbounds for jidx in 1:r
         if inj_viol[jidx] == 0
-            push!(rows_now, jidx)
             _set_sigword_bit!(row_words, jidx, true)
+            nrows_now += 1
         end
     end
     @inbounds for fidx in 1:c
         if flat_unsat[fidx] == 0
-            push!(cols_now, fidx)
             _set_sigword_bit!(col_words, fidx, true)
+            ncols_now += 1
         end
     end
 
     # Cache B_g for repeated active-row/active-col patterns and transition solves.
     basis_cache = Dict{UInt64, Vector{_BoxBasisEntry{K}}}()
-    transition_cache = Dict{Tuple{Int,Int}, Matrix{K}}()
+    transition_cache = Dict{UInt64, Matrix{K}}()
     next_entry_id_ref = Ref(1)
     basis_hits_ref = Ref(0)
     basis_misses_ref = Ref(0)
@@ -862,9 +928,12 @@ function pmodule_on_box(FG::Flange{K};
     transition_misses_ref = Ref(0)
     sparse_solves_ref = Ref(0)
     dense_solves_ref = Ref(0)
+    identity_fastpaths_ref = Ref(0)
+    coeff_fastpaths_ref = Ref(0)
+    basis_change_fastpaths_ref = Ref(0)
     if cache === nothing
         basis_cache = Dict{UInt64, Vector{_BoxBasisEntry{K}}}()
-        transition_cache = Dict{Tuple{Int,Int}, Matrix{K}}()
+        transition_cache = Dict{UInt64, Matrix{K}}()
         next_entry_id_ref[] = 1
     else
         fkey = _flange_fingerprint(FG)
@@ -881,6 +950,9 @@ function pmodule_on_box(FG::Flange{K};
             cache.transition_cache_misses = 0
             cache.sparse_transition_solves = 0
             cache.dense_transition_solves = 0
+            cache.identity_transition_fastpaths = 0
+            cache.coeff_transition_fastpaths = 0
+            cache.basis_change_transition_fastpaths = 0
         end
         basis_cache = cache.basis_cache
         transition_cache = cache.transition_cache
@@ -891,7 +963,11 @@ function pmodule_on_box(FG::Flange{K};
         bucket = get(basis_cache, hashkey, nothing)
         bucket === nothing && return nothing
         @inbounds for entry in bucket
-            if entry.row_words == row_words && entry.col_words == col_words
+            if entry.key == hashkey &&
+               entry.nrows == nrows_now &&
+               entry.ncols == ncols_now &&
+               entry.row_words == row_words &&
+               entry.col_words == col_words
                 return entry
             end
         end
@@ -899,53 +975,59 @@ function pmodule_on_box(FG::Flange{K};
     end
 
     @inline function _store_basis_entry!(hashkey::UInt64,
+                                         rows_state::Vector{Int},
+                                         cols_state::Vector{Int},
                                          Bg::Matrix{K},
                                          basis_cols::Vector{Int},
-                                         cols_state::Vector{Int},
                                          coeffs::Union{Nothing,Matrix{K}},
                                          dim::Int)
         eid = next_entry_id_ref[]
         next_entry_id_ref[] = eid + 1
-        entry = _BoxBasisEntry{K}(eid, copy(row_words), copy(col_words), copy(rows_now), cols_state, basis_cols, coeffs, Bg, dim)
+        entry = _BoxBasisEntry{K}(eid, hashkey, length(rows_state), length(cols_state),
+                                  copy(row_words), copy(col_words),
+                                  copy(rows_state), copy(cols_state),
+                                  copy(basis_cols), coeffs, Bg, dim)
         push!(get!(basis_cache, hashkey, Vector{_BoxBasisEntry{K}}()), entry)
         return entry
     end
 
-    @inline function _compute_basis_from_cols(curr_rows::Vector{Int}, curr_cols::Vector{Int})
-        if isempty(curr_rows) || isempty(curr_cols)
-            return zeros(K, length(curr_rows), 0), Int[]
+    @inline function _compute_basis_from_words(curr_rows::Vector{Int},
+                                               row_words_state::AbstractVector{UInt64},
+                                               col_words_state::AbstractVector{UInt64},
+                                               nrows_state::Int,
+                                               ncols_state::Int)
+        if nrows_state == 0 || ncols_state == 0
+            return zeros(K, nrows_state, 0), Int[]
         end
-        A = @view Phi[curr_rows, curr_cols]
-        _, pivs = FieldLinAlg.rref(field, A; pivots=true)
-        piv = collect(pivs)
-        if isempty(piv)
-            return zeros(K, length(curr_rows), 0), Int[]
-        end
-        basis_cols = curr_cols[piv]
-        Bg = Matrix{K}(A[:, piv])
+        Bg, basis_cols = FieldLinAlg.colspace_restricted_words(field, Phi, row_words_state, col_words_state,
+                                                               nrows_state, ncols_state;
+                                                               nrows=r, ncols=c, backend=:auto,
+                                                               pivots=true)
         return Bg, basis_cols
     end
 
-    @inline function _compute_coeffs(curr_rows::Vector{Int},
-                                     cols_state::Vector{Int},
+    @inline function _compute_coeffs(row_words_state::AbstractVector{UInt64},
+                                     col_words_state::AbstractVector{UInt64},
+                                     nrows_state::Int,
+                                     ncols_state::Int,
                                      Bg::Matrix{K})
-        ncols_state = length(cols_state)
         d = size(Bg, 2)
         if d == 0 || ncols_state == 0
             return zeros(K, d, ncols_state)
         end
-        Aall = @view Phi[curr_rows, cols_state]
-        return FieldLinAlg.solve_fullcolumn(field, Bg, Aall; check_rhs=false)
+        return FieldLinAlg.solve_fullcolumn_restricted_words(field, Bg, Phi,
+                                                             row_words_state, col_words_state,
+                                                             nrows_state, ncols_state;
+                                                             nrows=r, ncols=c,
+                                                             check_rhs=false, backend=:auto)
     end
 
-    prev_rows = Int[]
-    prev_cols = Int[]
     had_prev = false
     prev_entry::Union{Nothing,_BoxBasisEntry{K}} = nothing
+    curr_rows = Int[]
+    curr_cols = Int[]
     row_added = Int[]
-    row_removed = Int[]
     col_added = Int[]
-    col_removed = Int[]
     candidate_cols = Int[]
 
     strides = Vector{Int}(undef, N)
@@ -957,85 +1039,166 @@ function pmodule_on_box(FG::Flange{K};
     dirs = ones(Int, N)
     lin_idx = 1
     basis_entry_ids = zeros(Int, ncoords)
+    basis_entries = Vector{_BoxBasisEntry{K}}(undef, ncoords)
+
+    @inline function _basis_cols_active_in_entry(entry::_BoxBasisEntry{K},
+                                                 basis_cols::Vector{Int}) where {K}
+        @inbounds for colid in basis_cols
+            _word_contains(entry.col_words, colid) || return false
+        end
+        return true
+    end
+
+    @inline function _transition_from_direct_coeffs(entry_src::_BoxBasisEntry{K},
+                                                    entry_tgt::_BoxBasisEntry{K};
+                                                    require_cached::Bool=false) where {K}
+        _basis_cols_active_in_entry(entry_tgt, entry_src.basis_cols) || return nothing
+        if require_cached && entry_tgt.coeffs === nothing
+            return nothing
+        end
+        if entry_tgt.coeffs === nothing
+            entry_tgt.coeffs = _compute_coeffs(entry_tgt.row_words, entry_tgt.col_words,
+                                               entry_tgt.nrows, entry_tgt.ncols,
+                                               entry_tgt.B)
+        end
+        coeffs = entry_tgt.coeffs::Matrix{K}
+        dv = size(coeffs, 1)
+        du = length(entry_src.basis_cols)
+        X = Matrix{K}(undef, dv, du)
+        @inbounds for j in 1:du
+            colid = entry_src.basis_cols[j]
+            t = searchsortedfirst(entry_tgt.cols, colid)
+            if t > length(entry_tgt.cols) || entry_tgt.cols[t] != colid
+                return nothing
+            end
+            @views X[:, j] .= coeffs[:, t]
+        end
+        return X
+    end
+
+    @inline function _transition_from_small_basis_change(entry_src::_BoxBasisEntry{K},
+                                                         entry_tgt::_BoxBasisEntry{K}) where {K}
+        du = length(entry_src.basis_cols)
+        dv = length(entry_tgt.basis_cols)
+        du == dv || return nothing
+        _basis_symdiff_leq(entry_src.basis_cols, entry_tgt.basis_cols, 2) || return nothing
+
+        C = zeros(K, du, du)
+        added_tgt = Int[]
+        added_pos = Int[]
+        sizehint!(added_tgt, 2)
+        sizehint!(added_pos, 2)
+        @inbounds for j in 1:du
+            colid = entry_tgt.basis_cols[j]
+            p = searchsortedfirst(entry_src.basis_cols, colid)
+            if p <= du && entry_src.basis_cols[p] == colid
+                C[p, j] = one(K)
+            else
+                push!(added_tgt, colid)
+                push!(added_pos, j)
+            end
+        end
+        isempty(added_tgt) && return eye(field, du)
+
+        rhs = Matrix{K}(undef, entry_src.nrows, length(added_tgt))
+        @inbounds for k in eachindex(added_tgt)
+            j = added_pos[k]
+            @views rhs[:, k] .= entry_tgt.B[:, j]
+        end
+        Y = FieldLinAlg.solve_fullcolumn(field, entry_src.B, rhs; check_rhs=false)
+        @inbounds for k in eachindex(added_pos)
+            @views C[:, added_pos[k]] .= Y[:, k]
+        end
+        return FieldLinAlg.solve_fullcolumn(field, C, eye(field, du); check_rhs=false)
+    end
 
     @inbounds for _ in 1:ncoords
-        h = hash(row_words, hash(col_words))
+        h = _basis_pattern_fingerprint(row_words, nrows_now, col_words, ncols_now)
         entry = _find_basis_entry(h)
         if entry === nothing
             basis_misses_ref[] += 1
-            Bg = Matrix{K}(undef, 0, 0)
-            basis_cols = Int[]
-            used_incremental = false
-
             if had_prev && prev_entry !== nothing
-                _sorted_diff!(row_added, row_removed, prev_rows, rows_now)
-                _sorted_diff!(col_added, col_removed, prev_cols, cols_now)
-                basis_removed = !_sorted_disjoint(col_removed, prev_entry.basis_cols)
+                rows_unchanged = prev_entry.row_words == row_words
+                _decode_word_additions!(col_added, prev_entry.col_words, col_words, c)
+                basis_removed = _basis_cols_removed(prev_entry.basis_cols, col_words)
 
-                # Full incremental candidate refinement path when previous basis columns remain present.
                 if !basis_removed
-                    empty!(candidate_cols)
-                    # Start with old basis columns + newly added columns.
-                    @inbounds for c0 in prev_entry.basis_cols
-                        p = searchsortedfirst(col_removed, c0)
-                        if p > length(col_removed) || col_removed[p] != c0
-                            push!(candidate_cols, c0)
-                        end
-                    end
-                    candidate_cols = _merge_sorted_unique(candidate_cols, col_added)
+                    _decode_words_to_sorted!(curr_cols, col_words, c, ncols_now)
 
-                    # If rows are added, some previously nonbasis columns can become independent.
-                    if !isempty(row_added)
-                        if prev_entry.coeffs === nothing
-                            prev_entry.coeffs = _compute_coeffs(prev_entry.rows, prev_entry.cols, prev_entry.B)
+                    # True small-change fast path: rows unchanged and only nonbasis columns disappeared.
+                    if rows_unchanged && isempty(col_added)
+                        incr_refines_ref[] += 1
+                        entry = _store_basis_entry!(h, prev_entry.rows, curr_cols,
+                                                    prev_entry.B, prev_entry.basis_cols,
+                                                    nothing, prev_entry.dim)
+                    else
+                        rows_state = prev_entry.rows
+                        if !rows_unchanged
+                            _decode_words_to_sorted!(curr_rows, row_words, r, nrows_now)
+                            rows_state = curr_rows
+                            _decode_word_additions!(row_added, prev_entry.row_words, row_words, r)
                         end
-                        coeffs_prev = prev_entry.coeffs::Matrix{K}
-                        prev_cols_state = prev_entry.cols
-                        dprev = size(coeffs_prev, 1)
-                        nbasis = length(prev_entry.basis_cols)
-                        @inbounds for t in eachindex(prev_cols_state)
-                            colid = prev_cols_state[t]
-                            p = searchsortedfirst(col_removed, colid)
-                            if p <= length(col_removed) && col_removed[p] == colid
-                                continue
-                            end
-                            q = searchsortedfirst(candidate_cols, colid)
-                            if q <= length(candidate_cols) && candidate_cols[q] == colid
-                                continue
-                            end
 
-                            violated = false
-                            for rr in row_added
-                                lhs = Phi[rr, colid]
-                                rhs = zero(K)
-                                kmax = min(dprev, nbasis)
-                                for k in 1:kmax
-                                    rhs += coeffs_prev[k, t] * Phi[rr, prev_entry.basis_cols[k]]
+                        _active_basis_cols!(candidate_cols, prev_entry.basis_cols, col_words)
+                        @inbounds for colid in col_added
+                            _insert_sorted_unique!(candidate_cols, colid)
+                        end
+
+                        # If rows are added, previously dependent nonbasis columns may
+                        # become independent. Only revisit those columns in that case.
+                        if !rows_unchanged && !isempty(row_added)
+                            if prev_entry.coeffs === nothing
+                                prev_entry.coeffs = _compute_coeffs(prev_entry.row_words, prev_entry.col_words,
+                                                                    prev_entry.nrows, prev_entry.ncols,
+                                                                    prev_entry.B)
+                            end
+                            coeffs_prev = prev_entry.coeffs::Matrix{K}
+                            prev_cols_state = prev_entry.cols
+                            dprev = size(coeffs_prev, 1)
+                            nbasis = length(prev_entry.basis_cols)
+                            @inbounds for t in eachindex(prev_cols_state)
+                                colid = prev_cols_state[t]
+                                _word_contains(col_words, colid) || continue
+                                q = searchsortedfirst(candidate_cols, colid)
+                                if q <= length(candidate_cols) && candidate_cols[q] == colid
+                                    continue
                                 end
-                                if lhs != rhs
-                                    violated = true
-                                    break
+
+                                violated = false
+                                for rr in row_added
+                                    lhs = Phi[rr, colid]
+                                    rhs = zero(K)
+                                    kmax = min(dprev, nbasis)
+                                    for k in 1:kmax
+                                        rhs += coeffs_prev[k, t] * Phi[rr, prev_entry.basis_cols[k]]
+                                    end
+                                    if lhs != rhs
+                                        violated = true
+                                        break
+                                    end
                                 end
-                            end
-                            if violated
-                                _insert_sorted_unique!(candidate_cols, colid)
+                                violated && _insert_sorted_unique!(candidate_cols, colid)
                             end
                         end
-                    end
 
-                    Bg, basis_cols = _compute_basis_from_cols(rows_now, candidate_cols)
-                    used_incremental = true
+                        Bg, basis_cols = _compute_basis_from_words(rows_state, row_words, col_words,
+                                                                   length(rows_state), ncols_now)
+                        incr_refines_ref[] += 1
+                        entry = _store_basis_entry!(h, rows_state, curr_cols,
+                                                    Bg, basis_cols, nothing, size(Bg, 2))
+                    end
                 end
             end
 
-            if !used_incremental
-                Bg, basis_cols = _compute_basis_from_cols(rows_now, cols_now)
+            if entry === nothing
+                _decode_words_to_sorted!(curr_rows, row_words, r, nrows_now)
+                _decode_words_to_sorted!(curr_cols, col_words, c, ncols_now)
+                Bg, basis_cols = _compute_basis_from_words(curr_rows, row_words, col_words,
+                                                           nrows_now, ncols_now)
                 full_recompute_ref[] += 1
-            else
-                incr_refines_ref[] += 1
+                entry = _store_basis_entry!(h, curr_rows, curr_cols,
+                                            Bg, basis_cols, nothing, size(Bg, 2))
             end
-            d = size(Bg, 2)
-            entry = _store_basis_entry!(h, Bg, basis_cols, copy(cols_now), nothing, d)
         else
             basis_hits_ref[] += 1
         end
@@ -1044,12 +1207,11 @@ function pmodule_on_box(FG::Flange{K};
         B[lin_idx] = entry.B
         dims[lin_idx] = entry.dim
         basis_entry_ids[lin_idx] = entry.id
+        basis_entries[lin_idx] = entry
 
         if !had_prev
             had_prev = true
         end
-        _assign_vec!(prev_rows, rows_now)
-        _assign_vec!(prev_cols, cols_now)
         prev_entry = entry
 
         moved = false
@@ -1063,15 +1225,15 @@ function pmodule_on_box(FG::Flange{K};
                     for f in flat_fwd[axis][old + 1]
                         flat_unsat[f] -= 1
                         if flat_unsat[f] == 0
-                            _insert_sorted_unique!(cols_now, f)
                             _set_sigword_bit!(col_words, f, true)
+                            ncols_now += 1
                         end
                     end
                     for j in inj_fwd[axis][old + 1]
                         inj_viol[j] += 1
                         if inj_viol[j] == 1
-                            _remove_sorted_existing!(rows_now, j)
                             _set_sigword_bit!(row_words, j, false)
+                            nrows_now -= 1
                         end
                     end
                 else
@@ -1079,15 +1241,15 @@ function pmodule_on_box(FG::Flange{K};
                         was_active = flat_unsat[f] == 0
                         flat_unsat[f] += 1
                         if was_active
-                            _remove_sorted_existing!(cols_now, f)
                             _set_sigword_bit!(col_words, f, false)
+                            ncols_now -= 1
                         end
                     end
                     for j in inj_bwd[axis][old + 1]
                         inj_viol[j] -= 1
                         if inj_viol[j] == 0
-                            _insert_sorted_unique!(rows_now, j)
                             _set_sigword_bit!(row_words, j, true)
+                            nrows_now += 1
                         end
                     end
                 end
@@ -1130,34 +1292,23 @@ function pmodule_on_box(FG::Flange{K};
         return out
     end
 
-    @inline function matrix_density(A::Matrix{K}) where {K}
-        total = length(A)
-        total == 0 && return 0.0
-        nz = 0
-        @inbounds for x in A
-            !iszero(x) && (nz += 1)
-        end
-        return nz / total
-    end
-
     @inline function should_sparse_solve(Bv::Matrix{K}, Im::Matrix{K}) where {K}
-        # Conservative sparse-first gate to avoid conversion overhead on small/dense cases.
-        if size(Bv, 1) * size(Bv, 2) < 4096
-            return false
-        end
-        return (matrix_density(Bv) <= 0.20) && (matrix_density(Im) <= 0.20)
+        mode = _ZN_TRANSITION_SPARSE_OVERRIDE[]
+        mode === :always && return true
+        mode === :never && return false
+        return _should_sparse_transition_solve(field, Bv, Im)
     end
 
     edges = collect(cover_edges(Q))
     ne = length(edges)
     slot_of_edge = Vector{Int}(undef, ne)
-    slot_keys = Tuple{Int,Int}[]
+    slot_keys = UInt64[]
     slot_rep_edge = Int[]
-    slot_index = Dict{Tuple{Int,Int},Int}()
+    slot_index = Dict{UInt64,Int}()
 
     @inbounds for ei in 1:ne
         u, v = edges[ei]
-        key = (basis_entry_ids[u], basis_entry_ids[v])
+        key = _pack_transition_key(basis_entry_ids[u], basis_entry_ids[v])
         s = get(slot_index, key, 0)
         if s == 0
             s = length(slot_keys) + 1
@@ -1192,6 +1343,34 @@ function pmodule_on_box(FG::Flange{K};
         dv = dims[v]
         if dv == 0 || du == 0
             return zeros(K, dv, du)
+        end
+
+        entry_u = basis_entries[u]
+        entry_v = basis_entries[v]
+        if entry_u.id == entry_v.id
+            identity_fastpaths_ref[] += 1
+            return eye(field, du)
+        end
+        same_rows = entry_u.nrows == entry_v.nrows &&
+                    entry_u.row_words == entry_v.row_words
+        if same_rows
+            X = _transition_from_direct_coeffs(entry_u, entry_v; require_cached=true)
+            if X !== nothing
+                coeff_fastpaths_ref[] += 1
+                return X
+            end
+            if _ZN_BASIS_CHANGE_FASTPATH[]
+                X = _transition_from_small_basis_change(entry_u, entry_v)
+                if X !== nothing
+                    basis_change_fastpaths_ref[] += 1
+                    return X
+                end
+            end
+            X = _transition_from_direct_coeffs(entry_u, entry_v)
+            if X !== nothing
+                coeff_fastpaths_ref[] += 1
+                return X
+            end
         end
 
         rows_u = active_rows[u]
@@ -1248,6 +1427,9 @@ function pmodule_on_box(FG::Flange{K};
         cache.transition_cache_misses += transition_misses_ref[]
         cache.sparse_transition_solves += sparse_solves_ref[]
         cache.dense_transition_solves += dense_solves_ref[]
+        cache.identity_transition_fastpaths += identity_fastpaths_ref[]
+        cache.coeff_transition_fastpaths += coeff_fastpaths_ref[]
+        cache.basis_change_transition_fastpaths += basis_change_fastpaths_ref[]
     end
 
     return PModule{K}(Q, Vector{Int}(dims), edge_maps; field=field)
@@ -1383,6 +1565,27 @@ end
 @inline _unwrap_zn_pi(cache::ZnEncodingCache) = cache.pi
 @inline _unwrap_zn_pi(enc::CompiledEncoding{<:ZnEncodingMap}) = enc.pi
 
+"""
+    compile_zn_cache(P, pi)
+    compile_zn_cache(pi)
+    compile_zn_cache(FGs, opts=EncodingOptions(); poset_kind=:signature)
+
+Construct a reusable owner-local cache for repeated Zn encoding queries.
+
+The returned [`ZnEncodingCache`](@ref) stores a finite region poset together
+with the underlying [`ZnEncodingMap`](@ref). This is the owner-level cache to
+use when you plan to call [`locate`](@ref), [`locate_many!`](@ref),
+[`region_weights`](@ref), or [`region_adjacency`](@ref) repeatedly on the same
+encoding.
+
+Best practice:
+- use `compile_zn_cache(pi)` for a bare map when the structured
+  `:signature` region poset is sufficient;
+- use `compile_zn_cache(P, pi)` when you already have a specific finite region
+  poset, including dense `FinitePoset` realizations;
+- use `poset_kind=:signature` for the cheapest structured cache and
+  `poset_kind=:dense` only when downstream code truly needs a dense poset.
+"""
 compile_zn_cache(P, pi::ZnEncodingMap{N,MY,MZ}) where {N,MY,MZ} = ZnEncodingCache{N,MY,MZ,typeof(P)}(P, pi)
 compile_zn_cache(pi::ZnEncodingMap) = ZnEncodingCache(SignaturePoset(pi.sig_y, pi.sig_z), pi)
 compile_zn_cache(enc::CompiledEncoding{<:ZnEncodingMap}) = ZnEncodingCache(enc.P, enc.pi)
@@ -1516,6 +1719,19 @@ end
     return true
 end
 
+@inline function _sig_tuple_subset(a::NTuple{NW,UInt64},
+                                   b::NTuple{NW,UInt64},
+                                   lastmask::UInt64)::Bool where {NW}
+    @inbounds for w in 1:NW
+        diff = a[w] & ~b[w]
+        if w == NW
+            diff &= lastmask
+        end
+        diff == 0 || return false
+    end
+    return true
+end
+
 function upset_indices(P::SignaturePoset{MY,MZ}, i::Int) where {MY,MZ}
     cached = FiniteFringe._cached_upset_indices(P, i)
     cached === nothing || return FiniteFringe.IndicesView(cached)
@@ -1593,44 +1809,69 @@ function Base.iterate(it::_SignatureLeqIter{MY,MZ}, state::Int=1) where {MY,MZ}
     return nothing
 end
 
-function _signature_cover_edges_uncached(P::SignaturePoset)
+function _signature_cover_edges_uncached(P::SignaturePoset{MY,MZ}) where {MY,MZ}
     n = nvertices(P)
     mat = falses(n, n)
     edges = Tuple{Int,Int}[]
     n == 0 && return CoverEdges(mat, edges)
 
-    ranks = Vector{Int}(undef, n)
-    maxrank = 0
+    yrows = Vector{NTuple{MY,UInt64}}(undef, n)
+    zrows = Vector{NTuple{MZ,UInt64}}(undef, n)
+    ycounts = Vector{Int}(undef, n)
+    zcounts = Vector{Int}(undef, n)
+    maxy = 0
+    maxz = 0
     @inbounds for i in 1:n
-        r = _sig_popcount_words(P.sig_y.words, i, P.y_lastmask) +
-            _sig_popcount_words(P.sig_z.words, i, P.z_lastmask)
-        ranks[i] = r
-        r > maxrank && (maxrank = r)
+        yrow = _sig_row_words(P.sig_y.words, i, Val(MY))
+        zrow = _sig_row_words(P.sig_z.words, i, Val(MZ))
+        yrows[i] = yrow
+        zrows[i] = zrow
+        yc = _sig_popcount_words(P.sig_y.words, i, P.y_lastmask)
+        zc = _sig_popcount_words(P.sig_z.words, i, P.z_lastmask)
+        ycounts[i] = yc
+        zcounts[i] = zc
+        yc > maxy && (maxy = yc)
+        zc > maxz && (maxz = zc)
     end
 
-    buckets = [Int[] for _ in 0:maxrank]
+    buckets = [Int[] for _ in 0:maxy, _ in 0:maxz]
     @inbounds for i in 1:n
-        push!(buckets[ranks[i] + 1], i)
+        push!(buckets[ycounts[i] + 1, zcounts[i] + 1], i)
     end
 
     mins = Int[]
+    mins_y = NTuple{MY,UInt64}[]
+    mins_z = NTuple{MZ,UInt64}[]
     @inbounds for i in 1:n
         empty!(mins)
-        ri = ranks[i]
-        for r in (ri + 1):maxrank
-            for j in buckets[r + 1]
-                _sig_leq_pair(P, i, j) || continue
-                dominated = false
-                for k in mins
-                    if _sig_leq_pair(P, k, j)
-                        dominated = true
-                        break
+        empty!(mins_y)
+        empty!(mins_z)
+        yi = ycounts[i]
+        zi = zcounts[i]
+        yrow_i = yrows[i]
+        zrow_i = zrows[i]
+        ri = yi + zi
+        for yc in yi:maxy
+            for zc in zi:maxz
+                yc + zc <= ri && continue
+                for j in buckets[yc + 1, zc + 1]
+                    _sig_tuple_subset(yrow_i, yrows[j], P.y_lastmask) || continue
+                    _sig_tuple_subset(zrow_i, zrows[j], P.z_lastmask) || continue
+                    dominated = false
+                    @inbounds for k in eachindex(mins)
+                        if _sig_tuple_subset(mins_y[k], yrows[j], P.y_lastmask) &&
+                           _sig_tuple_subset(mins_z[k], zrows[j], P.z_lastmask)
+                            dominated = true
+                            break
+                        end
                     end
+                    dominated && continue
+                    push!(mins, j)
+                    push!(mins_y, yrows[j])
+                    push!(mins_z, zrows[j])
+                    push!(edges, (i, j))
+                    mat[i, j] = true
                 end
-                dominated && continue
-                push!(mins, j)
-                push!(edges, (i, j))
-                mat[i, j] = true
             end
         end
     end
@@ -1692,6 +1933,749 @@ function axes_from_encoding(pi::ZnEncodingMap)
             ax
         end
     end, n)
+end
+
+function region_poset end
+function nregions end
+function critical_coordinates end
+function critical_coordinate_counts end
+function region_representatives end
+function region_representative end
+function region_signature end
+function zn_region_summary end
+function cell_shape end
+function has_direct_lookup end
+function poset_kind end
+function zn_encoding_summary end
+function zn_query_summary end
+function check_zn_box end
+function check_zn_encoding_map end
+function check_signature_poset end
+function check_zn_cache end
+function check_zn_query_point end
+function check_zn_query_matrix end
+function zn_encoding_validation_summary end
+
+"""
+    ZnEncodingValidationSummary
+
+Display-oriented wrapper for reports returned by the owner-local `ZnEncoding`
+validation helpers.
+
+Use [`zn_encoding_validation_summary`](@ref) to turn a raw report from
+[`check_zn_encoding_map`](@ref), [`check_signature_poset`](@ref),
+[`check_zn_cache`](@ref), [`check_zn_query_point`](@ref), or
+[`check_zn_query_matrix`](@ref) into a notebook/REPL-friendly summary object.
+"""
+struct ZnEncodingValidationSummary{R}
+    report::R
+end
+
+"""
+    zn_encoding_validation_summary(report) -> ZnEncodingValidationSummary
+
+Wrap a raw `ZnEncoding` validation report in a display-oriented summary object.
+"""
+@inline zn_encoding_validation_summary(report::NamedTuple) = ZnEncodingValidationSummary(report)
+
+@inline _zn_issue_report(kind::Symbol, valid::Bool; kwargs...) = (; kind, valid, kwargs...)
+
+@inline function _throw_invalid_zn(fn::Symbol, issues::Vector{String})
+    throw(ArgumentError(string(fn) * ": " * join(issues, " ")))
+end
+
+@inline _zn_poset_kind(::SignaturePoset) = :signature
+@inline _zn_poset_kind(::Any) = :dense
+@inline _zn_generator_counts(pi::ZnEncodingMap) = (; flats=length(pi.flats), injectives=length(pi.injectives))
+@inline _zn_generator_counts(P::SignaturePoset) = (; flats=P.sig_y.bitlen, injectives=P.sig_z.bitlen)
+@inline _critical_coordinate_counts(coords::Tuple) = ntuple(i -> length(coords[i]), length(coords))
+@inline _critical_coordinate_counts(pi::ZnEncodingMap) = _critical_coordinate_counts(pi.coords)
+
+"""
+    region_poset(pi::ZnEncodingMap)
+    region_poset(cache::ZnEncodingCache)
+
+Return the finite region poset attached to a Zn encoding object.
+
+For bare [`ZnEncodingMap`](@ref) values, this reconstructs the native
+signature poset from the stored packed `(y, z)` signatures. For
+[`ZnEncodingCache`](@ref) and compiled encodings, it returns the already
+attached finite poset.
+
+Best practice:
+- call `region_poset(cache)` when you already have a compiled/cache-bearing
+  object and want repeated region-poset work to reuse that attachment;
+- call `region_poset(pi)` for one-off inspection of a bare
+  [`ZnEncodingMap`](@ref);
+- use [`poset_kind`](@ref) to check whether you are looking at the structured
+  `:signature` poset or a dense finite-poset realization.
+"""
+@inline region_poset(pi::ZnEncodingMap) = SignaturePoset(pi.sig_y, pi.sig_z)
+@inline region_poset(cache::ZnEncodingCache) = cache.P
+@inline region_poset(enc::CompiledEncoding{<:ZnEncodingMap}) = enc.P
+
+"""
+    nregions(pi)
+
+Return the number of finite regions represented by a Zn encoding object.
+"""
+@inline nregions(pi::ZnEncodingMap) = length(pi.reps)
+@inline nregions(cache::ZnEncodingCache) = nregions(cache.pi)
+@inline nregions(enc::CompiledEncoding{<:ZnEncodingMap}) = nregions(enc.pi)
+@inline nregions(P::SignaturePoset) = nvertices(P)
+
+"""
+    critical_coordinates(pi)
+
+Return the stored critical lattice coordinates along each axis.
+
+This is the owner-local alias for the coordinate-grid information carried by a
+[`ZnEncodingMap`](@ref). Use [`axes_from_encoding`](@ref) when you want slab
+representatives rather than the raw critical breakpoints.
+"""
+@inline critical_coordinates(pi::ZnEncodingMap) = pi.coords
+@inline critical_coordinates(cache::ZnEncodingCache) = critical_coordinates(cache.pi)
+@inline critical_coordinates(enc::CompiledEncoding{<:ZnEncodingMap}) = critical_coordinates(enc.pi)
+
+"""
+    critical_coordinate_counts(pi) -> Tuple
+
+Return the number of stored critical coordinates along each axis.
+
+This is the preferred cheap scalar accessor when you want to know the slab
+complexity of a Zn encoding object without materializing or inspecting the full
+critical-coordinate tuple.
+"""
+@inline critical_coordinate_counts(pi::ZnEncodingMap) = _critical_coordinate_counts(pi)
+@inline critical_coordinate_counts(cache::ZnEncodingCache) = critical_coordinate_counts(cache.pi)
+@inline critical_coordinate_counts(enc::CompiledEncoding{<:ZnEncodingMap}) = critical_coordinate_counts(enc.pi)
+
+"""
+    region_representatives(pi)
+    region_representative(pi, r)
+
+Return all stored lattice representatives, or the representative for region
+`r`, of a Zn encoding object.
+"""
+@inline region_representatives(pi::ZnEncodingMap) = pi.reps
+@inline region_representatives(cache::ZnEncodingCache) = region_representatives(cache.pi)
+@inline region_representatives(enc::CompiledEncoding{<:ZnEncodingMap}) = region_representatives(enc.pi)
+@inline region_representative(pi::ZnEncodingMap, r::Integer) = (@boundscheck checkbounds(pi.reps, r); pi.reps[r])
+@inline region_representative(cache::ZnEncodingCache, r::Integer) = region_representative(cache.pi, r)
+@inline region_representative(enc::CompiledEncoding{<:ZnEncodingMap}, r::Integer) = region_representative(enc.pi, r)
+
+"""
+    region_signature(pi, r) -> NamedTuple
+
+Return the `(y, z)` signature of region `r` as
+`(; y=Vector{Bool}, z=Vector{Bool})`.
+
+Use this for notebook or REPL inspection when you want the actual signature
+bits rather than the packed internal storage.
+
+The returned vectors are intentionally materialized and user-readable. Keep
+`describe(...)`, [`zn_encoding_summary`](@ref), or [`zn_query_summary`](@ref)
+as the cheap/default inspection path, and only call `region_signature(...)`
+when you actually want the signature bits of a specific region.
+"""
+@inline function region_signature(pi::ZnEncodingMap, r::Integer)
+    @boundscheck begin
+        checkbounds(pi.sig_y, r)
+        checkbounds(pi.sig_z, r)
+    end
+    return (; y=collect(Bool, pi.sig_y[r]), z=collect(Bool, pi.sig_z[r]))
+end
+@inline region_signature(cache::ZnEncodingCache, r::Integer) = region_signature(cache.pi, r)
+@inline region_signature(enc::CompiledEncoding{<:ZnEncodingMap}, r::Integer) = region_signature(enc.pi, r)
+@inline function region_signature(P::SignaturePoset, r::Integer)
+    @boundscheck begin
+        checkbounds(P.sig_y, r)
+        checkbounds(P.sig_z, r)
+    end
+    return (; y=collect(Bool, P.sig_y[r]), z=collect(Bool, P.sig_z[r]))
+end
+
+"""
+    cell_shape(pi)
+
+Return the slab-cell shape used by the Zn encoding direct lookup table.
+"""
+@inline cell_shape(pi::ZnEncodingMap) = pi.cell_shape
+@inline cell_shape(cache::ZnEncodingCache) = cell_shape(cache.pi)
+@inline cell_shape(enc::CompiledEncoding{<:ZnEncodingMap}) = cell_shape(enc.pi)
+
+"""
+    has_direct_lookup(pi) -> Bool
+
+Return whether the Zn encoding object stores a direct slab-cell-to-region
+lookup table for cheap integer and floating-point location queries.
+"""
+@inline has_direct_lookup(pi::ZnEncodingMap) = pi.cell_to_region !== nothing
+@inline has_direct_lookup(cache::ZnEncodingCache) = has_direct_lookup(cache.pi)
+@inline has_direct_lookup(enc::CompiledEncoding{<:ZnEncodingMap}) = has_direct_lookup(enc.pi)
+
+@inline flats(pi::ZnEncodingMap) = pi.flats
+@inline flats(cache::ZnEncodingCache) = flats(cache.pi)
+@inline flats(enc::CompiledEncoding{<:ZnEncodingMap}) = flats(enc.pi)
+@inline injectives(pi::ZnEncodingMap) = pi.injectives
+@inline injectives(cache::ZnEncodingCache) = injectives(cache.pi)
+@inline injectives(enc::CompiledEncoding{<:ZnEncodingMap}) = injectives(enc.pi)
+
+"""
+    generator_counts(x) -> NamedTuple
+
+Return the number of flat and injective generators recorded by a Zn encoding
+object as `(; flats=..., injectives=...)`.
+
+This is the preferred cheap scalar accessor when you only need presentation
+sizes rather than the full `flats(...)` and `injectives(...)` payloads.
+"""
+@inline generator_counts(pi::ZnEncodingMap) = _zn_generator_counts(pi)
+@inline generator_counts(cache::ZnEncodingCache) = generator_counts(cache.pi)
+@inline generator_counts(enc::CompiledEncoding{<:ZnEncodingMap}) = generator_counts(enc.pi)
+@inline generator_counts(P::SignaturePoset) = _zn_generator_counts(P)
+
+"""
+    poset_kind(pi_or_cache) -> Symbol
+
+Return `:signature` for structured signature-poset views and `:dense` for
+materialized finite-poset realizations carried by cache-bearing objects.
+"""
+@inline poset_kind(pi::ZnEncodingMap) = :signature
+@inline poset_kind(P::SignaturePoset) = :signature
+@inline poset_kind(cache::ZnEncodingCache) = _zn_poset_kind(cache.P)
+@inline poset_kind(enc::CompiledEncoding{<:ZnEncodingMap}) = _zn_poset_kind(enc.P)
+
+"""
+    zn_encoding_summary(x) -> NamedTuple
+
+Owner-local inspection surface for `ZnEncoding`.
+
+This mirrors the shared `describe(...)` entrypoint, but keeps the Zn owner
+module self-discoverable in notebooks and the REPL.
+
+Accepted inputs include bare [`ZnEncodingMap`](@ref) values, structured
+[`SignaturePoset`](@ref) objects, explicit [`ZnEncodingCache`](@ref) handles,
+and `CompiledEncoding{<:ZnEncodingMap}` wrappers.
+
+# Examples
+
+```julia
+using TamerOp
+
+field = TamerOp.CoreModules.QQField()
+FZ = TamerOp.FlangeZn
+ZE = TamerOp.ZnEncoding
+
+tau = FZ.Face(1, [false])
+F = FZ.IndFlat(tau, [0]; id=:F)
+E = FZ.IndInj(tau, [2]; id=:E)
+FG = FZ.Flange{TamerOp.CoreModules.QQ}(1, [F], [E], reshape([1//1], 1, 1); field=field)
+
+P, H, pi = ZE.encode_from_flange(FG)
+ZE.zn_encoding_summary(pi)
+ZE.zn_query_summary(pi, (0,))
+```
+"""
+@inline zn_encoding_summary(pi::ZnEncodingMap) = _znencoding_describe(pi)
+@inline zn_encoding_summary(P::SignaturePoset) = _znencoding_describe(P)
+@inline zn_encoding_summary(cache::ZnEncodingCache) = _znencoding_describe(cache)
+@inline zn_encoding_summary(enc::CompiledEncoding{<:ZnEncodingMap}) = _znencoding_describe(ZnEncodingCache(enc.P, enc.pi))
+
+@inline _zn_query_point_key(g::Tuple) = g
+@inline _zn_query_point_key(g::AbstractVector) = Tuple(g)
+@inline _zn_query_point_key(g) = g
+
+"""
+    zn_query_summary(pi, g) -> NamedTuple
+
+Return a cheap semantic summary of a single Zn encoding query.
+
+This helper is intended for notebook and REPL exploration. It reports:
+- the query point,
+- the integer/float query kind,
+- the located region id,
+- the stored region representative when a region is found,
+- the support sizes of the `y`/`z` signatures,
+- whether direct slab lookup is available,
+- whether the query landed outside the represented region set (`0` from
+  [`locate`](@ref)).
+
+This accepts the same owner objects as [`locate`](@ref), including
+[`ZnEncodingCache`](@ref) and compiled encodings.
+"""
+function zn_query_summary(pi_or_cache, g)
+    pi = _unwrap_zn_pi(pi_or_cache)
+    report = check_zn_query_point(pi, g; throw=true)
+    rid = locate(pi_or_cache, g)
+    sig_counts = if rid == 0
+        nothing
+    else
+        sig = region_signature(pi, rid)
+        (; y=count(identity, sig.y), z=count(identity, sig.z))
+    end
+    return (;
+        kind=:zn_query,
+        point=_zn_query_point_key(g),
+        query_kind=report.query_kind,
+        region=rid,
+        representative=rid == 0 ? nothing : region_representative(pi, rid),
+        signature_support_sizes=sig_counts,
+        direct_lookup_enabled=has_direct_lookup(pi),
+        outside=(rid == 0),
+    )
+end
+
+"""
+    zn_region_summary(pi, r) -> NamedTuple
+
+Return a compact semantic summary of region `r` in a Zn encoding object.
+
+This helper is intended for notebook and REPL exploration when you already know
+the region id and want the canonical region-level payload in one place instead
+of separately calling [`region_representative`](@ref),
+[`region_signature`](@ref), and [`generator_counts`](@ref).
+"""
+function zn_region_summary(pi_or_cache, r::Integer)
+    pi = _unwrap_zn_pi(pi_or_cache)
+    sig = region_signature(pi, r)
+    return (;
+        kind=:zn_region,
+        region=Int(r),
+        representative=region_representative(pi, r),
+        signature=sig,
+        signature_support_sizes=(; y=count(identity, sig.y), z=count(identity, sig.z)),
+        generator_counts=generator_counts(pi),
+        direct_lookup_enabled=has_direct_lookup(pi),
+    )
+end
+
+@inline _zn_box_endpoint_kind(x::AbstractVector{<:Integer}) = :integer_vector
+@inline _zn_box_endpoint_kind(x::Tuple) = all(v -> v isa Integer, x) ? :integer_tuple : :invalid
+@inline _zn_box_endpoint_kind(::Any) = :invalid
+
+@inline _zn_box_endpoint_length(x::AbstractVector) = length(x)
+@inline _zn_box_endpoint_length(x::Tuple) = length(x)
+@inline _zn_box_endpoint_length(::Any) = nothing
+
+@inline function _zn_box_total_points(a::AbstractVector{<:Integer}, b::AbstractVector{<:Integer})
+    total = BigInt(1)
+    @inbounds for i in eachindex(a, b)
+        total *= BigInt(b[i]) - BigInt(a[i]) + 1
+    end
+    return total
+end
+
+"""
+    check_zn_box(pi, box; throw=false) -> NamedTuple
+
+Validate a finite integer query box for [`region_weights`](@ref) or
+[`region_adjacency`](@ref).
+
+The accepted contract is a pair `(a, b)` where both endpoints are integer
+vectors or integer tuples of ambient dimension `dimension(pi)`, interpreted as
+the inclusive lattice box `{ g in Z^n : a_i <= g_i <= b_i }`.
+"""
+function check_zn_box(pi_or_cache, box; throw::Bool=false)
+    pi = _unwrap_zn_pi(pi_or_cache)
+    issues = String[]
+    endpoint_types = nothing
+    endpoint_lengths = nothing
+    total_points = nothing
+    if !(box isa Tuple && length(box) == 2)
+        push!(issues, "box must be a pair (a, b) of integer endpoints.")
+    else
+        a, b = box
+        kind_a = _zn_box_endpoint_kind(a)
+        kind_b = _zn_box_endpoint_kind(b)
+        endpoint_types = (kind_a, kind_b)
+        kind_a === :invalid && push!(issues, "box lower endpoint must be an integer vector or integer tuple.")
+        kind_b === :invalid && push!(issues, "box upper endpoint must be an integer vector or integer tuple.")
+        len_a = _zn_box_endpoint_length(a)
+        len_b = _zn_box_endpoint_length(b)
+        endpoint_lengths = (len_a, len_b)
+        if len_a !== nothing && len_a != dimension(pi)
+            push!(issues, "box lower endpoint has length $len_a, expected ambient dimension $(dimension(pi)).")
+        end
+        if len_b !== nothing && len_b != dimension(pi)
+            push!(issues, "box upper endpoint has length $len_b, expected ambient dimension $(dimension(pi)).")
+        end
+        if isempty(issues)
+            av = collect(Int, a)
+            bv = collect(Int, b)
+            @inbounds for i in eachindex(av, bv)
+                av[i] <= bv[i] || push!(issues, "box endpoint mismatch on axis $i: expected a[$i] <= b[$i].")
+            end
+            isempty(issues) && (total_points = _zn_box_total_points(av, bv))
+        end
+    end
+    valid = isempty(issues)
+    throw && !valid && _throw_invalid_zn(:check_zn_box, issues)
+    return _zn_issue_report(:zn_box, valid;
+                            ambient_dim=dimension(pi),
+                            endpoint_types=endpoint_types,
+                            endpoint_lengths=endpoint_lengths,
+                            total_points=total_points,
+                            issues=issues)
+end
+
+@inline function _znencoding_describe(pi::ZnEncodingMap)
+    return (;
+        kind=:zn_encoding_map,
+        ambient_dim=dimension(pi),
+        nregions=nregions(pi),
+        generator_counts=generator_counts(pi),
+        poset_kind=poset_kind(pi),
+        direct_lookup_enabled=has_direct_lookup(pi),
+        critical_coordinate_counts=critical_coordinate_counts(pi),
+        cell_shape=cell_shape(pi),
+    )
+end
+
+@inline function _znencoding_describe(P::SignaturePoset)
+    return (;
+        kind=:signature_poset,
+        ambient_dim=nothing,
+        nregions=nregions(P),
+        generator_counts=generator_counts(P),
+        poset_kind=poset_kind(P),
+        direct_lookup_enabled=nothing,
+        critical_coordinate_counts=nothing,
+        cell_shape=nothing,
+    )
+end
+
+@inline function _znencoding_describe(cache::ZnEncodingCache)
+    return (;
+        kind=:zn_encoding_cache,
+        ambient_dim=dimension(cache.pi),
+        nregions=nregions(cache.pi),
+        generator_counts=generator_counts(cache.pi),
+        poset_kind=poset_kind(cache),
+        direct_lookup_enabled=has_direct_lookup(cache.pi),
+        critical_coordinate_counts=critical_coordinate_counts(cache.pi),
+        cell_shape=cell_shape(cache.pi),
+    )
+end
+
+function Base.show(io::IO, pi::ZnEncodingMap)
+    d = _znencoding_describe(pi)
+    print(io, "ZnEncodingMap(n=", d.ambient_dim,
+          ", regions=", d.nregions,
+          ", flats=", d.generator_counts.flats,
+          ", injectives=", d.generator_counts.injectives,
+          ", direct_lookup=", d.direct_lookup_enabled, ")")
+end
+
+function Base.show(io::IO, ::MIME"text/plain", pi::ZnEncodingMap)
+    d = _znencoding_describe(pi)
+    print(io, "ZnEncodingMap",
+          "\n  ambient_dim = ", d.ambient_dim,
+          "\n  nregions = ", d.nregions,
+          "\n  generator_counts = ", d.generator_counts,
+          "\n  poset_kind = ", repr(d.poset_kind),
+          "\n  direct_lookup_enabled = ", d.direct_lookup_enabled,
+          "\n  critical_coordinate_counts = ", d.critical_coordinate_counts,
+          "\n  cell_shape = ", d.cell_shape)
+end
+
+function Base.show(io::IO, P::SignaturePoset)
+    d = _znencoding_describe(P)
+    print(io, "SignaturePoset(regions=", d.nregions,
+          ", flats=", d.generator_counts.flats,
+          ", injectives=", d.generator_counts.injectives, ")")
+end
+
+function Base.show(io::IO, ::MIME"text/plain", P::SignaturePoset)
+    d = _znencoding_describe(P)
+    print(io, "SignaturePoset",
+          "\n  nregions = ", d.nregions,
+          "\n  generator_counts = ", d.generator_counts,
+          "\n  poset_kind = ", repr(d.poset_kind))
+end
+
+function Base.show(io::IO, cache::ZnEncodingCache)
+    d = _znencoding_describe(cache)
+    print(io, "ZnEncodingCache(n=", d.ambient_dim,
+          ", regions=", d.nregions,
+          ", poset_kind=", repr(d.poset_kind),
+          ", direct_lookup=", d.direct_lookup_enabled, ")")
+end
+
+function Base.show(io::IO, ::MIME"text/plain", cache::ZnEncodingCache)
+    d = _znencoding_describe(cache)
+    print(io, "ZnEncodingCache",
+          "\n  ambient_dim = ", d.ambient_dim,
+          "\n  nregions = ", d.nregions,
+          "\n  generator_counts = ", d.generator_counts,
+          "\n  poset_kind = ", repr(d.poset_kind),
+          "\n  direct_lookup_enabled = ", d.direct_lookup_enabled,
+          "\n  critical_coordinate_counts = ", d.critical_coordinate_counts,
+          "\n  cell_shape = ", d.cell_shape)
+end
+
+@inline _zn_point_length(g::AbstractVector) = length(g)
+@inline _zn_point_length(g::Tuple) = length(g)
+@inline _zn_point_length(::Any) = nothing
+
+@inline _zn_point_kind(g::AbstractVector{<:Integer}) = :integer
+@inline _zn_point_kind(g::AbstractVector{<:AbstractFloat}) = :float
+@inline _zn_point_kind(g::Tuple) = all(x -> x isa Integer, g) ? :integer :
+                                   all(x -> x isa AbstractFloat, g) ? :float : :invalid
+@inline _zn_point_kind(::Any) = :invalid
+
+@inline _zn_matrix_kind(X::AbstractMatrix{<:Integer}) = :integer
+@inline _zn_matrix_kind(X::AbstractMatrix{<:AbstractFloat}) = :float
+@inline _zn_matrix_kind(::Any) = :invalid
+
+function _check_critical_coordinates!(issues::Vector{String}, coords, n::Int)
+    length(coords) == n || push!(issues, "critical coordinate tuple has length $(length(coords)), expected $n.")
+    @inbounds for i in 1:min(length(coords), n)
+        axis = coords[i]
+        axis isa AbstractVector || begin
+            push!(issues, "critical coordinate axis $i must be an abstract vector of integers.")
+            continue
+        end
+        all(x -> x isa Integer, axis) || push!(issues, "critical coordinate axis $i must contain only integers.")
+        issorted(axis) || push!(issues, "critical coordinate axis $i must be sorted.")
+        for j in 2:length(axis)
+            axis[j - 1] < axis[j] || begin
+                push!(issues, "critical coordinate axis $i must be strictly increasing.")
+                break
+            end
+        end
+    end
+    return nothing
+end
+
+"""
+    check_signature_poset(P; throw=false) -> NamedTuple
+
+Validate a hand-built [`SignaturePoset`](@ref).
+
+This helper checks:
+- the packed y/z signature tables have the same number of regions,
+- the cached region count matches those tables,
+- the cached last-word masks agree with the packed signature widths.
+
+Use this on hand-built signature posets or after low-level transformations that
+operate below the normal `encode_*` entrypoints. Wrap the returned report with
+[`zn_encoding_validation_summary`](@ref) when you want a display-oriented
+summary.
+"""
+function check_signature_poset(P::SignaturePoset; throw::Bool=false)
+    issues = String[]
+    length(P.sig_y) == length(P.sig_z) || push!(issues, "sig_y and sig_z have different region counts.")
+    nvertices(P) == length(P.sig_y) || push!(issues, "cached region count $(nvertices(P)) does not match sig_y length $(length(P.sig_y)).")
+    nvertices(P) == length(P.sig_z) || push!(issues, "cached region count $(nvertices(P)) does not match sig_z length $(length(P.sig_z)).")
+    P.y_lastmask == _word_lastmask(P.sig_y.bitlen) || push!(issues, "y_lastmask does not match sig_y bitlen.")
+    P.z_lastmask == _word_lastmask(P.sig_z.bitlen) || push!(issues, "z_lastmask does not match sig_z bitlen.")
+    valid = isempty(issues)
+    throw && !valid && _throw_invalid_zn(:check_signature_poset, issues)
+    return _zn_issue_report(:signature_poset, valid;
+                            nregions=nregions(P),
+                            generator_counts=_zn_generator_counts(P),
+                            poset_kind=:signature,
+                            issues=issues)
+end
+
+"""
+    check_zn_encoding_map(pi; throw=false) -> NamedTuple
+
+Validate a hand-built [`ZnEncodingMap`](@ref).
+
+This helper checks:
+- the ambient dimension agrees with stored coordinates and representatives,
+- region counts agree across signatures, representatives, and signature lookup,
+- signature widths agree with the flat/injective families,
+- the direct lookup metadata is shape-consistent when present.
+
+This is the owner-specific validator to use when a map is being assembled or
+modified by hand. Prefer [`zn_encoding_summary`](@ref) or `describe(...)` for
+cheap inspection, and keep `check_zn_encoding_map(...)` for actual contract
+validation.
+"""
+function check_zn_encoding_map(pi::ZnEncodingMap; throw::Bool=false)
+    issues = String[]
+    pi.n >= 0 || push!(issues, "ambient dimension must be nonnegative.")
+    _check_critical_coordinates!(issues, pi.coords, pi.n)
+    nr = nregions(pi)
+    length(pi.sig_y) == nr || push!(issues, "sig_y has $(length(pi.sig_y)) regions, expected $nr.")
+    length(pi.sig_z) == nr || push!(issues, "sig_z has $(length(pi.sig_z)) regions, expected $nr.")
+    pi.sig_y.bitlen == length(pi.flats) || push!(issues,
+        "sig_y bitlen $(pi.sig_y.bitlen) does not match flat count $(length(pi.flats)).")
+    pi.sig_z.bitlen == length(pi.injectives) || push!(issues,
+        "sig_z bitlen $(pi.sig_z.bitlen) does not match injective count $(length(pi.injectives)).")
+    for (i, rep) in pairs(pi.reps)
+        length(rep) == pi.n || push!(issues, "representative $i has length $(length(rep)), expected $(pi.n).")
+    end
+    length(pi.sig_to_region) == nr || push!(issues,
+        "signature lookup stores $(length(pi.sig_to_region)) regions, expected $nr.")
+    vals = collect(values(pi.sig_to_region))
+    all(v -> 1 <= v <= nr, vals) || push!(issues, "signature lookup contains a region index outside 1:$nr.")
+    length(unique(vals)) == nr || push!(issues, "signature lookup values do not cover each region exactly once.")
+    expected_shape = ntuple(i -> length(pi.coords[i]) + 1, pi.n)
+    pi.cell_shape == expected_shape || push!(issues,
+        "cell_shape $(pi.cell_shape) does not match critical coordinates $(expected_shape).")
+    expected_strides = ntuple(i -> i == 1 ? 1 : prod(expected_shape[1:(i - 1)]), pi.n)
+    pi.cell_strides == expected_strides || push!(issues,
+        "cell_strides $(pi.cell_strides) do not match cell_shape $(expected_shape).")
+    expected_fingerprint = _encoding_fingerprint(pi.n, pi.flats, pi.injectives)
+    pi.encoding_fingerprint == expected_fingerprint || push!(issues,
+        "encoding fingerprint does not match the stored flat/injective families.")
+    if pi.cell_to_region !== nothing
+        total_cells = isempty(pi.cell_shape) ? 1 : prod(pi.cell_shape)
+        length(pi.cell_to_region) == total_cells || push!(issues,
+            "direct lookup table has length $(length(pi.cell_to_region)), expected $total_cells.")
+        all(v -> 0 <= v <= nr, pi.cell_to_region) || push!(issues,
+            "direct lookup table contains a region index outside 0:$nr.")
+    end
+    valid = isempty(issues)
+    throw && !valid && _throw_invalid_zn(:check_zn_encoding_map, issues)
+    return _zn_issue_report(:zn_encoding_map, valid;
+                            ambient_dim=dimension(pi),
+                            nregions=nr,
+                            generator_counts=_zn_generator_counts(pi),
+                            poset_kind=:signature,
+                            direct_lookup_enabled=has_direct_lookup(pi),
+                            critical_coordinate_counts=_critical_coordinate_counts(pi),
+                            cell_shape=cell_shape(pi),
+                            issues=issues)
+end
+
+"""
+    check_zn_cache(cache; throw=false) -> NamedTuple
+
+Validate a [`ZnEncodingCache`](@ref).
+
+This helper checks:
+- the wrapped [`ZnEncodingMap`](@ref) passes [`check_zn_encoding_map`](@ref),
+- the cached poset has the same number of regions as the map,
+- cached signature posets also pass [`check_signature_poset`](@ref).
+
+Use this before repeated advanced-owner workflows when you are carrying an
+explicit cache object and want to confirm that the cached poset/map pairing is
+still coherent.
+"""
+function check_zn_cache(cache::ZnEncodingCache; throw::Bool=false)
+    issues = String[]
+    map_report = check_zn_encoding_map(cache.pi)
+    append!(issues, ["map: $msg" for msg in map_report.issues])
+    nvertices(cache.P) == nregions(cache.pi) || push!(issues,
+        "cached poset has $(nvertices(cache.P)) vertices, expected $(nregions(cache.pi)).")
+    if cache.P isa SignaturePoset
+        poset_report = check_signature_poset(cache.P)
+        append!(issues, ["poset: $msg" for msg in poset_report.issues])
+    end
+    valid = isempty(issues)
+    throw && !valid && _throw_invalid_zn(:check_zn_cache, issues)
+    return _zn_issue_report(:zn_encoding_cache, valid;
+                            ambient_dim=dimension(cache.pi),
+                            nregions=nregions(cache.pi),
+                            generator_counts=_zn_generator_counts(cache.pi),
+                            poset_kind=_zn_poset_kind(cache.P),
+                            direct_lookup_enabled=has_direct_lookup(cache.pi),
+                            issues=issues)
+end
+
+"""
+    check_zn_query_point(pi, g; throw=false) -> NamedTuple
+
+Validate a single Zn encoding query point before calling [`locate`](@ref).
+
+Accepted query shapes are:
+- integer vectors and integer tuples in `Z^n`,
+- floating-point vectors and floating-point tuples in `R^n`.
+
+Use this helper when query points come from user input rather than trusted
+internal code. Integer queries are the native contract. Floating-point queries
+are accepted because `locate(...)` rounds componentwise to the nearest lattice
+point before classification.
+"""
+function check_zn_query_point(pi_or_cache, g; throw::Bool=false)
+    pi = _unwrap_zn_pi(pi_or_cache)
+    issues = String[]
+    if !(g isa AbstractVector || g isa Tuple)
+        push!(issues, "point must be an integer or floating-point vector/tuple.")
+    end
+    kind = _zn_point_kind(g)
+    kind === :invalid && push!(issues,
+        "point must be either all-integer or all-floating, matching the supported locate contracts.")
+    glen = _zn_point_length(g)
+    if glen !== nothing && glen != dimension(pi)
+        push!(issues, "point has length $glen, expected ambient dimension $(dimension(pi)).")
+    end
+    valid = isempty(issues)
+    throw && !valid && _throw_invalid_zn(:check_zn_query_point, issues)
+    return _zn_issue_report(:zn_query_point, valid;
+                            ambient_dim=dimension(pi),
+                            query_kind=kind,
+                            point_type=typeof(g),
+                            point_length=glen,
+                            issues=issues)
+end
+
+"""
+    check_zn_query_matrix(pi, X; throw=false) -> NamedTuple
+
+Validate a batched Zn encoding query matrix before calling
+[`locate_many!`](@ref).
+
+Accepted query shapes are matrices with one query per column and either:
+- integer entries, or
+- floating-point entries.
+
+Use this before [`locate_many!`](@ref) when batched query data comes from an
+external source. The accepted matrix contracts are intentionally strict so they
+match the actual high-performance owner methods.
+"""
+function check_zn_query_matrix(pi_or_cache, X; throw::Bool=false)
+    pi = _unwrap_zn_pi(pi_or_cache)
+    issues = String[]
+    if !(X isa AbstractMatrix)
+        push!(issues, "X must be an integer or floating-point matrix with one query per column.")
+    end
+    kind = _zn_matrix_kind(X)
+    kind === :invalid && push!(issues,
+        "X must have eltype <: Integer or <: AbstractFloat to match the supported locate_many! contracts.")
+    matrix_rows = X isa AbstractMatrix ? size(X, 1) : nothing
+    if matrix_rows !== nothing && matrix_rows != dimension(pi)
+        push!(issues, "X has $matrix_rows rows, expected ambient dimension $(dimension(pi)).")
+    end
+    valid = isempty(issues)
+    throw && !valid && _throw_invalid_zn(:check_zn_query_matrix, issues)
+    return _zn_issue_report(:zn_query_matrix, valid;
+                            ambient_dim=dimension(pi),
+                            query_kind=kind,
+                            matrix_type=typeof(X),
+                            matrix_size=X isa AbstractMatrix ? size(X) : nothing,
+                            issues=issues)
+end
+
+function Base.show(io::IO, summary::ZnEncodingValidationSummary)
+    report = summary.report
+    print(io, "ZnEncodingValidationSummary(kind=", report.kind,
+          ", valid=", report.valid,
+          ", issues=", length(report.issues), ")")
+end
+
+function Base.show(io::IO, ::MIME"text/plain", summary::ZnEncodingValidationSummary)
+    report = summary.report
+    println(io, "ZnEncodingValidationSummary")
+    println(io, "  kind: ", report.kind)
+    println(io, "  valid: ", report.valid)
+    for (key, value) in pairs(report)
+        key in (:kind, :valid, :issues) && continue
+        println(io, "  ", key, ": ", value)
+    end
+    println(io, "  issues:")
+    if isempty(report.issues)
+        println(io, "    (none)")
+    else
+        for issue in report.issues
+            println(io, "    - ", issue)
+        end
+    end
 end
 
 
@@ -2175,8 +3159,16 @@ This is the "finite encoding poset" step: extract critical coordinates, form the
 product decomposition into finitely many slabs, sample one representative per cell,
 and quotient by equal (y,z)-signatures.
 
-Use `_pushforward_flange_to_fringe(P, pi, FG)` to push a flange presentation down to a finite
-fringe presentation on `P` without rebuilding the encoding.
+Best practice:
+- keep `poset_kind=:signature` as the cheap/default path for inspection and
+  downstream kernels that only need the region order abstractly;
+- request `poset_kind=:dense` only when later code truly needs a materialized
+  `FinitePoset`;
+- pair the result with [`compile_zn_cache`](@ref) when you expect repeated
+  query or region-geometry work.
+
+Use `_pushforward_flange_to_fringe(P, pi, FG)` to push a flange presentation
+down to a finite fringe presentation on `P` without rebuilding the encoding.
 """
 function encode_poset_from_flanges(FGs::Union{AbstractVector{<:Flange}, Tuple{Vararg{Flange}}},
                                    opts::EncodingOptions;
@@ -2333,19 +3325,30 @@ end
 """
     locate(pi::ZnEncodingMap, g) -> Int
 
-Return the region index for a lattice point `g` in Z^n.
+Return the region index for a point query against a [`ZnEncodingMap`](@ref).
 
 Accepted inputs:
 - `g::AbstractVector{<:Integer}`
 - `g::NTuple{N,<:Integer}`
 
-Convenience (for slice code that forms real-valued points):
-- `x::AbstractVector{<:AbstractFloat}` is rounded componentwise to the nearest integer
-  lattice point and then located.
+Convenience for slice and geometry code:
+- `x::AbstractVector{<:AbstractFloat}` and floating-point tuples are rounded
+  componentwise to the nearest integer lattice point and then located.
 
 Return value:
-- An integer in `1:length(pi.reps)` if the cell/signature is present.
-- `0` if the signature is not present (interpreted as "unknown/outside" by downstream code).
+- an integer in `1:length(pi.reps)` when the point lands in a represented
+  region;
+- `0` when the rounded lattice point has no stored signature. This should be
+  read as "outside / not represented" by downstream code.
+
+Performance notes:
+- when [`has_direct_lookup`](@ref) is `true`, `locate(...)` uses the prebuilt
+  slab-cell lookup table;
+- otherwise it hashes the point's `(y, z)` signature on demand.
+
+Use [`check_zn_query_point`](@ref) when query shape comes from user input and
+use [`zn_query_summary`](@ref) when you want a cheap exploratory report instead
+of just the region id.
 
 Implementation note:
 These methods must be base cases. They must not call `locate` again on an integer vector/tuple,
@@ -2433,11 +3436,31 @@ end
 """
     locate_many!(dest, pi_or_cache, X; threaded=true) -> dest
 
-Batch Zn classifier evaluation. `X` is shaped `(n, npoints)`.
-Accepts `pi::ZnEncodingMap`, `ZnEncodingCache`, or `CompiledEncoding{<:ZnEncodingMap}`.
+Batch Zn classifier evaluation with one query per column of `X`.
+
+Accepted owners:
+- `pi::ZnEncodingMap`
+- `cache::ZnEncodingCache`
+- `enc::CompiledEncoding{<:ZnEncodingMap}`
+
+Accepted matrix contracts:
+- `AbstractMatrix{<:Integer}` for native lattice queries,
+- `AbstractMatrix{<:AbstractFloat}` for rounded floating-point queries.
+
+Return value:
+- `dest[j]` is the region id for the `j`-th query column,
+- `0` means the rounded query point is outside the represented region set.
+
+Performance notes:
+- when [`has_direct_lookup`](@ref) is `true`, each query column uses the cheap
+  slab-cell lookup path;
+- caches help when you want repeated classification together with an attached
+  region poset;
+- keep `poset_kind=:signature` on the cache-building side unless you truly need
+  a dense finite-poset realization elsewhere.
 """
 function locate_many!(dest::AbstractVector{<:Integer},
-                      pi_or_cache,
+                      pi_or_cache::Union{ZnEncodingMap, ZnEncodingCache, CompiledEncoding{<:ZnEncodingMap}},
                       X::AbstractMatrix{<:Integer};
                       threaded::Bool=true)
     pi = _unwrap_zn_pi(pi_or_cache)
@@ -2457,7 +3480,7 @@ function locate_many!(dest::AbstractVector{<:Integer},
 end
 
 function locate_many!(dest::AbstractVector{<:Integer},
-                      pi_or_cache,
+                      pi_or_cache::Union{ZnEncodingMap, ZnEncodingCache, CompiledEncoding{<:ZnEncodingMap}},
                       X::AbstractMatrix{<:AbstractFloat};
                       threaded::Bool=true)
     pi = _unwrap_zn_pi(pi_or_cache)
@@ -2476,12 +3499,14 @@ function locate_many!(dest::AbstractVector{<:Integer},
     return dest
 end
 
-function locate_many(pi_or_cache, X::AbstractMatrix{<:Integer}; threaded::Bool=true)
+function locate_many(pi_or_cache::Union{ZnEncodingMap, ZnEncodingCache, CompiledEncoding{<:ZnEncodingMap}},
+                     X::AbstractMatrix{<:Integer}; threaded::Bool=true)
     out = Vector{Int}(undef, size(X, 2))
     return locate_many!(out, pi_or_cache, X; threaded=threaded)
 end
 
-function locate_many(pi_or_cache, X::AbstractMatrix{<:AbstractFloat}; threaded::Bool=true)
+function locate_many(pi_or_cache::Union{ZnEncodingMap, ZnEncodingCache, CompiledEncoding{<:ZnEncodingMap}},
+                     X::AbstractMatrix{<:AbstractFloat}; threaded::Bool=true)
     out = Vector{Int}(undef, size(X, 2))
     return locate_many!(out, pi_or_cache, X; threaded=threaded)
 end
@@ -3164,6 +4189,15 @@ Keyword arguments
 * `return_info` : if `true`, return a `NamedTuple` with additional diagnostic
   fields. For exact methods this includes `method_used`; for sampling this
   includes `stderr`.
+
+Best practice:
+- keep `box=nothing` when you only need uniform region weights;
+- keep `method=:auto` as the cheap/default path and override only when you know
+  the box regime;
+- use a cache-bearing object when weights will be part of repeated downstream
+  workflows;
+- `locate(...) == 0` inside the requested box means the encoding does not
+  represent that lattice point; with `strict=true` this is treated as an error.
 """
 function region_weights(
     pi::ZnEncodingMap{N};
@@ -3332,6 +4366,14 @@ Implementation notes (speed):
   * computes a region id per slab-cell (not per lattice point)
   * counts interface faces by scanning neighboring slab-cells
   * specialized fast loops for n=1 and n=2
+
+Best practice:
+- this is a box-dependent query, so pass an explicit finite `box`;
+- keep `strict=true` unless `0` from [`locate`](@ref) should be tolerated as
+  "outside / not represented";
+- the returned adjacency counts are most useful on the structured
+  `:signature` region poset unless a later dense-poset algorithm truly needs a
+  materialized finite-poset realization.
 """
 function region_adjacency(pi::ZnEncodingMap; box, strict::Bool=true)
     box === nothing && error("region_adjacency(Zn): provide box")
@@ -3562,6 +4604,13 @@ finite-poset fringe module `H` on `P`, together with the classifier `pi : Z^n ->
 `opts` is required.
 - `opts.backend` must be `:auto` or `:zn`.
 - `opts.max_regions` caps the number of distinct regions/signatures (default: 200_000).
+
+Best practice:
+- use `poset_kind=:signature` as the cheap/default path;
+- move to `poset_kind=:dense` only when a downstream algorithm really requires a
+  dense finite poset;
+- inspect the returned classifier with [`zn_encoding_summary`](@ref) or
+  `describe(pi)` before touching heavier downstream objects.
 """
 function encode_from_flange(FG::Flange{K}, opts::EncodingOptions;
                             poset_kind::Symbol = :signature) where {K}
@@ -3619,6 +4668,14 @@ Returns
 - `P`  : the common finite encoding poset
 - `Hs` : a vector of `FiniteFringe.FringeModule{K}`, one per input flange
 - `pi` : classifier `pi : Z^n -> P` (as `ZnEncodingMap`)
+
+Best practice:
+- keep `poset_kind=:signature` unless a downstream algorithm explicitly needs a
+  dense finite poset;
+- use [`compile_zn_cache`](@ref) when the returned classifier will serve many
+  repeated query or region-geometry calls;
+- inspect with [`zn_encoding_summary`](@ref) or `describe(pi)` before
+  materializing other owner data.
 """
 function encode_from_flanges(FGs::Union{AbstractVector{<:Flange{K}}, Tuple{Vararg{Flange{K}}}},
                              opts::EncodingOptions;
@@ -3646,6 +4703,10 @@ encode_from_flanges(FGs::Union{AbstractVector{<:Flange{K}}, Tuple{Vararg{Flange{
 Use a user-provided poset `P` (possibly structured) as the encoding poset.
 We still build the encoding map `pi` from the flanges; `check_poset=true`
 verifies that `P` has the same order as the internally constructed poset.
+
+Use this variant when you already own the target finite poset and want to keep
+that object stable across multiple pushes. Keep `check_poset=true` unless `P`
+is trusted internal data and you are benchmarking the no-check path.
 """
 function encode_from_flanges(
     P::AbstractPoset,

@@ -1,6 +1,0 @@
-PL backend micro-benchmark
-reps=5, nqueries=20000, splits=10, poly_regions=1024
-HAVE_POLY=true
-
-== PLBackend (axis-aligned) ==
-axis encode_fringe_boxes                       median_time=1.138 ms  median_alloc=673.1 KiB

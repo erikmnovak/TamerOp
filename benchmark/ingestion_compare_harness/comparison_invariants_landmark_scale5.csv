@@ -1,0 +1,3 @@
+case_id,regime,invariant_kind,degree,n_points,ambient_dim,max_dim,tamer_cold_ms,multipers_cold_ms,cold_slowdown_tamer_over_multipers,tamer_warm_median_ms,multipers_warm_median_ms,warm_slowdown_tamer_over_multipers,tamer_output_term_count,multipers_output_term_count,tamer_output_abs_mass,multipers_output_abs_mass,parity_status,parity_reason,summary_included
+inv_landmark_n5000_d2_md1_s11,landmark_parity,euler_signed_measure,0,25000,2,1,1.009723,5.65987300069537,0.178400,0.9068425,5.682875000275089,0.159575,1168,1168,1325.0,1325.0,matched,matched,yes
+inv_landmark_n5000_d8_md1_s11,landmark_parity,euler_signed_measure,0,25000,8,1,1.153025,6.557751999935135,0.175826,0.9921515,6.005881501550903,0.165197,1178,1178,1335.0,1335.0,matched,matched,yes

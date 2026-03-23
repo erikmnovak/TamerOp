@@ -56,8 +56,17 @@ using ..FiniteFringe: AbstractPoset, FinitePoset, GridPoset, ProductOfChainsPose
                       poset_equal_opposite
 using ..DerivedFunctors
 using ..Invariants
+using ..InvariantCore: RankQueryCache
+using ..SliceInvariants: CompiledSlicePlan, SlicePlanCache, SliceBarcodesTask,
+                         PersistenceImage1D
+using ..Fibered2D: ProjectedArrangement, ProjectedBarcodeCache, FiberedBarcodeCache2D,
+                   PackedBarcodeGrid, PackedBarcode, PackedIndexBarcode, PackedFloatBarcode
+using ..MultiparameterImages: MPPDecomposition, MPLandscape, MPPImage
+using ..SignedMeasures: PointSignedMeasure, RectSignedBarcode, Rect
+import ..SignedMeasures
 import ..Modules
 import ..ModuleComplexes
+import ..ChainComplexes: describe
 using ..ModuleComplexes: ModuleCochainComplex
 
 using ..FlangeZn: Face, IndFlat, IndInj, Flange
@@ -67,6 +76,29 @@ import ..Workflow: _slice_plan_cache_from_session
 # -----------------------------------------------------------------------------
 
 abstract type AbstractFeaturizerSpec end
+
+function feature_set_summary end
+function experiment_summary end
+function experiment_artifact_summary end
+function featurizer_summary end
+function sample_ids end
+function feature_matrix end
+function feature_values end
+function sample_labels end
+function metadata end
+function experiment_name end
+function artifacts end
+function nartifacts end
+function artifact_keys end
+function artifact end
+function artifact_spec end
+function artifact_features end
+function artifact_elapsed_seconds end
+function has_features end
+function check_feature_set end
+function check_experiment_spec end
+function check_loaded_experiment end
+function check_featurizer_spec end
 
 """
     AbstractInvariantCache
@@ -173,14 +205,14 @@ mutable struct EncodingInvariantCache{K,F<:AbstractCoeffField,MatT<:AbstractMatr
     threads::Bool
     level::Symbol
     session_cache::Union{Nothing,SessionCache}
-    slice_plan_cache::Invariants.SlicePlanCache
-    slice_plans::Dict{UInt,Invariants.CompiledSlicePlan}
-    projected_arrangements::Dict{UInt,Invariants.ProjectedArrangement}
-    projected_module::Dict{UInt,Invariants.ProjectedBarcodeCache{K}}
-    projected_refs::Dict{Tuple{UInt,UInt},Invariants.ProjectedBarcodeCache}
-    fibered::Dict{UInt,Invariants.FiberedBarcodeCache2D{K}}
-    mpp_decompositions::Dict{UInt,Invariants.MPPDecomposition}
-    rank_query::Union{Nothing,Invariants.RankQueryCache}
+    slice_plan_cache::SlicePlanCache
+    slice_plans::Dict{UInt,CompiledSlicePlan}
+    projected_arrangements::Dict{UInt,ProjectedArrangement}
+    projected_module::Dict{UInt,ProjectedBarcodeCache{K}}
+    projected_refs::Dict{Tuple{UInt,UInt},ProjectedBarcodeCache}
+    fibered::Dict{UInt,FiberedBarcodeCache2D{K}}
+    mpp_decompositions::Dict{UInt,MPPDecomposition}
+    rank_query::Union{Nothing,RankQueryCache}
 end
 
 """
@@ -868,6 +900,94 @@ struct LoadedExperimentResult
     total_elapsed_seconds::Float64
 end
 
+"""
+    FeaturizerSpecValidationSummary
+
+Typed validation summary returned by [`check_featurizer_spec`](@ref).
+"""
+struct FeaturizerSpecValidationSummary
+    kind::Symbol
+    valid::Bool
+    spec_type::Symbol
+    nfeatures::Int
+    issues::Vector{String}
+end
+
+"""
+    FeatureSetValidationSummary
+
+Typed validation summary returned by [`check_feature_set`](@ref).
+"""
+struct FeatureSetValidationSummary
+    kind::Symbol
+    valid::Bool
+    nsamples::Int
+    nfeatures::Int
+    issues::Vector{String}
+end
+
+"""
+    ExperimentSpecValidationSummary
+
+Typed validation summary returned by [`check_experiment_spec`](@ref).
+"""
+struct ExperimentSpecValidationSummary
+    kind::Symbol
+    valid::Bool
+    experiment_name::String
+    nfeaturizers::Int
+    invalid_specs::Vector{Symbol}
+    issues::Vector{String}
+end
+
+"""
+    LoadedExperimentValidationSummary
+
+Typed validation summary returned by [`check_loaded_experiment`](@ref).
+"""
+struct LoadedExperimentValidationSummary
+    kind::Symbol
+    valid::Bool
+    nartifacts::Int
+    artifacts_with_features::Int
+    issues::Vector{String}
+end
+
+@inline feature_names(fs::FeatureSet) = fs.names
+@inline sample_ids(fs::FeatureSet) = fs.ids
+@inline feature_matrix(fs::FeatureSet) = fs.X
+@inline feature_values(fs::FeatureSet) = fs.X
+@inline sample_labels(fs::FeatureSet) = _meta_get(fs.meta, :labels, nothing)
+@inline metadata(fs::FeatureSet) = fs.meta
+
+@inline experiment_name(exp::ExperimentSpec) = exp.name
+@inline experiment_name(res::ExperimentResult) = experiment_name(res.spec)
+@inline function experiment_name(res::LoadedExperimentResult)
+    return String(get(res.manifest, "experiment_name", "experiment"))
+end
+
+@inline artifacts(res::Union{ExperimentResult,LoadedExperimentResult}) = res.artifacts
+@inline nartifacts(res::Union{ExperimentResult,LoadedExperimentResult}) = length(artifacts(res))
+@inline artifact_keys(res::Union{ExperimentResult,LoadedExperimentResult}) = [a.key for a in artifacts(res)]
+
+function artifact(res::Union{ExperimentResult,LoadedExperimentResult}, key::Symbol)
+    idx = findfirst(==(key), artifact_keys(res))
+    idx === nothing && throw(KeyError(key))
+    return artifacts(res)[idx]
+end
+
+@inline artifact_spec(a::Union{ExperimentArtifact,LoadedExperimentArtifact}) = a.spec
+@inline artifact_features(a::ExperimentArtifact) = a.features
+@inline artifact_features(a::LoadedExperimentArtifact) = a.features
+@inline artifact_elapsed_seconds(a::Union{ExperimentArtifact,LoadedExperimentArtifact}) = a.elapsed_seconds
+@inline feature_paths(a::Union{ExperimentArtifact,LoadedExperimentArtifact}) = a.feature_paths
+@inline manifest_path(res::Union{ExperimentResult,LoadedExperimentResult}) = res.manifest_path
+@inline run_dir(res::Union{ExperimentResult,LoadedExperimentResult}) = res.run_dir
+@inline total_elapsed_seconds(res::Union{ExperimentResult,LoadedExperimentResult}) = res.total_elapsed_seconds
+@inline has_features(::ExperimentArtifact) = true
+@inline has_features(a::LoadedExperimentArtifact) = a.features !== nothing
+@inline has_features(res::Union{ExperimentResult,LoadedExperimentResult}) = any(has_features, artifacts(res))
+
 @inline function _meta_get(meta::NamedTuple, key::Symbol, default=nothing)
     return haskey(meta, key) ? getfield(meta, key) : default
 end
@@ -877,6 +997,905 @@ end
 @inline function _meta_get(meta, key::Symbol, default=nothing)
     return hasproperty(meta, key) ? getproperty(meta, key) : default
 end
+
+@inline function _meta_keys(meta)
+    if meta isa NamedTuple
+        return collect(keys(meta))
+    elseif meta isa AbstractDict
+        return Symbol[Symbol(k) for k in keys(meta)]
+    end
+    return Symbol[Symbol(k) for k in propertynames(meta)]
+end
+
+@inline function _spec_field_namedtuple(spec::AbstractFeaturizerSpec)
+    names = fieldnames(typeof(spec))
+    vals = ntuple(i -> getfield(spec, names[i]), length(names))
+    return NamedTuple{names}(vals)
+end
+
+@inline function _throw_invalid_featurizer(kind_name::AbstractString, issues::Vector{String})
+    msg = isempty(issues) ? "invalid $(kind_name)" : join(issues, "; ")
+    throw(ArgumentError("$(kind_name): $(msg)"))
+end
+
+@inline function _push_issue!(issues::Vector{String}, msg::AbstractString)
+    push!(issues, String(msg))
+    return issues
+end
+
+@inline function _strictly_increasing(v)
+    @inbounds for i in 2:length(v)
+        v[i] > v[i - 1] || return false
+    end
+    return true
+end
+
+function _check_axis_payload!(issues::Vector{String}, axis, label::AbstractString)
+    isempty(axis) && _push_issue!(issues, "$(label) must be nonempty.")
+    all(isfinite, axis) || _push_issue!(issues, "$(label) must contain only finite entries.")
+    length(axis) <= 1 || _strictly_increasing(axis) ||
+        _push_issue!(issues, "$(label) must be strictly increasing with no duplicates.")
+    return issues
+end
+
+function _check_axes_payload!(issues::Vector{String}, axes, label::AbstractString="axes")
+    axes === nothing && return issues
+    for i in eachindex(axes)
+        _check_axis_payload!(issues, axes[i], "$(label)[$i]")
+    end
+    return issues
+end
+
+function _check_directions_offsets!(issues::Vector{String},
+                                    directions,
+                                    offsets,
+                                    offset_weights,
+                                    label::AbstractString)
+    nd = length(directions)
+    no = length(offsets)
+    nd > 0 || _push_issue!(issues, "$(label).directions must be nonempty.")
+    no > 0 || _push_issue!(issues, "$(label).offsets must be nonempty.")
+
+    dirdim = nothing
+    for i in eachindex(directions)
+        dir = directions[i]
+        isempty(dir) && _push_issue!(issues, "$(label).directions[$i] must be nonempty.")
+        all(isfinite, dir) || _push_issue!(issues, "$(label).directions[$i] must contain only finite entries.")
+        any(x -> x < 0, dir) && _push_issue!(issues, "$(label).directions[$i] must have nonnegative entries.")
+        any(x -> x > 0, dir) || _push_issue!(issues, "$(label).directions[$i] must contain a positive entry.")
+        if dirdim === nothing
+            dirdim = length(dir)
+        elseif length(dir) != dirdim
+            _push_issue!(issues, "$(label).directions must all have the same ambient dimension.")
+            break
+        end
+    end
+    dirdim = something(dirdim, 0)
+
+    offdim = nothing
+    for j in eachindex(offsets)
+        off = offsets[j]
+        isempty(off) && _push_issue!(issues, "$(label).offsets[$j] must be nonempty.")
+        all(isfinite, off) || _push_issue!(issues, "$(label).offsets[$j] must contain only finite entries.")
+        if offdim === nothing
+            offdim = length(off)
+        elseif length(off) != offdim
+            _push_issue!(issues, "$(label).offsets must all have the same ambient dimension.")
+            break
+        end
+    end
+    offdim = something(offdim, 0)
+
+    dirdim == 0 || offdim == 0 || dirdim == offdim ||
+        _push_issue!(issues, "$(label).directions and $(label).offsets must have the same ambient dimension.")
+
+    if offset_weights isa AbstractVector
+        length(offset_weights) == no ||
+            _push_issue!(issues, "$(label).offset_weights vector must have length equal to the number of offsets.")
+        all(isfinite, offset_weights) ||
+            _push_issue!(issues, "$(label).offset_weights vector must contain only finite entries.")
+    elseif offset_weights isa AbstractMatrix
+        size(offset_weights) == (nd, no) ||
+            _push_issue!(issues, "$(label).offset_weights matrix must have size (ndirections, noffsets).")
+        all(isfinite, offset_weights) ||
+            _push_issue!(issues, "$(label).offset_weights matrix must contain only finite entries.")
+    elseif offset_weights !== nothing
+        _push_issue!(issues, "$(label).offset_weights must be a vector, a matrix, or nothing.")
+    end
+
+    return issues
+end
+
+function _check_common_slice_spec!(issues::Vector{String}, spec; label::AbstractString)
+    _check_directions_offsets!(issues, spec.directions, spec.offsets, spec.offset_weights, label)
+    spec.nsteps > 0 || _push_issue!(issues, "$(label).nsteps must be > 0.")
+    spec.normalize_dirs in (:none, :L1, :Linf) ||
+        _push_issue!(issues, "$(label).normalize_dirs must be :none, :L1, or :Linf.")
+    spec.direction_weight in (:none, :lesnick_l1, :lesnick_linf) ||
+        _push_issue!(issues, "$(label).direction_weight must be :none, :lesnick_l1, or :lesnick_linf.")
+    if spec.tmin !== nothing
+        isfinite(spec.tmin) || _push_issue!(issues, "$(label).tmin must be finite when provided.")
+    end
+    if spec.tmax !== nothing
+        isfinite(spec.tmax) || _push_issue!(issues, "$(label).tmax must be finite when provided.")
+    end
+    if spec.tmin !== nothing && spec.tmax !== nothing
+        spec.tmin <= spec.tmax ||
+            _push_issue!(issues, "$(label).tmin must be <= $(label).tmax.")
+    end
+    return issues
+end
+
+@inline function _check_feature_grid!(issues::Vector{String}, grid, label::AbstractString)
+    _check_axis_payload!(issues, grid, label)
+    return issues
+end
+
+function _check_axes_policy!(issues::Vector{String}, axes_policy::Symbol, label::AbstractString)
+    axes_policy in (:encoding, :coarsen, :as_given) ||
+        _push_issue!(issues, "$(label).axes_policy must be :encoding, :coarsen, or :as_given.")
+    return issues
+end
+
+function _check_reference_names!(issues::Vector{String}, refs, names, label::AbstractString)
+    isempty(refs) && _push_issue!(issues, "$(label).references must be nonempty.")
+    length(names) == length(refs) ||
+        _push_issue!(issues, "$(label).reference_names length must match the number of references.")
+    length(unique(names)) == length(names) ||
+        _push_issue!(issues, "$(label).reference_names must be unique.")
+    return issues
+end
+
+function _check_spec_issues(spec::LandscapeSpec)
+    issues = String[]
+    _check_common_slice_spec!(issues, spec; label="LandscapeSpec")
+    spec.kmax > 0 || _push_issue!(issues, "LandscapeSpec.kmax must be > 0.")
+    spec.aggregate in (:mean, :sum, :stack) ||
+        _push_issue!(issues, "LandscapeSpec.aggregate must be :mean, :sum, or :stack.")
+    _check_feature_grid!(issues, spec.tgrid, "LandscapeSpec.tgrid")
+    return issues
+end
+
+function _check_spec_issues(spec::PersistenceImageSpec)
+    issues = String[]
+    _check_common_slice_spec!(issues, spec; label="PersistenceImageSpec")
+    _check_feature_grid!(issues, spec.xgrid, "PersistenceImageSpec.xgrid")
+    _check_feature_grid!(issues, spec.ygrid, "PersistenceImageSpec.ygrid")
+    spec.sigma > 0 || _push_issue!(issues, "PersistenceImageSpec.sigma must be > 0.")
+    spec.p > 0 || _push_issue!(issues, "PersistenceImageSpec.p must be > 0.")
+    spec.coords in (:birth_persistence, :birth_death, :midlife_persistence) ||
+        _push_issue!(issues, "PersistenceImageSpec.coords must be :birth_persistence, :birth_death, or :midlife_persistence.")
+    spec.weighting in (:none, :persistence) ||
+        _push_issue!(issues, "PersistenceImageSpec.weighting must be :none or :persistence.")
+    spec.normalize in (:none, :l1, :l2, :max) ||
+        _push_issue!(issues, "PersistenceImageSpec.normalize must be :none, :l1, :l2, or :max.")
+    spec.aggregate in (:mean, :sum, :stack) ||
+        _push_issue!(issues, "PersistenceImageSpec.aggregate must be :mean, :sum, or :stack.")
+    return issues
+end
+
+function _check_spec_issues(spec::MPLandscapeSpec)
+    issues = String[]
+    _check_common_slice_spec!(issues, spec; label="MPLandscapeSpec")
+    spec.kmax > 0 || _push_issue!(issues, "MPLandscapeSpec.kmax must be > 0.")
+    _check_feature_grid!(issues, spec.tgrid, "MPLandscapeSpec.tgrid")
+    return issues
+end
+
+function _check_spec_issues(spec::EulerSurfaceSpec)
+    issues = String[]
+    _check_axes_policy!(issues, spec.axes_policy, "EulerSurfaceSpec")
+    spec.max_axis_len > 0 || _push_issue!(issues, "EulerSurfaceSpec.max_axis_len must be > 0.")
+    _check_axes_payload!(issues, spec.axes, "EulerSurfaceSpec.axes")
+    return issues
+end
+
+function _check_spec_issues(spec::RankGridSpec)
+    issues = String[]
+    spec.nvertices >= 0 || _push_issue!(issues, "RankGridSpec.nvertices must be >= 0.")
+    return issues
+end
+
+function _check_spec_issues(spec::RestrictedHilbertSpec)
+    issues = String[]
+    spec.nvertices >= 0 || _push_issue!(issues, "RestrictedHilbertSpec.nvertices must be >= 0.")
+    return issues
+end
+
+function _check_spec_issues(spec::BarcodeTopKSpec)
+    issues = String[]
+    _check_common_slice_spec!(issues, spec; label="BarcodeTopKSpec")
+    spec.k >= 0 || _push_issue!(issues, "BarcodeTopKSpec.k must be >= 0.")
+    spec.aggregate in (:mean, :sum, :stack) ||
+        _push_issue!(issues, "BarcodeTopKSpec.aggregate must be :mean, :sum, or :stack.")
+    spec.source in (:slice, :fibered) ||
+        _push_issue!(issues, "BarcodeTopKSpec.source must be :slice or :fibered.")
+    spec.infinite_policy in (:clip_to_window, :error) ||
+        _push_issue!(issues, "BarcodeTopKSpec.infinite_policy must be :clip_to_window or :error.")
+    if spec.window !== nothing
+        all(isfinite, spec.window) || _push_issue!(issues, "BarcodeTopKSpec.window must contain finite bounds.")
+        spec.window[1] <= spec.window[2] ||
+            _push_issue!(issues, "BarcodeTopKSpec.window must satisfy lo <= hi.")
+    end
+    return issues
+end
+
+function _check_spec_issues(spec::SlicedBarcodeSpec)
+    issues = String[]
+    _check_common_slice_spec!(issues, spec; label="SlicedBarcodeSpec")
+    spec.aggregate in (:mean, :sum, :stack) ||
+        _push_issue!(issues, "SlicedBarcodeSpec.aggregate must be :mean, :sum, or :stack.")
+    spec.featurizer in (:summary, :entropy) ||
+        _push_issue!(issues, "SlicedBarcodeSpec.featurizer must be :summary or :entropy.")
+    spec.entropy_weighting in (:none, :persistence) ||
+        _push_issue!(issues, "SlicedBarcodeSpec.entropy_weighting must be :none or :persistence.")
+    spec.entropy_p > 0 || _push_issue!(issues, "SlicedBarcodeSpec.entropy_p must be > 0.")
+    if spec.featurizer == :summary
+        isempty(spec.summary_fields) &&
+            _push_issue!(issues, "SlicedBarcodeSpec.summary_fields must be nonempty for featurizer=:summary.")
+        allowed = Set((:count, :sum_persistence, :mean_persistence, :max_persistence, :entropy))
+        all(f -> Symbol(f) in allowed, spec.summary_fields) ||
+            _push_issue!(issues, "SlicedBarcodeSpec.summary_fields must be chosen from (:count, :sum_persistence, :mean_persistence, :max_persistence, :entropy).")
+    end
+    return issues
+end
+
+function _check_spec_issues(spec::BarcodeSummarySpec)
+    issues = String[]
+    _check_common_slice_spec!(issues, spec; label="BarcodeSummarySpec")
+    spec.aggregate in (:mean, :sum, :stack) ||
+        _push_issue!(issues, "BarcodeSummarySpec.aggregate must be :mean, :sum, or :stack.")
+    spec.source in (:slice, :fibered) ||
+        _push_issue!(issues, "BarcodeSummarySpec.source must be :slice or :fibered.")
+    spec.infinite_policy in (:clip_to_window, :error) ||
+        _push_issue!(issues, "BarcodeSummarySpec.infinite_policy must be :clip_to_window or :error.")
+    isempty(spec.fields) && _push_issue!(issues, "BarcodeSummarySpec.fields must be nonempty.")
+    allowed = Set((:count, :sum_persistence, :mean_persistence, :max_persistence, :entropy))
+    all(f -> Symbol(f) in allowed, spec.fields) ||
+        _push_issue!(issues, "BarcodeSummarySpec.fields must be chosen from (:count, :sum_persistence, :mean_persistence, :max_persistence, :entropy).")
+    if spec.window !== nothing
+        all(isfinite, spec.window) || _push_issue!(issues, "BarcodeSummarySpec.window must contain finite bounds.")
+        spec.window[1] <= spec.window[2] ||
+            _push_issue!(issues, "BarcodeSummarySpec.window must satisfy lo <= hi.")
+    end
+    return issues
+end
+
+function _check_spec_issues(spec::SignedBarcodeImageSpec)
+    issues = String[]
+    _check_feature_grid!(issues, spec.xs, "SignedBarcodeImageSpec.xs")
+    _check_feature_grid!(issues, spec.ys, "SignedBarcodeImageSpec.ys")
+    spec.sigma > 0 || _push_issue!(issues, "SignedBarcodeImageSpec.sigma must be > 0.")
+    spec.mode in (:center, :lo, :hi) ||
+        _push_issue!(issues, "SignedBarcodeImageSpec.mode must be :center, :lo, or :hi.")
+    spec.method in (:auto, :bulk, :local) ||
+        _push_issue!(issues, "SignedBarcodeImageSpec.method must be :auto, :bulk, or :local.")
+    _check_axes_policy!(issues, spec.axes_policy, "SignedBarcodeImageSpec")
+    spec.max_axis_len > 0 || _push_issue!(issues, "SignedBarcodeImageSpec.max_axis_len must be > 0.")
+    _check_axes_payload!(issues, spec.axes, "SignedBarcodeImageSpec.axes")
+    spec.axes === nothing || length(spec.axes) == 2 ||
+        _push_issue!(issues, "SignedBarcodeImageSpec.axes must have length 2 when provided.")
+    return issues
+end
+
+function _check_spec_issues(spec::PointSignedMeasureSpec)
+    issues = String[]
+    spec.ndims > 0 || _push_issue!(issues, "PointSignedMeasureSpec.ndims must be > 0.")
+    spec.k >= 0 || _push_issue!(issues, "PointSignedMeasureSpec.k must be >= 0.")
+    spec.coords in (:values, :indices) ||
+        _push_issue!(issues, "PointSignedMeasureSpec.coords must be :values or :indices.")
+    return issues
+end
+
+function _check_spec_issues(spec::EulerSignedMeasureSpec)
+    issues = String[]
+    spec.ndims > 0 || _push_issue!(issues, "EulerSignedMeasureSpec.ndims must be > 0.")
+    spec.k >= 0 || _push_issue!(issues, "EulerSignedMeasureSpec.k must be >= 0.")
+    spec.coords in (:values, :indices) ||
+        _push_issue!(issues, "EulerSignedMeasureSpec.coords must be :values or :indices.")
+    _check_axes_policy!(issues, spec.axes_policy, "EulerSignedMeasureSpec")
+    spec.max_axis_len > 0 || _push_issue!(issues, "EulerSignedMeasureSpec.max_axis_len must be > 0.")
+    _check_axes_payload!(issues, spec.axes, "EulerSignedMeasureSpec.axes")
+    spec.axes === nothing || length(spec.axes) == spec.ndims ||
+        _push_issue!(issues, "EulerSignedMeasureSpec.axes must match EulerSignedMeasureSpec.ndims when provided.")
+    spec.max_terms >= 0 || _push_issue!(issues, "EulerSignedMeasureSpec.max_terms must be >= 0.")
+    spec.min_abs_weight >= 0 || _push_issue!(issues, "EulerSignedMeasureSpec.min_abs_weight must be >= 0.")
+    return issues
+end
+
+function _check_spec_issues(spec::RectangleSignedBarcodeTopKSpec)
+    issues = String[]
+    spec.ndims > 0 || _push_issue!(issues, "RectangleSignedBarcodeTopKSpec.ndims must be > 0.")
+    spec.k >= 0 || _push_issue!(issues, "RectangleSignedBarcodeTopKSpec.k must be >= 0.")
+    spec.coords in (:values, :indices) ||
+        _push_issue!(issues, "RectangleSignedBarcodeTopKSpec.coords must be :values or :indices.")
+    _check_axes_policy!(issues, spec.axes_policy, "RectangleSignedBarcodeTopKSpec")
+    spec.max_axis_len > 0 || _push_issue!(issues, "RectangleSignedBarcodeTopKSpec.max_axis_len must be > 0.")
+    _check_axes_payload!(issues, spec.axes, "RectangleSignedBarcodeTopKSpec.axes")
+    spec.axes === nothing || length(spec.axes) == spec.ndims ||
+        _push_issue!(issues, "RectangleSignedBarcodeTopKSpec.axes must match RectangleSignedBarcodeTopKSpec.ndims when provided.")
+    spec.tol >= 0 || _push_issue!(issues, "RectangleSignedBarcodeTopKSpec.tol must be >= 0.")
+    if spec.max_span isa Integer
+        spec.max_span >= 0 ||
+            _push_issue!(issues, "RectangleSignedBarcodeTopKSpec.max_span must be >= 0 when given as an integer.")
+    elseif spec.max_span isa Tuple
+        length(spec.max_span) == spec.ndims ||
+            _push_issue!(issues, "RectangleSignedBarcodeTopKSpec.max_span tuple must match RectangleSignedBarcodeTopKSpec.ndims.")
+        all(x -> x >= 0, spec.max_span) ||
+            _push_issue!(issues, "RectangleSignedBarcodeTopKSpec.max_span tuple entries must be >= 0.")
+    end
+    spec.method in (:auto, :bulk, :local) ||
+        _push_issue!(issues, "RectangleSignedBarcodeTopKSpec.method must be :auto, :bulk, or :local.")
+    spec.bulk_max_elems > 0 ||
+        _push_issue!(issues, "RectangleSignedBarcodeTopKSpec.bulk_max_elems must be > 0.")
+    return issues
+end
+
+function _check_spec_issues(spec::ProjectedDistancesSpec)
+    issues = String[]
+    _check_reference_names!(issues, spec.references, spec.reference_names, "ProjectedDistancesSpec")
+    spec.dist in (:bottleneck, :wasserstein) ||
+        _push_issue!(issues, "ProjectedDistancesSpec.dist must be :bottleneck or :wasserstein.")
+    spec.agg in (:mean, :sum, :maximum) ||
+        _push_issue!(issues, "ProjectedDistancesSpec.agg must be :mean, :sum, or :maximum.")
+    spec.p > 0 || _push_issue!(issues, "ProjectedDistancesSpec.p must be > 0.")
+    spec.q > 0 || _push_issue!(issues, "ProjectedDistancesSpec.q must be > 0.")
+    spec.n_dirs > 0 || _push_issue!(issues, "ProjectedDistancesSpec.n_dirs must be > 0.")
+    spec.normalize in (:none, :L1, :Linf) ||
+        _push_issue!(issues, "ProjectedDistancesSpec.normalize must be :none, :L1, or :Linf.")
+    spec.enforce_monotone in (:upper, :none) ||
+        _push_issue!(issues, "ProjectedDistancesSpec.enforce_monotone must be :upper or :none.")
+    if spec.directions !== nothing
+        _check_directions_offsets!(issues, spec.directions, spec.directions, nothing, "ProjectedDistancesSpec")
+    end
+    return issues
+end
+
+function _check_spec_issues(spec::MatchingDistanceBankSpec)
+    issues = String[]
+    _check_reference_names!(issues, spec.references, spec.reference_names, "MatchingDistanceBankSpec")
+    spec.method in (:auto, :approx, :exact_2d) ||
+        _push_issue!(issues, "MatchingDistanceBankSpec.method must be :auto, :approx, or :exact_2d.")
+    spec.n_dirs > 0 || _push_issue!(issues, "MatchingDistanceBankSpec.n_dirs must be > 0.")
+    spec.n_offsets > 0 || _push_issue!(issues, "MatchingDistanceBankSpec.n_offsets must be > 0.")
+    spec.max_den > 0 || _push_issue!(issues, "MatchingDistanceBankSpec.max_den must be > 0.")
+    spec.normalize_dirs in (:none, :L1, :Linf) ||
+        _push_issue!(issues, "MatchingDistanceBankSpec.normalize_dirs must be :none, :L1, or :Linf.")
+    spec.weight in (:none, :lesnick_l1, :lesnick_linf) ||
+        _push_issue!(issues, "MatchingDistanceBankSpec.weight must be :none, :lesnick_l1, or :lesnick_linf.")
+    if spec.directions !== nothing && spec.offsets !== nothing
+        _check_directions_offsets!(issues, spec.directions, spec.offsets, nothing, "MatchingDistanceBankSpec")
+    elseif spec.directions !== nothing
+        _check_directions_offsets!(issues, spec.directions, spec.directions, nothing, "MatchingDistanceBankSpec")
+    elseif spec.offsets !== nothing
+        _check_directions_offsets!(issues, spec.offsets, spec.offsets, nothing, "MatchingDistanceBankSpec")
+    end
+    return issues
+end
+
+function _check_spec_issues(spec::MPPImageSpec)
+    issues = String[]
+    spec.resolution > 1 || _push_issue!(issues, "MPPImageSpec.resolution must be >= 2.")
+    spec.xgrid === nothing || _check_feature_grid!(issues, spec.xgrid, "MPPImageSpec.xgrid")
+    spec.ygrid === nothing || _check_feature_grid!(issues, spec.ygrid, "MPPImageSpec.ygrid")
+    spec.sigma > 0 || _push_issue!(issues, "MPPImageSpec.sigma must be > 0.")
+    spec.N > 0 || _push_issue!(issues, "MPPImageSpec.N must be > 0.")
+    if spec.delta isa Symbol
+        spec.delta == :auto || _push_issue!(issues, "MPPImageSpec.delta must be :auto or a positive real.")
+    else
+        spec.delta > 0 || _push_issue!(issues, "MPPImageSpec.delta must be > 0 when given numerically.")
+    end
+    spec.q > 0 || _push_issue!(issues, "MPPImageSpec.q must be > 0.")
+    spec.tie_break in (:center, :up, :down) ||
+        _push_issue!(issues, "MPPImageSpec.tie_break must be :center, :up, or :down.")
+    spec.cutoff_radius === nothing || spec.cutoff_radius >= 0 ||
+        _push_issue!(issues, "MPPImageSpec.cutoff_radius must be >= 0 when provided.")
+    spec.cutoff_tol === nothing || (0 <= spec.cutoff_tol < 1) ||
+        _push_issue!(issues, "MPPImageSpec.cutoff_tol must lie in [0, 1) when provided.")
+    return issues
+end
+
+function _check_spec_issues(spec::MPPDecompositionHistogramSpec)
+    issues = String[]
+    spec.orientation_bins > 0 ||
+        _push_issue!(issues, "MPPDecompositionHistogramSpec.orientation_bins must be > 0.")
+    spec.scale_bins > 0 ||
+        _push_issue!(issues, "MPPDecompositionHistogramSpec.scale_bins must be > 0.")
+    if spec.scale_range !== nothing
+        all(isfinite, spec.scale_range) ||
+            _push_issue!(issues, "MPPDecompositionHistogramSpec.scale_range must contain finite bounds.")
+        spec.scale_range[1] <= spec.scale_range[2] ||
+            _push_issue!(issues, "MPPDecompositionHistogramSpec.scale_range must satisfy lo <= hi.")
+    end
+    spec.weight in (:count, :mass) ||
+        _push_issue!(issues, "MPPDecompositionHistogramSpec.weight must be :count or :mass.")
+    spec.normalize in (:none, :l1, :l2, :max) ||
+        _push_issue!(issues, "MPPDecompositionHistogramSpec.normalize must be :none, :l1, :l2, or :max.")
+    spec.N > 0 || _push_issue!(issues, "MPPDecompositionHistogramSpec.N must be > 0.")
+    if spec.delta isa Symbol
+        spec.delta == :auto || _push_issue!(issues, "MPPDecompositionHistogramSpec.delta must be :auto or a positive real.")
+    else
+        spec.delta > 0 || _push_issue!(issues, "MPPDecompositionHistogramSpec.delta must be > 0 when given numerically.")
+    end
+    spec.q > 0 || _push_issue!(issues, "MPPDecompositionHistogramSpec.q must be > 0.")
+    spec.tie_break in (:center, :up, :down) ||
+        _push_issue!(issues, "MPPDecompositionHistogramSpec.tie_break must be :center, :up, or :down.")
+    return issues
+end
+
+function _check_spec_issues(spec::BettiTableSpec)
+    issues = String[]
+    spec.nvertices >= 0 || _push_issue!(issues, "BettiTableSpec.nvertices must be >= 0.")
+    spec.pad_to >= 0 || _push_issue!(issues, "BettiTableSpec.pad_to must be >= 0.")
+    spec.resolution_maxlen >= 0 || _push_issue!(issues, "BettiTableSpec.resolution_maxlen must be >= 0.")
+    return issues
+end
+
+function _check_spec_issues(spec::BassTableSpec)
+    issues = String[]
+    spec.nvertices >= 0 || _push_issue!(issues, "BassTableSpec.nvertices must be >= 0.")
+    spec.pad_to >= 0 || _push_issue!(issues, "BassTableSpec.pad_to must be >= 0.")
+    spec.resolution_maxlen >= 0 || _push_issue!(issues, "BassTableSpec.resolution_maxlen must be >= 0.")
+    return issues
+end
+
+function _check_spec_issues(spec::BettiSupportMeasuresSpec)
+    issues = String[]
+    spec.pad_to >= 0 || _push_issue!(issues, "BettiSupportMeasuresSpec.pad_to must be >= 0.")
+    spec.resolution_maxlen >= 0 || _push_issue!(issues, "BettiSupportMeasuresSpec.resolution_maxlen must be >= 0.")
+    return issues
+end
+
+function _check_spec_issues(spec::BassSupportMeasuresSpec)
+    issues = String[]
+    spec.pad_to >= 0 || _push_issue!(issues, "BassSupportMeasuresSpec.pad_to must be >= 0.")
+    spec.resolution_maxlen >= 0 || _push_issue!(issues, "BassSupportMeasuresSpec.resolution_maxlen must be >= 0.")
+    return issues
+end
+
+function _check_spec_issues(spec::CompositeSpec)
+    issues = String[]
+    isempty(spec.specs) && _push_issue!(issues, "CompositeSpec.specs must be nonempty.")
+    for (i, sub) in pairs(spec.specs)
+        sub_summary = check_featurizer_spec(sub; throw=false)
+        sub_summary.valid || append!(issues, ["CompositeSpec.specs[$i]: " * msg for msg in sub_summary.issues])
+    end
+    return issues
+end
+
+_check_spec_issues(::AbstractFeaturizerSpec) = String[]
+
+function check_featurizer_spec(spec::AbstractFeaturizerSpec; throw::Bool=false)
+    issues = _check_spec_issues(spec)
+    nf = try
+        nfeatures(spec)
+    catch
+        0
+    end
+    valid = isempty(issues)
+    summary = FeaturizerSpecValidationSummary(
+        :featurizer_spec_validation,
+        valid,
+        Symbol(nameof(typeof(spec))),
+        nf,
+        issues,
+    )
+    throw && !valid && _throw_invalid_featurizer(string(nameof(typeof(spec))), issues)
+    return summary
+end
+
+function check_feature_set(fs::FeatureSet; throw::Bool=false)
+    issues = String[]
+    size(fs.X, 1) == length(fs.ids) ||
+        _push_issue!(issues, "FeatureSet.ids length must match the number of samples.")
+    size(fs.X, 2) == length(fs.names) ||
+        _push_issue!(issues, "FeatureSet.names length must match the number of feature columns.")
+    length(unique(fs.names)) == length(fs.names) ||
+        _push_issue!(issues, "FeatureSet.names must be unique.")
+    all(!isempty, fs.ids) || _push_issue!(issues, "FeatureSet.ids must be nonempty strings.")
+    labels = sample_labels(fs)
+    if labels !== nothing
+        length(labels) == nsamples(fs) ||
+            _push_issue!(issues, "FeatureSet meta labels must match the number of samples.")
+    end
+    valid = isempty(issues)
+    summary = FeatureSetValidationSummary(
+        :feature_set_validation,
+        valid,
+        nsamples(fs),
+        nfeatures(fs),
+        issues,
+    )
+    throw && !valid && _throw_invalid_featurizer("FeatureSet", issues)
+    return summary
+end
+
+function check_experiment_spec(exp::ExperimentSpec; throw::Bool=false)
+    issues = String[]
+    isempty(exp.name) && _push_issue!(issues, "ExperimentSpec.name must be nonempty.")
+    isempty(exp.featurizers) && _push_issue!(issues, "ExperimentSpec.featurizers must be nonempty.")
+    exp.on_unsupported in (:error, :skip, :missing) ||
+        _push_issue!(issues, "ExperimentSpec.on_unsupported must be :error, :skip, or :missing.")
+    exp.io.format in (:wide, :long) ||
+        _push_issue!(issues, "ExperimentIOConfig.format must be :wide or :long.")
+    all(f -> f in (:arrow, :parquet, :npz, :csv_wide, :csv_long), exp.io.formats) ||
+        _push_issue!(issues, "ExperimentIOConfig.formats contains an unsupported format.")
+    length(unique(exp.io.formats)) == length(exp.io.formats) ||
+        _push_issue!(issues, "ExperimentIOConfig.formats must be unique.")
+
+    invalid_specs = Symbol[]
+    for spec in exp.featurizers
+        sub = check_featurizer_spec(spec; throw=false)
+        if !sub.valid
+            push!(invalid_specs, sub.spec_type)
+            append!(issues, ["$(sub.spec_type): " * msg for msg in sub.issues])
+        end
+    end
+
+    valid = isempty(issues)
+    summary = ExperimentSpecValidationSummary(
+        :experiment_spec_validation,
+        valid,
+        exp.name,
+        length(exp.featurizers),
+        invalid_specs,
+        issues,
+    )
+    throw && !valid && _throw_invalid_featurizer("ExperimentSpec", issues)
+    return summary
+end
+
+function check_loaded_experiment(res::LoadedExperimentResult; throw::Bool=false)
+    issues = String[]
+    kind = String(get(res.manifest, "kind", ""))
+    kind == "experiment_manifest" ||
+        _push_issue!(issues, "LoadedExperimentResult.manifest must have kind=\"experiment_manifest\".")
+    keys = artifact_keys(res)
+    length(unique(keys)) == length(keys) ||
+        _push_issue!(issues, "LoadedExperimentResult artifact keys must be unique.")
+
+    with_features = 0
+    for art in artifacts(res)
+        if art.spec !== nothing
+            sub = check_featurizer_spec(art.spec; throw=false)
+            sub.valid || append!(issues, ["artifact $(art.key) spec: " * msg for msg in sub.issues])
+        end
+        if art.features !== nothing
+            with_features += 1
+            sub = check_feature_set(art.features; throw=false)
+            sub.valid || append!(issues, ["artifact $(art.key) features: " * msg for msg in sub.issues])
+        end
+        if art.metadata !== nothing && _obj_haskey(art.metadata, "kind")
+            md_kind = String(art.metadata["kind"])
+            (md_kind == "features" || md_kind == "experiment_feature") ||
+                _push_issue!(issues, "artifact $(art.key) metadata kind must be \"features\" or \"experiment_feature\".")
+        end
+    end
+
+    valid = isempty(issues)
+    summary = LoadedExperimentValidationSummary(
+        :loaded_experiment_validation,
+        valid,
+        nartifacts(res),
+        with_features,
+        issues,
+    )
+    throw && !valid && _throw_invalid_featurizer("LoadedExperimentResult", issues)
+    return summary
+end
+
+function describe(fs::FeatureSet)
+    return (
+        kind = :feature_set,
+        nsamples = nsamples(fs),
+        nfeatures = nfeatures(fs),
+        feature_names = feature_names(fs),
+        feature_axes = feature_axes(fs),
+        sample_ids = sample_ids(fs),
+        has_labels = sample_labels(fs) !== nothing,
+        metadata_keys = _meta_keys(metadata(fs)),
+        eltype = eltype(fs.X),
+    )
+end
+
+@inline feature_set_summary(fs::FeatureSet) = describe(fs)
+
+function describe(cfg::ExperimentIOConfig)
+    return (
+        kind = :experiment_io_config,
+        outdir = cfg.outdir,
+        prefix = cfg.prefix,
+        format = cfg.format,
+        formats = cfg.formats,
+        write_metadata = cfg.write_metadata,
+        overwrite = cfg.overwrite,
+    )
+end
+
+function describe(exp::ExperimentSpec)
+    return (
+        kind = :experiment_spec,
+        name = exp.name,
+        nfeaturizers = length(exp.featurizers),
+        featurizer_types = [Symbol(nameof(typeof(s))) for s in exp.featurizers],
+        on_unsupported = exp.on_unsupported,
+        cache = exp.cache,
+        batch = exp.batch,
+        io = describe(exp.io),
+        metadata_keys = _meta_keys(exp.metadata),
+    )
+end
+
+@inline experiment_summary(x::Union{ExperimentIOConfig,ExperimentSpec,ExperimentResult,LoadedExperimentResult}) = describe(x)
+
+function describe(a::ExperimentArtifact)
+    return (
+        kind = :experiment_artifact,
+        key = a.key,
+        spec_type = Symbol(nameof(typeof(a.spec))),
+        nsamples = nsamples(a.features),
+        nfeatures = nfeatures(a.features),
+        elapsed_seconds = a.elapsed_seconds,
+        feature_paths = a.feature_paths,
+        metadata_path = a.metadata_path,
+        has_features = true,
+    )
+end
+
+function describe(a::LoadedExperimentArtifact)
+    return (
+        kind = :loaded_experiment_artifact,
+        key = a.key,
+        spec_type = a.spec === nothing ? nothing : Symbol(nameof(typeof(a.spec))),
+        has_features = has_features(a),
+        nfeatures = a.features === nothing ? nothing : nfeatures(a.features),
+        nsamples = a.features === nothing ? nothing : nsamples(a.features),
+        elapsed_seconds = a.elapsed_seconds,
+        feature_paths = a.feature_paths,
+        metadata_path = a.metadata_path,
+    )
+end
+
+@inline experiment_artifact_summary(x::Union{ExperimentArtifact,LoadedExperimentArtifact}) = describe(x)
+
+function describe(res::ExperimentResult)
+    return (
+        kind = :experiment_result,
+        experiment_name = experiment_name(res),
+        nartifacts = nartifacts(res),
+        artifact_keys = artifact_keys(res),
+        total_elapsed_seconds = total_elapsed_seconds(res),
+        run_dir = run_dir(res),
+        manifest_path = manifest_path(res),
+        has_features = has_features(res),
+    )
+end
+
+function describe(res::LoadedExperimentResult)
+    return (
+        kind = :loaded_experiment_result,
+        experiment_name = experiment_name(res),
+        nartifacts = nartifacts(res),
+        artifact_keys = artifact_keys(res),
+        total_elapsed_seconds = total_elapsed_seconds(res),
+        run_dir = run_dir(res),
+        manifest_path = manifest_path(res),
+        has_features = has_features(res),
+    )
+end
+
+function describe(spec::AbstractFeaturizerSpec)
+    return (
+        kind = :featurizer_spec,
+        spec_type = Symbol(nameof(typeof(spec))),
+        nfeatures = nfeatures(spec),
+        feature_axes = feature_axes(spec),
+        fields = _spec_field_namedtuple(spec),
+    )
+end
+
+@inline featurizer_summary(spec::AbstractFeaturizerSpec) = describe(spec)
+
+function Base.show(io::IO, fs::FeatureSet)
+    print(io, "FeatureSet(nsamples=", nsamples(fs),
+          ", nfeatures=", nfeatures(fs), ")")
+end
+
+function Base.show(io::IO, ::MIME"text/plain", fs::FeatureSet)
+    d = describe(fs)
+    print(io, "FeatureSet",
+          "\n  nsamples: ", d.nsamples,
+          "\n  nfeatures: ", d.nfeatures,
+          "\n  feature_names: ", repr(d.feature_names),
+          "\n  sample_ids: ", repr(d.sample_ids),
+          "\n  has_labels: ", d.has_labels,
+          "\n  metadata_keys: ", repr(d.metadata_keys))
+end
+
+function Base.show(io::IO, cfg::ExperimentIOConfig)
+    print(io, "ExperimentIOConfig(format=", repr(cfg.format),
+          ", formats=", repr(cfg.formats), ")")
+end
+
+function Base.show(io::IO, ::MIME"text/plain", cfg::ExperimentIOConfig)
+    d = describe(cfg)
+    print(io, "ExperimentIOConfig",
+          "\n  outdir: ", repr(d.outdir),
+          "\n  prefix: ", repr(d.prefix),
+          "\n  format: ", repr(d.format),
+          "\n  formats: ", repr(d.formats),
+          "\n  write_metadata: ", d.write_metadata,
+          "\n  overwrite: ", d.overwrite)
+end
+
+function Base.show(io::IO, exp::ExperimentSpec)
+    print(io, "ExperimentSpec(name=", repr(exp.name),
+          ", nfeaturizers=", length(exp.featurizers), ")")
+end
+
+function Base.show(io::IO, ::MIME"text/plain", exp::ExperimentSpec)
+    d = describe(exp)
+    print(io, "ExperimentSpec",
+          "\n  name: ", repr(d.name),
+          "\n  nfeaturizers: ", d.nfeaturizers,
+          "\n  featurizer_types: ", repr(d.featurizer_types),
+          "\n  on_unsupported: ", repr(d.on_unsupported),
+          "\n  cache: ", repr(d.cache))
+end
+
+function Base.show(io::IO, a::ExperimentArtifact)
+    print(io, "ExperimentArtifact(key=", repr(a.key),
+          ", nfeatures=", nfeatures(a.features),
+          ", elapsed_seconds=", round(a.elapsed_seconds; digits=6), ")")
+end
+
+function Base.show(io::IO, ::MIME"text/plain", a::ExperimentArtifact)
+    d = describe(a)
+    print(io, "ExperimentArtifact",
+          "\n  key: ", repr(d.key),
+          "\n  spec_type: ", repr(d.spec_type),
+          "\n  nsamples: ", d.nsamples,
+          "\n  nfeatures: ", d.nfeatures,
+          "\n  elapsed_seconds: ", d.elapsed_seconds,
+          "\n  feature_paths: ", repr(d.feature_paths),
+          "\n  metadata_path: ", repr(d.metadata_path))
+end
+
+function Base.show(io::IO, a::LoadedExperimentArtifact)
+    print(io, "LoadedExperimentArtifact(key=", repr(a.key),
+          ", has_features=", has_features(a),
+          ", elapsed_seconds=", round(a.elapsed_seconds; digits=6), ")")
+end
+
+function Base.show(io::IO, ::MIME"text/plain", a::LoadedExperimentArtifact)
+    d = describe(a)
+    print(io, "LoadedExperimentArtifact",
+          "\n  key: ", repr(d.key),
+          "\n  spec_type: ", repr(d.spec_type),
+          "\n  has_features: ", d.has_features,
+          "\n  nsamples: ", repr(d.nsamples),
+          "\n  nfeatures: ", repr(d.nfeatures),
+          "\n  elapsed_seconds: ", d.elapsed_seconds,
+          "\n  feature_paths: ", repr(d.feature_paths),
+          "\n  metadata_path: ", repr(d.metadata_path))
+end
+
+function Base.show(io::IO, res::ExperimentResult)
+    print(io, "ExperimentResult(name=", repr(experiment_name(res)),
+          ", nartifacts=", nartifacts(res),
+          ", total_elapsed_seconds=", round(total_elapsed_seconds(res); digits=6), ")")
+end
+
+function Base.show(io::IO, ::MIME"text/plain", res::ExperimentResult)
+    d = describe(res)
+    print(io, "ExperimentResult",
+          "\n  experiment_name: ", repr(d.experiment_name),
+          "\n  nartifacts: ", d.nartifacts,
+          "\n  artifact_keys: ", repr(d.artifact_keys),
+          "\n  total_elapsed_seconds: ", d.total_elapsed_seconds,
+          "\n  run_dir: ", repr(d.run_dir),
+          "\n  manifest_path: ", repr(d.manifest_path))
+end
+
+function Base.show(io::IO, res::LoadedExperimentResult)
+    print(io, "LoadedExperimentResult(name=", repr(experiment_name(res)),
+          ", nartifacts=", nartifacts(res),
+          ", has_features=", has_features(res), ")")
+end
+
+function Base.show(io::IO, ::MIME"text/plain", res::LoadedExperimentResult)
+    d = describe(res)
+    print(io, "LoadedExperimentResult",
+          "\n  experiment_name: ", repr(d.experiment_name),
+          "\n  nartifacts: ", d.nartifacts,
+          "\n  artifact_keys: ", repr(d.artifact_keys),
+          "\n  total_elapsed_seconds: ", d.total_elapsed_seconds,
+          "\n  run_dir: ", repr(d.run_dir),
+          "\n  manifest_path: ", repr(d.manifest_path),
+          "\n  has_features: ", d.has_features)
+end
+
+function Base.show(io::IO, spec::AbstractFeaturizerSpec)
+    print(io, string(nameof(typeof(spec))), "(nfeatures=", nfeatures(spec), ")")
+end
+
+function Base.show(io::IO, ::MIME"text/plain", spec::AbstractFeaturizerSpec)
+    d = describe(spec)
+    print(io, string(nameof(typeof(spec))),
+          "\n  nfeatures: ", d.nfeatures,
+          "\n  feature_axes: ", repr(d.feature_axes))
+end
+
+function Base.show(io::IO, summary::FeaturizerSpecValidationSummary)
+    print(io, "FeaturizerSpecValidationSummary(spec_type=", repr(summary.spec_type),
+          ", valid=", summary.valid,
+          ", issues=", length(summary.issues), ")")
+end
+
+function Base.show(io::IO, ::MIME"text/plain", summary::FeaturizerSpecValidationSummary)
+    print(io, "FeaturizerSpecValidationSummary",
+          "\n  kind: ", repr(summary.kind),
+          "\n  spec_type: ", repr(summary.spec_type),
+          "\n  valid: ", summary.valid,
+          "\n  nfeatures: ", summary.nfeatures)
+    isempty(summary.issues) || print(io, "\n  issues: ", join(summary.issues, "\n          "))
+end
+
+function Base.show(io::IO, summary::FeatureSetValidationSummary)
+    print(io, "FeatureSetValidationSummary(valid=", summary.valid,
+          ", issues=", length(summary.issues), ")")
+end
+
+function Base.show(io::IO, ::MIME"text/plain", summary::FeatureSetValidationSummary)
+    print(io, "FeatureSetValidationSummary",
+          "\n  kind: ", repr(summary.kind),
+          "\n  valid: ", summary.valid,
+          "\n  nsamples: ", summary.nsamples,
+          "\n  nfeatures: ", summary.nfeatures)
+    isempty(summary.issues) || print(io, "\n  issues: ", join(summary.issues, "\n          "))
+end
+
+function Base.show(io::IO, summary::ExperimentSpecValidationSummary)
+    print(io, "ExperimentSpecValidationSummary(valid=", summary.valid,
+          ", issues=", length(summary.issues), ")")
+end
+
+function Base.show(io::IO, ::MIME"text/plain", summary::ExperimentSpecValidationSummary)
+    print(io, "ExperimentSpecValidationSummary",
+          "\n  kind: ", repr(summary.kind),
+          "\n  valid: ", summary.valid,
+          "\n  experiment_name: ", repr(summary.experiment_name),
+          "\n  nfeaturizers: ", summary.nfeaturizers,
+          "\n  invalid_specs: ", repr(summary.invalid_specs))
+    isempty(summary.issues) || print(io, "\n  issues: ", join(summary.issues, "\n          "))
+end
+
+function Base.show(io::IO, summary::LoadedExperimentValidationSummary)
+    print(io, "LoadedExperimentValidationSummary(valid=", summary.valid,
+          ", issues=", length(summary.issues), ")")
+end
+
+function Base.show(io::IO, ::MIME"text/plain", summary::LoadedExperimentValidationSummary)
+    print(io, "LoadedExperimentValidationSummary",
+          "\n  kind: ", repr(summary.kind),
+          "\n  valid: ", summary.valid,
+          "\n  nartifacts: ", summary.nartifacts,
+          "\n  artifacts_with_features: ", summary.artifacts_with_features)
+    isempty(summary.issues) || print(io, "\n  issues: ", join(summary.issues, "\n          "))
+end
+
+@inline describe(summary::FeaturizerSpecValidationSummary) =
+    (; kind=summary.kind, valid=summary.valid, spec_type=summary.spec_type,
+       nfeatures=summary.nfeatures, issues=summary.issues)
+@inline describe(summary::FeatureSetValidationSummary) =
+    (; kind=summary.kind, valid=summary.valid, nsamples=summary.nsamples,
+       nfeatures=summary.nfeatures, issues=summary.issues)
+@inline describe(summary::ExperimentSpecValidationSummary) =
+    (; kind=summary.kind, valid=summary.valid, experiment_name=summary.experiment_name,
+       nfeaturizers=summary.nfeaturizers, invalid_specs=summary.invalid_specs, issues=summary.issues)
+@inline describe(summary::LoadedExperimentValidationSummary) =
+    (; kind=summary.kind, valid=summary.valid, nartifacts=summary.nartifacts,
+       artifacts_with_features=summary.artifacts_with_features, issues=summary.issues)
 
 @inline _jsonable(x::Nothing) = nothing
 @inline _jsonable(x::Bool) = x
@@ -1908,7 +2927,7 @@ Long-form table wrapper for `PersistenceImage1D`.
 """
 struct PersistenceImageLongTable
     id::String
-    image::Invariants.PersistenceImage1D
+    image::PersistenceImage1D
 end
 
 """
@@ -1918,7 +2937,7 @@ Long-form table wrapper for `MPLandscape`.
 """
 struct MPLandscapeLongTable{D,O}
     id::String
-    landscape::Invariants.MPLandscape{D,O}
+    landscape::MPLandscape{D,O}
 end
 
 """
@@ -1928,7 +2947,7 @@ Long-form table wrapper for signed point measures.
 """
 struct PointSignedMeasureLongTable{N,T,W}
     id::String
-    measure::Invariants.PointSignedMeasure{N,T,W}
+    measure::PointSignedMeasure{N,T,W}
 end
 
 @inline feature_table(fs::FeatureSet; format::Symbol=:wide) =
@@ -1952,13 +2971,13 @@ function euler_surface_table(values::AbstractMatrix{T};
     return EulerSurfaceLongTable{T}(String(id), x, y, Matrix(values))
 end
 
-@inline persistence_image_table(pi::Invariants.PersistenceImage1D; id::AbstractString="sample") =
+@inline persistence_image_table(pi::PersistenceImage1D; id::AbstractString="sample") =
     PersistenceImageLongTable(String(id), pi)
 
-@inline mp_landscape_table(L::Invariants.MPLandscape{D,O}; id::AbstractString="sample") where {D,O} =
+@inline mp_landscape_table(L::MPLandscape{D,O}; id::AbstractString="sample") where {D,O} =
     MPLandscapeLongTable{D,O}(String(id), L)
 
-@inline point_signed_measure_table(pm::Invariants.PointSignedMeasure{N,T,W}; id::AbstractString="sample") where {N,T,W} =
+@inline point_signed_measure_table(pm::PointSignedMeasure{N,T,W}; id::AbstractString="sample") where {N,T,W} =
     PointSignedMeasureLongTable{N,T,W}(String(id), pm)
 
 @inline _default_threads_flag(flag::Union{Nothing,Bool}) =
@@ -2184,7 +3203,7 @@ function SlicedBarcodeSpec(; directions,
                             offsets,
                             offset_weights=nothing,
                             featurizer::Symbol=:summary,
-                            summary_fields::Tuple=Invariants._DEFAULT_BARCODE_SUMMARY_FIELDS,
+                            summary_fields::Tuple=_DEFAULT_CANONICAL_BARCODE_SUMMARY_FIELDS,
                             summary_normalize_entropy::Bool=true,
                             entropy_normalize::Bool=true,
                             entropy_weighting::Symbol=:persistence,
@@ -2226,6 +3245,18 @@ end
 
 const _DEFAULT_CANONICAL_BARCODE_SUMMARY_FIELDS =
     (:count, :sum_persistence, :mean_persistence, :max_persistence, :entropy)
+
+@inline function _invariant_barcode_summary_field(field::Symbol)
+    field === :count && return :n_intervals
+    field === :sum_persistence && return :total_persistence
+    field === :mean_persistence && return :mean_persistence
+    field === :max_persistence && return :max_persistence
+    field === :entropy && return :entropy
+    throw(ArgumentError("unsupported barcode summary field $(field)"))
+end
+
+@inline _invariant_barcode_summary_fields(fields::Tuple) =
+    Tuple(_invariant_barcode_summary_field(Symbol(field)) for field in fields)
 
 function BarcodeSummarySpec(; directions,
                               offsets,
@@ -3193,7 +4224,7 @@ supports(::EulerSurfaceSpec, obj) = _supports_module_pi(obj)
 supports(::RankGridSpec, obj) = _supports_module(obj)
 supports(::RestrictedHilbertSpec, obj) = _supports_module(obj)
 supports(spec::PointSignedMeasureSpec, obj) =
-    obj isa Invariants.PointSignedMeasure && length(obj.axes) == spec.ndims
+    obj isa PointSignedMeasure && length(obj.axes) == spec.ndims
 supports(spec::EulerSignedMeasureSpec, obj) =
     _supports_module_pi(obj) && begin
         _, pi = _sample_module_pi(obj)
@@ -3208,7 +4239,7 @@ supports(spec::BarcodeSummarySpec, obj) =
     spec.source == :fibered ? (_supports_module_pi(obj) && _supports_fibered_cache(last(_sample_module_pi(obj)))) :
                               _supports_module_pi(obj)
 supports(spec::RectangleSignedBarcodeTopKSpec, obj) =
-    (obj isa Invariants.RectSignedBarcode && length(obj.axes) == spec.ndims) ||
+    (obj isa RectSignedBarcode && length(obj.axes) == spec.ndims) ||
     (_supports_module_pi(obj) && begin
         _, pi = _sample_module_pi(obj)
         pi0 = _unwrap_cache_pi(pi)
@@ -3347,7 +4378,7 @@ end
 
 @inline function _supports_fibered_cache(pi)
     pi0 = _unwrap_cache_pi(pi)
-    return pi0 isa Invariants.PLikeEncodingMap &&
+    return pi0 isa PLikeEncodingMap &&
            hasproperty(pi0, :n) &&
            Int(getproperty(pi0, :n)) == 2
 end
@@ -3418,7 +4449,7 @@ function build_cache(M::PModule{K,F,MatT}, pi;
     session_cache = _resolve_workflow_session_cache(cache)
     spcache = _slice_plan_cache_from_session(nothing, session_cache)
     if spcache === nothing
-        spcache = Invariants.SlicePlanCache()
+        spcache = SlicePlanCache()
     end
     return EncodingInvariantCache{K,F,MatT,typeof(pi)}(
         M,
@@ -3428,12 +4459,12 @@ function build_cache(M::PModule{K,F,MatT}, pi;
         level,
         session_cache,
         spcache,
-        Dict{UInt,Invariants.CompiledSlicePlan}(),
-        Dict{UInt,Invariants.ProjectedArrangement}(),
-        Dict{UInt,Invariants.ProjectedBarcodeCache{K}}(),
-        Dict{Tuple{UInt,UInt},Invariants.ProjectedBarcodeCache}(),
-        Dict{UInt,Invariants.FiberedBarcodeCache2D{K}}(),
-        Dict{UInt,Invariants.MPPDecomposition}(),
+        Dict{UInt,CompiledSlicePlan}(),
+        Dict{UInt,ProjectedArrangement}(),
+        Dict{UInt,ProjectedBarcodeCache{K}}(),
+        Dict{Tuple{UInt,UInt},ProjectedBarcodeCache}(),
+        Dict{UInt,FiberedBarcodeCache2D{K}}(),
+        Dict{UInt,MPPDecomposition}(),
         nothing,
     )
 end
@@ -3840,7 +4871,7 @@ end
     pi0 = _unwrap_cache_pi(cache.pi)
     pi0 isa ZnEncoding.ZnEncodingMap || return nothing
     if cache.rank_query === nothing
-        cache.rank_query = Invariants.RankQueryCache(pi0)
+        cache.rank_query = RankQueryCache(pi0)
     end
     return cache.rank_query
 end
@@ -3880,7 +4911,7 @@ function _projected_cache_for!(cache::EncodingInvariantCache,
     if spec.precompute
         Invariants.projected_barcodes(cM; threads=threads0)
     end
-    refs = Vector{Invariants.ProjectedBarcodeCache}(undef, length(spec.references))
+    refs = Vector{ProjectedBarcodeCache}(undef, length(spec.references))
     @inbounds for i in eachindex(spec.references)
         Mi, _ = _sample_module_pi(spec.references[i])
         rid = UInt(objectid(Mi))
@@ -4017,10 +5048,10 @@ function build_cache(obj,
                      cache=:auto)
     supports(spec, obj) || throw(ArgumentError("build_cache: sample is unsupported for $(typeof(spec))"))
     if spec isa PointSignedMeasureSpec
-        obj isa Invariants.PointSignedMeasure ||
+        obj isa PointSignedMeasure ||
             throw(ArgumentError("PointSignedMeasureSpec requires a PointSignedMeasure sample"))
         return PointMeasureInvariantCache{typeof(obj)}(obj, opts, threaded, level)
-    elseif spec isa RectangleSignedBarcodeTopKSpec && obj isa Invariants.RectSignedBarcode
+    elseif spec isa RectangleSignedBarcodeTopKSpec && obj isa RectSignedBarcode
         return SignedBarcodeInvariantCache{typeof(obj)}(obj, opts, threaded, level)
     elseif spec isa RankGridSpec
         return build_cache(_sample_module(obj);
@@ -4125,7 +5156,7 @@ function _slice_feature_from_barcode(
     entropy_normalize::Bool=true,
     entropy_weighting=:persistence,
     entropy_p::Real=1,
-    summary_fields=Invariants._DEFAULT_BARCODE_SUMMARY_FIELDS,
+    summary_fields=_DEFAULT_CANONICAL_BARCODE_SUMMARY_FIELDS,
     summary_normalize_entropy::Bool=true,
 )
     if featurizer == :landscape
@@ -4161,7 +5192,7 @@ function _slice_feature_from_barcode(
         )
         return Float64[float(e)]
     elseif featurizer == :summary
-        return Invariants._barcode_summary_vector(
+        return _canonical_barcode_summary_vector(
             bc;
             fields=summary_fields,
             normalize_entropy=summary_normalize_entropy,
@@ -4172,8 +5203,28 @@ function _slice_feature_from_barcode(
     throw(ArgumentError("unsupported slice featurizer $(featurizer)"))
 end
 
+function _canonical_barcode_summary_vector(
+    bar;
+    fields=_DEFAULT_CANONICAL_BARCODE_SUMMARY_FIELDS,
+    normalize_entropy::Bool=true,
+)
+    nt = Invariants.barcode_summary(bar; normalize_entropy=normalize_entropy)
+    values = (
+        count=Float64(nt.n_intervals),
+        sum_persistence=Float64(nt.total_persistence),
+        mean_persistence=Float64(nt.mean_persistence),
+        max_persistence=Float64(nt.max_persistence),
+        entropy=Float64(nt.entropy),
+    )
+    out = Vector{Float64}(undef, length(fields))
+    @inbounds for i in eachindex(fields)
+        out[i] = getproperty(values, fields[i])
+    end
+    return out
+end
+
 function _slice_features_from_packed_grid(
-    bars::Invariants.PackedBarcodeGrid,
+    bars::PackedBarcodeGrid,
     W::AbstractMatrix{Float64};
     featurizer,
     aggregate::Symbol,
@@ -4193,7 +5244,7 @@ function _slice_features_from_packed_grid(
     entropy_normalize::Bool=true,
     entropy_weighting=:persistence,
     entropy_p::Real=1,
-    summary_fields=Invariants._DEFAULT_BARCODE_SUMMARY_FIELDS,
+    summary_fields=_DEFAULT_CANONICAL_BARCODE_SUMMARY_FIELDS,
     summary_normalize_entropy::Bool=true,
 )
     tg = tgrid
@@ -4276,7 +5327,7 @@ function _slice_features_from_packed_grid(
     return Invariants._aggregate_feature_vectors(feats, W; aggregate=aggregate, unwrap_scalar=true)
 end
 
-@inline function _barcode_working_window(pb::Invariants.PackedBarcode,
+@inline function _barcode_working_window(pb::PackedBarcode,
                                          window::Union{Nothing,Tuple{Float64,Float64}})
     window !== nothing && return window
     lo = Inf
@@ -4300,7 +5351,7 @@ end
     return (lo, hi)
 end
 
-function _barcode_grid_window(bars::Invariants.PackedBarcodeGrid,
+function _barcode_grid_window(bars::PackedBarcodeGrid,
                               window::Union{Nothing,Tuple{Float64,Float64}})
     window !== nothing && return window
     lo = Inf
@@ -4325,7 +5376,7 @@ end
     return x > 0 ? hi : lo
 end
 
-function _canonical_barcode_entries(pb::Invariants.PackedBarcode,
+function _canonical_barcode_entries(pb::PackedBarcode,
                                     window::Union{Nothing,Tuple{Float64,Float64}},
                                     infinite_policy::Symbol)
     work = _barcode_working_window(pb, window)
@@ -4380,7 +5431,7 @@ function _canonical_barcode_entries(pb::Invariants.PackedBarcode,
     return entries, count, total_persistence, max_persistence, entropy
 end
 
-function _barcode_topk_vector(pb::Invariants.PackedBarcode,
+function _barcode_topk_vector(pb::PackedBarcode,
                               spec::BarcodeTopKSpec,
                               window::Union{Nothing,Tuple{Float64,Float64}}=spec.window)
     entries, count, _, _, _ = _canonical_barcode_entries(pb, window, spec.infinite_policy)
@@ -4402,7 +5453,7 @@ function _barcode_topk_vector(pb::Invariants.PackedBarcode,
     return out
 end
 
-function _barcode_summary_vector(pb::Invariants.PackedBarcode,
+function _barcode_summary_vector(pb::PackedBarcode,
                                  spec::BarcodeSummarySpec,
                                  window::Union{Nothing,Tuple{Float64,Float64}}=spec.window)
     _, count, total_persistence, max_persistence, entropy =
@@ -4423,7 +5474,7 @@ function _barcode_summary_vector(pb::Invariants.PackedBarcode,
 end
 
 function _aggregate_barcode_feature_grid(
-    bars::Invariants.PackedBarcodeGrid,
+    bars::PackedBarcodeGrid,
     W::AbstractMatrix{Float64},
     builder::F;
     aggregate::Symbol,
@@ -4518,7 +5569,7 @@ function _barcode_grid_for_spec(
 end
 
 function _mpp_histogram_vector_from_decomp(spec::MPPDecompositionHistogramSpec,
-                                           decomp::Invariants.MPPDecomposition)
+                                           decomp::MPPDecomposition)
     hist = zeros(Float64, spec.orientation_bins, spec.scale_bins)
     total_mass = 0.0
     total_segments = 0
@@ -4551,9 +5602,9 @@ function _mpp_histogram_vector_from_decomp(spec::MPPDecompositionHistogramSpec,
             normlen = len / diag
             max_scale = max(max_scale, normlen)
             theta = atan(dy, dx)
-            theta < 0.0 && (theta += π)
-            theta >= π && (theta -= π)
-            oi = clamp(fld(Int(floor(theta / π * spec.orientation_bins)), 1) + 1, 1, spec.orientation_bins)
+            theta < 0.0 && (theta += pi)
+            theta >= pi && (theta -= pi)
+            oi = clamp(fld(Int(floor(theta / pi * spec.orientation_bins)), 1) + 1, 1, spec.orientation_bins)
             sfrac = clamp((normlen - scale_lo) / (scale_hi - scale_lo), 0.0, 1.0)
             si_bin = clamp(fld(Int(floor(sfrac * spec.scale_bins)), 1) + 1, 1, spec.scale_bins)
             hist[oi, si_bin] += per_seg
@@ -4594,7 +5645,6 @@ function transform(spec::LandscapeSpec,
                    threaded::Bool=true)
     opts0 = _cache_opts(cache, opts)
     threads0 = _resolve_spec_threads(spec.threads, opts0, _cache_threaded(cache, threaded))
-    strict0 = opts0.strict === nothing ? spec.strict : opts0.strict
     lvl = _effective_cache_level(cache.level, spec, cache.pi)
     vals = if lvl == :fibered || lvl == :all
         fcache = _fibered_cache_for!(cache, spec, opts0, threads0, lvl)
@@ -4623,16 +5673,16 @@ function transform(spec::LandscapeSpec,
         if spcache !== nothing
             _slice_plan_for!(cache, spec, opts0, threads0)
         end
-        Invariants.slice_features(
+        opts_slice = _slice_compile_opts(spec, opts0)
+        featres = Invariants.slice_features(
             cache.M, cache.pi;
+            opts=opts_slice,
             directions=spec.directions,
             offsets=spec.offsets,
             offset_weights=spec.offset_weights,
             tmin=spec.tmin,
             tmax=spec.tmax,
             nsteps=spec.nsteps,
-            strict=strict0,
-            box=opts0.box,
             drop_unknown=spec.drop_unknown,
             dedup=spec.dedup,
             normalize_dirs=spec.normalize_dirs,
@@ -4645,6 +5695,7 @@ function transform(spec::LandscapeSpec,
             threads=threads0,
             cache=spcache,
         )
+        Invariants.slice_features(featres)
     end
     return _float_vector(vals)
 end
@@ -4655,7 +5706,6 @@ function transform(spec::PersistenceImageSpec,
                    threaded::Bool=true)
     opts0 = _cache_opts(cache, opts)
     threads0 = _resolve_spec_threads(spec.threads, opts0, _cache_threaded(cache, threaded))
-    strict0 = opts0.strict === nothing ? spec.strict : opts0.strict
     lvl = _effective_cache_level(cache.level, spec, cache.pi)
     vals = if lvl == :fibered || lvl == :all
         fcache = _fibered_cache_for!(cache, spec, opts0, threads0, lvl)
@@ -4689,16 +5739,16 @@ function transform(spec::PersistenceImageSpec,
         if spcache !== nothing
             _slice_plan_for!(cache, spec, opts0, threads0)
         end
-        Invariants.slice_features(
+        opts_slice = _slice_compile_opts(spec, opts0)
+        featres = Invariants.slice_features(
             cache.M, cache.pi;
+            opts=opts_slice,
             directions=spec.directions,
             offsets=spec.offsets,
             offset_weights=spec.offset_weights,
             tmin=spec.tmin,
             tmax=spec.tmax,
             nsteps=spec.nsteps,
-            strict=strict0,
-            box=opts0.box,
             drop_unknown=spec.drop_unknown,
             dedup=spec.dedup,
             normalize_dirs=spec.normalize_dirs,
@@ -4716,6 +5766,7 @@ function transform(spec::PersistenceImageSpec,
             threads=threads0,
             cache=spcache,
         )
+        Invariants.slice_features(featres)
     end
     return _float_vector(vals)
 end
@@ -4726,7 +5777,6 @@ function transform(spec::SlicedBarcodeSpec,
                    threaded::Bool=true)
     opts0 = _cache_opts(cache, opts)
     threads0 = _resolve_spec_threads(spec.threads, opts0, _cache_threaded(cache, threaded))
-    strict0 = opts0.strict === nothing ? spec.strict : opts0.strict
     lvl = _effective_cache_level(cache.level, spec, cache.pi)
     vals = if lvl == :fibered || lvl == :all
         fcache = _fibered_cache_for!(cache, spec, opts0, threads0, lvl)
@@ -4758,16 +5808,16 @@ function transform(spec::SlicedBarcodeSpec,
         if spcache !== nothing
             _slice_plan_for!(cache, spec, opts0, threads0)
         end
-        Invariants.slice_features(
+        opts_slice = _slice_compile_opts(spec, opts0)
+        featres = Invariants.slice_features(
             cache.M, cache.pi;
+            opts=opts_slice,
             directions=spec.directions,
             offsets=spec.offsets,
             offset_weights=spec.offset_weights,
             tmin=spec.tmin,
             tmax=spec.tmax,
             nsteps=spec.nsteps,
-            strict=strict0,
-            box=opts0.box,
             drop_unknown=spec.drop_unknown,
             dedup=spec.dedup,
             normalize_dirs=spec.normalize_dirs,
@@ -4775,7 +5825,7 @@ function transform(spec::SlicedBarcodeSpec,
             featurizer=spec.featurizer,
             aggregate=spec.aggregate,
             normalize_weights=spec.normalize_weights,
-            summary_fields=spec.summary_fields,
+            summary_fields=_invariant_barcode_summary_fields(spec.summary_fields),
             summary_normalize_entropy=spec.summary_normalize_entropy,
             entropy_normalize=spec.entropy_normalize,
             entropy_weighting=spec.entropy_weighting,
@@ -4783,6 +5833,7 @@ function transform(spec::SlicedBarcodeSpec,
             threads=threads0,
             cache=spcache,
         )
+        Invariants.slice_features(featres)
     end
     return _float_vector(vals)
 end
@@ -4909,7 +5960,7 @@ end
         strict=strict0,
         pl_mode=opts0.pl_mode,
     )
-    surf = Invariants.euler_surface(obj, pi, opts2)
+    surf = SignedMeasures.euler_surface(obj, pi, opts2)
     return _float_vector(surf)
 end
 
@@ -4946,7 +5997,7 @@ function transform(spec::EulerSignedMeasureSpec,
         pl_mode=opts0.pl_mode,
     )
     max_terms0 = spec.max_terms > 0 ? max(spec.max_terms, spec.k) : 0
-    pm = Invariants.euler_signed_measure(
+    pm = SignedMeasures.euler_signed_measure(
         cache.M,
         pi0,
         opts2;
@@ -5035,7 +6086,7 @@ end
     return out
 end
 
-@inline function _mplandscape_vector(L::Invariants.MPLandscape)
+@inline function _mplandscape_vector(L::MPLandscape)
     nd, no, kk, nt = size(L.values)
     out = Vector{Float64}(undef, nd * no * kk * nt)
     idx = 1
@@ -5046,7 +6097,7 @@ end
     return out
 end
 
-@inline function _mpp_image_vector(img::Invariants.MPPImage)
+@inline function _mpp_image_vector(img::MPPImage)
     nx = length(img.xgrid)
     ny = length(img.ygrid)
     out = Vector{Float64}(undef, nx * ny)
@@ -5105,14 +6156,14 @@ end
     return out
 end
 
-@inline function _point_measure_coord(pm::Invariants.PointSignedMeasure{N},
+@inline function _point_measure_coord(pm::PointSignedMeasure{N},
                                       ind::NTuple{N,Int},
                                       coords::Symbol,
                                       d::Int) where {N}
     return coords == :values ? Float64(pm.axes[d][ind[d]]) : Float64(ind[d])
 end
 
-function _point_measure_topk_vector(pm::Invariants.PointSignedMeasure{N},
+function _point_measure_topk_vector(pm::PointSignedMeasure{N},
                                     ndims::Int,
                                     k::Int,
                                     coords::Symbol) where {N}
@@ -5136,8 +6187,8 @@ function _point_measure_topk_vector(pm::Invariants.PointSignedMeasure{N},
     return out
 end
 
-@inline function _rect_signed_barcode_coord(sb::Invariants.RectSignedBarcode{N},
-                                            rect::Invariants.Rect{N},
+@inline function _rect_signed_barcode_coord(sb::RectSignedBarcode{N},
+                                            rect::Rect{N},
                                             coords::Symbol,
                                             d::Int,
                                             side::Symbol) where {N}
@@ -5145,7 +6196,7 @@ end
     return coords == :values ? Float64(sb.axes[d][idx]) : Float64(idx)
 end
 
-function _rect_signed_barcode_topk_vector(sb::Invariants.RectSignedBarcode{N},
+function _rect_signed_barcode_topk_vector(sb::RectSignedBarcode{N},
                                           ndims::Int,
                                           k::Int,
                                           coords::Symbol) where {N}
@@ -5207,7 +6258,7 @@ end
 
 @inline function _mplandscape_vector_from_plan(M::PModule,
                                                spec::MPLandscapeSpec,
-                                               plan::Invariants.CompiledSlicePlan,
+                                               plan::CompiledSlicePlan,
                                                threads0::Bool)
     L = Invariants.mp_landscape(
         M,
@@ -5221,7 +6272,7 @@ end
 end
 
 @inline function _mpp_image_vector_from_decomp(spec::MPPImageSpec,
-                                               decomp::Invariants.MPPDecomposition,
+                                               decomp::MPPDecomposition,
                                                threads0::Bool)
     img = Invariants.mpp_image(
         decomp;
@@ -5624,7 +6675,7 @@ end
 
 function _composite_slice_vector(
     spec::LandscapeSpec,
-    bars::Invariants.PackedBarcodeGrid,
+    bars::PackedBarcodeGrid,
     W::AbstractMatrix{Float64},
     threads0::Bool,
 )
@@ -5640,7 +6691,7 @@ end
 
 function _composite_slice_vector(
     spec::PersistenceImageSpec,
-    bars::Invariants.PackedBarcodeGrid,
+    bars::PackedBarcodeGrid,
     W::AbstractMatrix{Float64},
     threads0::Bool,
 )
@@ -5661,7 +6712,7 @@ end
 
 function _composite_slice_vector(
     spec::SlicedBarcodeSpec,
-    bars::Invariants.PackedBarcodeGrid,
+    bars::PackedBarcodeGrid,
     W::AbstractMatrix{Float64},
     threads0::Bool,
 )
@@ -5680,7 +6731,7 @@ end
 
 function _composite_slice_vector(
     spec::BarcodeTopKSpec,
-    bars::Invariants.PackedBarcodeGrid,
+    bars::PackedBarcodeGrid,
     W::AbstractMatrix{Float64},
     threads0::Bool,
 )
@@ -5696,7 +6747,7 @@ end
 
 function _composite_slice_vector(
     spec::BarcodeSummarySpec,
-    bars::Invariants.PackedBarcodeGrid,
+    bars::PackedBarcodeGrid,
     W::AbstractMatrix{Float64},
     threads0::Bool,
 )
@@ -6298,7 +7349,7 @@ end
     wasserstein_distance_metric(; kwargs...)
     mpp_image_distance_metric(; kwargs...)
 
-Construct Distances.jl `PreMetric` wrappers around PosetModules distances.
+Construct Distances.jl `PreMetric` wrappers around TamerOp distances.
 These can be used with `Distances.evaluate` and `Distances.pairwise`.
 """
 @inline function matching_distance_metric(; kwargs...)
@@ -7129,7 +8180,7 @@ function matching_distance(encA::EncodingResult, encB::EncodingResult;
     pi = encA.pi
     MA = materialize_module(encA.M)
     MB = materialize_module(encB.M)
-    cache_slice, session_cache = _resolve_workflow_specialized_cache(cache, Invariants.SlicePlanCache)
+    cache_slice, session_cache = _resolve_workflow_specialized_cache(cache, SlicePlanCache)
     cache2 = _slice_plan_cache_from_session(cache_slice, session_cache)
     if method == :auto || method == :approx
         return Invariants.matching_distance_approx(MA, MB, pi, opts; cache=cache2, kwargs...)

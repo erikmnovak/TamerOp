@@ -16,14 +16,26 @@ using SparseArrays
 using LinearAlgebra
 using Statistics
 
-try
-    using PosetModules
-catch
-    include(joinpath(@__DIR__, "..", "src", "PosetModules.jl"))
-    using .PosetModules
+let local_src = normpath(joinpath(@__DIR__, "..", "src", "TamerOp.jl"))
+    if isfile(local_src)
+        if isdefined(Main, :TamerOp)
+            loaded_path = try
+                pathof(Main.TamerOp)
+            catch
+                nothing
+            end
+            if loaded_path !== nothing && normpath(loaded_path) != local_src
+                error("examples/_common.jl expected the repo-local TamerOp at $(local_src), but this session already loaded $(loaded_path). Restart the kernel or Julia session and rerun.")
+            end
+        else
+            include(local_src)
+        end
+    else
+        using TamerOp
+    end
 end
 
-const PM = PosetModules
+const TO = TamerOp
 
 "Print a consistent banner so examples are easy to scan in terminal output."
 function example_header(tag::AbstractString,
@@ -59,13 +71,13 @@ end
 "Save canonical feature artifacts (CSV wide/long) plus optional NPZ."
 function save_feature_bundle(outdir::AbstractString,
                              stem::AbstractString,
-                             fs::PM.FeatureSet)
+                             fs::TO.FeatureSet)
     mkpath(outdir)
 
     csv_wide = joinpath(outdir, stem * "__wide.csv")
     csv_long = joinpath(outdir, stem * "__long.csv")
-    PM.save_features(csv_wide, fs; format=:csv, mode=:wide, metadata=true)
-    PM.save_features(csv_long, fs; format=:csv, mode=:long, metadata=true)
+    TO.save_features(csv_wide, fs; format=:csv, mode=:wide, metadata=true)
+    TO.save_features(csv_long, fs; format=:csv, mode=:long, metadata=true)
 
     native_paths = Dict{Symbol,String}()
 
@@ -75,7 +87,7 @@ function save_feature_bundle(outdir::AbstractString,
     # Optional NPZ extension path.
     try
         p = joinpath(outdir, stem * ".npz")
-        PM.save_features(p, fs; format=:npz, mode=:wide, metadata=true)
+        TO.save_features(p, fs; format=:npz, mode=:wide, metadata=true)
         native_paths[:npz] = p
     catch
     end
@@ -84,8 +96,8 @@ function save_feature_bundle(outdir::AbstractString,
 end
 
 "Check deterministic feature reproducibility and return max absolute deviation."
-function assert_feature_sets_match(fs_ref::PM.FeatureSet,
-                                   fs_new::PM.FeatureSet;
+function assert_feature_sets_match(fs_ref::TO.FeatureSet,
+                                   fs_new::TO.FeatureSet;
                                    atol::Float64=1e-10,
                                    rtol::Float64=1e-8)
     size(fs_ref.X) == size(fs_new.X) ||
@@ -103,7 +115,7 @@ end
 
 "Return true when an optional extension module is loaded."
 @inline function extension_loaded(ext_name::Symbol)::Bool
-    return Base.get_extension(PM, ext_name) !== nothing
+    return Base.get_extension(TO, ext_name) !== nothing
 end
 
 "Pick experiment output formats that are currently available in-process."
@@ -154,7 +166,7 @@ function make_noisy_circle_cloud(n::Int;
         y = radius * sin(th) + noise * randn(rng)
         pts[i] = [x, y]
     end
-    return PM.PointCloud(pts)
+    return TO.PointCloud(pts)
 end
 
 function make_noisy_figure_eight_cloud(n::Int;
@@ -169,13 +181,13 @@ function make_noisy_figure_eight_cloud(n::Int;
         y = scale * sin(th) * cos(th)
         pts[i] = [x + noise * randn(rng), y + noise * randn(rng)]
     end
-    return PM.PointCloud(pts)
+    return TO.PointCloud(pts)
 end
 
 function make_pointcloud_dataset(; n_per_class::Int=12,
                                   n_points::Int=64,
                                   seed::Int=20260217)
-    samples = PM.PointCloud[]
+    samples = TO.PointCloud[]
     labels = String[]
     for i in 1:n_per_class
         push!(samples, make_noisy_circle_cloud(n_points; seed=seed + i))
@@ -192,7 +204,7 @@ function make_image_distance_dataset(; n_per_class::Int=6,
                                       side::Int=48,
                                       seed::Int=20260217)
     rng = MersenneTwister(seed)
-    imgs = PM.ImageNd[]
+    imgs = TO.ImageNd[]
     masks = BitMatrix[]
     labels = String[]
 
@@ -208,7 +220,7 @@ function make_image_distance_dataset(; n_per_class::Int=6,
             img[y, x] = exp(-((r - 0.22)^2) / 0.004) + 0.03 * randn(rng)
         end
         mask = img .> quantile(vec(img), 0.62)
-        push!(imgs, PM.ImageNd(img))
+        push!(imgs, TO.ImageNd(img))
         push!(masks, mask)
         push!(labels, "annulus")
     end
@@ -226,7 +238,7 @@ function make_image_distance_dataset(; n_per_class::Int=6,
             img[y, x] = g1 + g2 + 0.03 * randn(rng)
         end
         mask = img .> quantile(vec(img), 0.70)
-        push!(imgs, PM.ImageNd(img))
+        push!(imgs, TO.ImageNd(img))
         push!(masks, mask)
         push!(labels, "two_blobs")
     end
@@ -251,7 +263,7 @@ end
 
 function _graph_edges_sbm(n::Int, p_in::Float64, p_out::Float64, rng)
     edges = Tuple{Int,Int}[]
-    half = n ÷ 2
+    half = div(n, 2)
     for i in 1:n
         for j in (i + 1):n
             same = (i <= half && j <= half) || (i > half && j > half)
@@ -266,7 +278,7 @@ function make_graph_dataset(; n_per_class::Int=8,
                              n_vertices::Int=48,
                              seed::Int=20260217)
     rng = MersenneTwister(seed)
-    graphs = PM.GraphData[]
+    graphs = TO.GraphData[]
     labels = String[]
 
     # Class A: random geometric graph.
@@ -275,7 +287,7 @@ function make_graph_dataset(; n_per_class::Int=8,
         edges = _graph_edges_random_geometric(coords, 0.24)
         isempty(edges) && push!(edges, (1, 2))
         weights = [hypot(coords[u][1] - coords[v][1], coords[u][2] - coords[v][2]) for (u, v) in edges]
-        push!(graphs, PM.GraphData(n_vertices, edges; coords=coords, weights=weights))
+        push!(graphs, TO.GraphData(n_vertices, edges; coords=coords, weights=weights))
         push!(labels, "geometric")
     end
 
@@ -285,7 +297,7 @@ function make_graph_dataset(; n_per_class::Int=8,
         edges = _graph_edges_sbm(n_vertices, 0.20, 0.03, rng)
         isempty(edges) && push!(edges, (1, 2))
         weights = fill(1.0, length(edges))
-        push!(graphs, PM.GraphData(n_vertices, edges; coords=coords, weights=weights))
+        push!(graphs, TO.GraphData(n_vertices, edges; coords=coords, weights=weights))
         push!(labels, "sbm")
     end
 

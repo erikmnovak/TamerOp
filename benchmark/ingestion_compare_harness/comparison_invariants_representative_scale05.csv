@@ -1,0 +1,7 @@
+case_id,regime,invariant_kind,degree,n_points,ambient_dim,max_dim,tamer_cold_ms,multipers_cold_ms,cold_slowdown_tamer_over_multipers,tamer_warm_median_ms,multipers_warm_median_ms,warm_slowdown_tamer_over_multipers,tamer_output_term_count,multipers_output_term_count,tamer_output_abs_mass,multipers_output_abs_mass,parity_status,parity_reason,summary_included
+inv_alpha_n15000_d2_md2_s11,alpha_parity,euler_signed_measure,0,7500,2,2,31.922038,779.6408529993641,0.040945,27.881029500000004,784.0115555000011,0.035562,22102,22102,29601.0,29601.0,matched,matched,yes
+inv_alpha_n1500_d2_md2_s11,alpha_parity,euler_signed_measure,0,750,2,2,2.990422,129.95859400143672,0.023011,2.6967135,74.74047350024193,0.036081,2004,2004,2753.0,2753.0,matched,matched,yes
+inv_alpha_n150_d2_md2_s11,alpha_parity,euler_signed_measure,0,75,2,2,0.555106,9.654243000113638,0.057499,0.474273,9.81015050001588,0.048345,125,125,199.0,199.0,matched,matched,yes
+inv_cubical_side24_s11,cubical_parity,euler_signed_measure,0,289,2,2,0.49184900000000004,9.713339999507298,0.050636,0.460523,13.012278499445529,0.035391,30,30,31.0,31.0,matched,matched,yes
+inv_cubical_side253_s11,cubical_parity,euler_signed_measure,0,32041,2,2,35.206474,1199.4967280006676,0.029351,30.1353845,1149.2364949999683,0.026222,17440,17440,18519.0,18519.0,matched,matched,yes
+inv_cubical_side80_s11,cubical_parity,euler_signed_measure,0,3249,2,2,3.731973,106.21288900074433,0.035137,3.3026455,107.73884499940323,0.030654,1138,1138,1179.0,1179.0,matched,matched,yes

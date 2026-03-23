@@ -3,7 +3,7 @@ using Test
 using Test
 using LinearAlgebra
 
-const FL = PosetModules.FieldLinAlg
+const FL = TamerOp.FieldLinAlg
 
 @testset "IndicatorResolutions internal invariants + Ext on A2" begin
     # Internal PModule should match fiber_dimension from the fringe.
@@ -24,7 +24,7 @@ const FL = PosetModules.FieldLinAlg
     end
 
     # Kernel inclusion iota: K -> F0 should be injective and satisfy pi0 * iota = 0.
-    K, iota = PM.kernel_with_inclusion(pi0)
+    K, iota = TO.kernel_with_inclusion(pi0)
     for q in 1:P.n
         @test FL.rank(field, iota.comps[q]) == K.dims[q]
         Z = pi0.comps[q] * iota.comps[q]
@@ -74,13 +74,41 @@ end
     @test down1 === IR._downset_birth_block_plan(P)
 
     ws = IR._new_resolution_workspace(K, FF.nvertices(P))
-    EntryT = PosetModules.AbelianCategories._VertexIncrementalCacheEntry{K}
+    EntryT = TamerOp.AbelianCategories._VertexIncrementalCacheEntry{K}
     @test eltype(ws.kernel_vertex_cache) === EntryT
-    @test eltype(ws.cokernel_vertex_cache) === EntryT
 
     IR._clear_indicator_prefix_caches!()
     @test IR._upset_birth_block_plan(P) !== up1
     @test IR._downset_birth_block_plan(P) !== down1
+end
+
+@testset "IndicatorResolutions F3 left-inverse regression" begin
+    field = CM.F3()
+    K = CM.coeff_type(field)
+    c(x) = CM.coerce(field, x)
+
+    S = reshape(K[c(1), c(1), c(1)], 3, 1)
+    @test transpose(S) * S == reshape(K[c(0)], 1, 1)
+
+    L = IR._left_inverse_full_column(field, S)
+    @test L * S == CM.eye(field, 1)
+end
+
+@testset "IndicatorResolutions F3 downset regression completes" begin
+    P = diamond_poset()
+    field = CM.F3()
+    K = CM.coeff_type(field)
+    c(x) = CM.coerce(field, x)
+
+    dims = [3, 1, 1, 0]
+    edge = Dict{Tuple{Int,Int}, Matrix{K}}(
+        (1, 2) => reshape(K[c(1), c(2), c(0)], 1, 3),
+        (1, 3) => reshape(K[c(1), c(0), c(2)], 1, 3),
+    )
+    M = MD.PModule{K}(P, dims, edge; field=field)
+
+    E, dE = IR.downset_resolution(M; maxlen=2, threads=false)
+    @test IR.verify_downset_resolution(E, dE)
 end
 
 @testset "IndicatorResolutions basis helper parity to dense oracle" begin
@@ -151,11 +179,15 @@ end
 
     old_store_edges = IR.INDICATOR_PMODULE_DIRECT_STORE_MIN_EDGES[]
     old_store_work = IR.INDICATOR_PMODULE_DIRECT_STORE_MIN_WORK[]
-    old_inc = IR.INDICATOR_INCREMENTAL_LINALG[]
-    old_inc_maps = IR.INDICATOR_INCREMENTAL_LINALG_MIN_MAPS[]
-    old_inc_entries = IR.INDICATOR_INCREMENTAL_LINALG_MIN_ENTRIES[]
+    old_up_inc = IR.INDICATOR_INCREMENTAL_LINALG[]
+    old_up_inc_maps = IR.INDICATOR_INCREMENTAL_LINALG_MIN_MAPS[]
+    old_up_inc_entries = IR.INDICATOR_INCREMENTAL_LINALG_MIN_ENTRIES[]
+    old_down_inc_maps = IR.INDICATOR_DOWNSET_INCREMENTAL_LINALG_MIN_MAPS[]
+    old_down_inc_entries = IR.INDICATOR_DOWNSET_INCREMENTAL_LINALG_MIN_ENTRIES[]
 
     try
+        M_base = IR.pmodule_from_fringe(H)
+
         IR.INDICATOR_PMODULE_DIRECT_STORE_MIN_EDGES[] = typemax(Int)
         IR.INDICATOR_PMODULE_DIRECT_STORE_MIN_WORK[] = typemax(Int)
         M_dict = IR.pmodule_from_fringe(H)
@@ -164,6 +196,8 @@ end
         IR.INDICATOR_PMODULE_DIRECT_STORE_MIN_WORK[] = 0
         M_store = IR.pmodule_from_fringe(H)
 
+        @test M_base.dims == M_store.dims
+        @test M_base.edge_maps == M_store.edge_maps
         @test M_dict.dims == M_store.dims
         @test M_dict.edge_maps == M_store.edge_maps
 
@@ -171,6 +205,8 @@ end
         cc = MD._get_cover_cache(P)
 
         IR.INDICATOR_INCREMENTAL_LINALG[] = false
+        IR.INDICATOR_DOWNSET_INCREMENTAL_LINALG_MIN_MAPS[] = typemax(Int)
+        IR.INDICATOR_DOWNSET_INCREMENTAL_LINALG_MIN_ENTRIES[] = typemax(Int)
         dense_in = [IR._incoming_image_basis(M_store, v; cache=cc) for v in 1:FF.nvertices(P)]
         dense_out = [IR._outgoing_span_basis(M_store, u; cache=cc) for u in 1:FF.nvertices(P)]
         dense_soc = [IR._socle_basis(M_store, u; cache=cc) for u in 1:FF.nvertices(P)]
@@ -178,6 +214,8 @@ end
         IR.INDICATOR_INCREMENTAL_LINALG[] = true
         IR.INDICATOR_INCREMENTAL_LINALG_MIN_MAPS[] = 1
         IR.INDICATOR_INCREMENTAL_LINALG_MIN_ENTRIES[] = 0
+        IR.INDICATOR_DOWNSET_INCREMENTAL_LINALG_MIN_MAPS[] = 1
+        IR.INDICATOR_DOWNSET_INCREMENTAL_LINALG_MIN_ENTRIES[] = 0
         inc_in = [IR._incoming_image_basis(M_store, v; cache=cc) for v in 1:FF.nvertices(P)]
         inc_out = [IR._outgoing_span_basis(M_store, u; cache=cc) for u in 1:FF.nvertices(P)]
         inc_soc = [IR._socle_basis(M_store, u; cache=cc) for u in 1:FF.nvertices(P)]
@@ -195,10 +233,31 @@ end
     finally
         IR.INDICATOR_PMODULE_DIRECT_STORE_MIN_EDGES[] = old_store_edges
         IR.INDICATOR_PMODULE_DIRECT_STORE_MIN_WORK[] = old_store_work
-        IR.INDICATOR_INCREMENTAL_LINALG[] = old_inc
-        IR.INDICATOR_INCREMENTAL_LINALG_MIN_MAPS[] = old_inc_maps
-        IR.INDICATOR_INCREMENTAL_LINALG_MIN_ENTRIES[] = old_inc_entries
+        IR.INDICATOR_INCREMENTAL_LINALG[] = old_up_inc
+        IR.INDICATOR_INCREMENTAL_LINALG_MIN_MAPS[] = old_up_inc_maps
+        IR.INDICATOR_INCREMENTAL_LINALG_MIN_ENTRIES[] = old_up_inc_entries
+        IR.INDICATOR_DOWNSET_INCREMENTAL_LINALG_MIN_MAPS[] = old_down_inc_maps
+        IR.INDICATOR_DOWNSET_INCREMENTAL_LINALG_MIN_ENTRIES[] = old_down_inc_entries
     end
+end
+
+@testset "IndicatorResolutions upset auto profile is inspectable" begin
+    P = diamond_poset()
+    field = CM.QQField()
+    K = CM.coeff_type(field)
+    edge = Dict{Tuple{Int,Int}, Matrix{K}}(
+        (1, 2) => reshape(K[CM.coerce(field, 1)], 1, 1),
+        (1, 3) => reshape(K[CM.coerce(field, 1)], 1, 1),
+        (2, 4) => reshape(K[CM.coerce(field, 1)], 1, 1),
+        (3, 4) => reshape(K[CM.coerce(field, 1)], 1, 1),
+    )
+    M = MD.PModule{K}(P, ones(Int, 4), edge; field=field)
+    prof = IR._indicator_upset_auto_profile(M; maxlen=2)
+    @test prof.n == FF.nvertices(P)
+    @test prof.total_dims == sum(M.dims)
+    @test prof.vertex_cache isa Bool
+    @test prof.prefix_cache isa Bool
+    @test prof.incremental_linalg_thresholds isa Tuple{Int,Int}
 end
 
 @testset "IndicatorResolutions vertex incremental cache parity" begin
@@ -215,20 +274,18 @@ end
     M = IR.pmodule_from_fringe(H)
     cc = MD._get_cover_cache(P)
 
-    old_enabled = IR.INDICATOR_INCREMENTAL_VERTEX_CACHE[]
-    old_min_vertices = IR.INDICATOR_INCREMENTAL_VERTEX_CACHE_MIN_VERTICES[]
-    old_min_total_dims = IR.INDICATOR_INCREMENTAL_VERTEX_CACHE_MIN_TOTAL_DIMS[]
+    old_up_enabled = IR.INDICATOR_INCREMENTAL_VERTEX_CACHE[]
+    old_up_min_vertices = IR.INDICATOR_INCREMENTAL_VERTEX_CACHE_MIN_VERTICES[]
+    old_up_min_total_dims = IR.INDICATOR_INCREMENTAL_VERTEX_CACHE_MIN_TOTAL_DIMS[]
 
     try
         IR.INDICATOR_INCREMENTAL_VERTEX_CACHE[] = false
         F_off, dF_off = IR.upset_resolution(M; maxlen=2, cache=cc, threads=false)
-        E_off, dE_off = IR.downset_resolution(M; maxlen=2, cache=cc, threads=false)
 
         IR.INDICATOR_INCREMENTAL_VERTEX_CACHE[] = true
         IR.INDICATOR_INCREMENTAL_VERTEX_CACHE_MIN_VERTICES[] = 0
         IR.INDICATOR_INCREMENTAL_VERTEX_CACHE_MIN_TOTAL_DIMS[] = 0
         F_on, dF_on = IR.upset_resolution(M; maxlen=2, cache=cc, threads=false)
-        E_on, dE_on = IR.downset_resolution(M; maxlen=2, cache=cc, threads=false)
 
         @test length(F_off) == length(F_on)
         @test dF_off == dF_on
@@ -237,22 +294,72 @@ end
             @test F_off[i].U1 == F_on[i].U1
             @test F_off[i].delta == F_on[i].delta
         end
-
-        @test length(E_off) == length(E_on)
-        @test dE_off == dE_on
-        for i in eachindex(E_off)
-            @test E_off[i].D0 == E_on[i].D0
-            @test E_off[i].D1 == E_on[i].D1
-            @test E_off[i].rho == E_on[i].rho
-        end
     finally
-        IR.INDICATOR_INCREMENTAL_VERTEX_CACHE[] = old_enabled
-        IR.INDICATOR_INCREMENTAL_VERTEX_CACHE_MIN_VERTICES[] = old_min_vertices
-        IR.INDICATOR_INCREMENTAL_VERTEX_CACHE_MIN_TOTAL_DIMS[] = old_min_total_dims
+        IR.INDICATOR_INCREMENTAL_VERTEX_CACHE[] = old_up_enabled
+        IR.INDICATOR_INCREMENTAL_VERTEX_CACHE_MIN_VERTICES[] = old_up_min_vertices
+        IR.INDICATOR_INCREMENTAL_VERTEX_CACHE_MIN_TOTAL_DIMS[] = old_up_min_total_dims
     end
 end
 
-@testset "IndicatorResolutions dense-id assembly parity + budgets" begin
+@testset "IndicatorResolutions field-specific incremental thresholds respect explicit overrides" begin
+    @test IR._indicator_incremental_linalg_enabled(Val(:downset))
+
+    qq_maps, qq_entries = IR._indicator_incremental_union_thresholds(CM.QQField())
+    f3_maps, f3_entries = IR._indicator_incremental_union_thresholds(CM.F3())
+    @test (qq_maps, qq_entries) == (
+        IR._INDICATOR_INCREMENTAL_LINALG_MIN_MAPS_QQ,
+        IR._INDICATOR_INCREMENTAL_LINALG_MIN_ENTRIES_QQ,
+    )
+    @test (f3_maps, f3_entries) == (
+        IR._INDICATOR_INCREMENTAL_LINALG_MIN_MAPS_PRIME,
+        IR._INDICATOR_INCREMENTAL_LINALG_MIN_ENTRIES_PRIME,
+    )
+
+    qq_v, qq_dims = IR._indicator_vertex_cache_thresholds(CM.QQField())
+    f3_v, f3_dims = IR._indicator_vertex_cache_thresholds(CM.F3())
+    @test f3_v >= qq_v
+    @test f3_dims >= qq_dims
+
+    qq_down_maps, qq_down_entries = IR._indicator_incremental_union_thresholds(CM.QQField(), Val(:downset))
+    f3_down_maps, f3_down_entries = IR._indicator_incremental_union_thresholds(CM.F3(), Val(:downset))
+    @test qq_down_maps > qq_maps
+    @test qq_down_entries > qq_entries
+    @test (qq_down_maps, qq_down_entries) == (
+        IR._INDICATOR_DOWNSET_INCREMENTAL_LINALG_MIN_MAPS_QQ,
+        IR._INDICATOR_DOWNSET_INCREMENTAL_LINALG_MIN_ENTRIES_QQ,
+    )
+    @test (f3_down_maps, f3_down_entries) == (
+        IR._INDICATOR_DOWNSET_INCREMENTAL_LINALG_MIN_MAPS_PRIME,
+        IR._INDICATOR_DOWNSET_INCREMENTAL_LINALG_MIN_ENTRIES_PRIME,
+    )
+
+    old_maps = IR.INDICATOR_INCREMENTAL_LINALG_MIN_MAPS[]
+    old_entries = IR.INDICATOR_INCREMENTAL_LINALG_MIN_ENTRIES[]
+    old_v = IR.INDICATOR_INCREMENTAL_VERTEX_CACHE_MIN_VERTICES[]
+    old_dims = IR.INDICATOR_INCREMENTAL_VERTEX_CACHE_MIN_TOTAL_DIMS[]
+    old_down_maps = IR.INDICATOR_DOWNSET_INCREMENTAL_LINALG_MIN_MAPS[]
+    old_down_entries = IR.INDICATOR_DOWNSET_INCREMENTAL_LINALG_MIN_ENTRIES[]
+    try
+        IR.INDICATOR_INCREMENTAL_LINALG_MIN_MAPS[] = 1
+        IR.INDICATOR_INCREMENTAL_LINALG_MIN_ENTRIES[] = 0
+        IR.INDICATOR_INCREMENTAL_VERTEX_CACHE_MIN_VERTICES[] = 0
+        IR.INDICATOR_INCREMENTAL_VERTEX_CACHE_MIN_TOTAL_DIMS[] = 0
+        IR.INDICATOR_DOWNSET_INCREMENTAL_LINALG_MIN_MAPS[] = 2
+        IR.INDICATOR_DOWNSET_INCREMENTAL_LINALG_MIN_ENTRIES[] = 3
+        @test IR._indicator_incremental_union_thresholds(CM.F3()) == (1, 0)
+        @test IR._indicator_vertex_cache_thresholds(CM.F3()) == (0, 0)
+        @test IR._indicator_incremental_union_thresholds(CM.F3(), Val(:downset)) == (2, 3)
+    finally
+        IR.INDICATOR_INCREMENTAL_LINALG_MIN_MAPS[] = old_maps
+        IR.INDICATOR_INCREMENTAL_LINALG_MIN_ENTRIES[] = old_entries
+        IR.INDICATOR_INCREMENTAL_VERTEX_CACHE_MIN_VERTICES[] = old_v
+        IR.INDICATOR_INCREMENTAL_VERTEX_CACHE_MIN_TOTAL_DIMS[] = old_dims
+        IR.INDICATOR_DOWNSET_INCREMENTAL_LINALG_MIN_MAPS[] = old_down_maps
+        IR.INDICATOR_DOWNSET_INCREMENTAL_LINALG_MIN_ENTRIES[] = old_down_entries
+    end
+end
+
+@testset "IndicatorResolutions dense-id assembly + budgets" begin
     # Non-chain shape exercises the active-generator edge assembly logic.
     P = diamond_poset()
     field = CM.QQField()
@@ -300,6 +407,353 @@ end
     @test alloc_inj_hull < 25_000_000
 end
 
+@testset "IndicatorResolutions support-aware injective plans preserve parity" begin
+    P = diamond_poset()
+    mult = [2, 0, 3, 0]
+    active = [1, 3]
+    Edims_full, sources_full = IR._injective_active_plan(P, mult)
+    Edims_sparse, sources_sparse = IR._injective_active_plan(P, mult, active)
+    @test Edims_sparse == Edims_full
+    @test IR._packed_lists_to_vectors(sources_sparse, FF.nvertices(P)) ==
+          IR._packed_lists_to_vectors(sources_full, FF.nvertices(P))
+
+    field = CM.QQField()
+    K = CM.coeff_type(field)
+    c(x) = CM.coerce(field, x)
+    edge = Dict{Tuple{Int,Int}, Matrix{K}}(
+        (1, 2) => reshape(K[c(1), c(0)], 1, 2),
+        (1, 3) => reshape(K[c(0), c(1)], 1, 2),
+        (2, 4) => zeros(K, 0, 1),
+        (3, 4) => zeros(K, 0, 1),
+    )
+    M = MD.PModule{K}(P, [2, 1, 1, 0], edge; field=field)
+    support = IR._nonzero_dim_vertices(M.dims)
+    E_full, iota_full, gens_full = IR._injective_hull(M; threads=false)
+    E_sparse, iota_sparse, gens_sparse = IR._injective_hull(M; support_vertices=support, threads=false)
+    @test E_sparse.dims == E_full.dims
+    @test E_sparse.edge_maps == E_full.edge_maps
+    @test iota_sparse.comps == iota_full.comps
+    @test gens_sparse == gens_full
+
+    AB = TamerOp.AbelianCategories
+    C_full, q_full = AB._cokernel_module(iota_full; cache=:auto)
+    C_sparse, q_sparse = AB._cokernel_module(iota_sparse; cache=:auto, active_vertices=support)
+    @test C_sparse.dims == C_full.dims
+    @test C_sparse.edge_maps == C_full.edge_maps
+    @test q_sparse.comps == q_full.comps
+
+    support_mask = IR._vertex_mask(FF.nvertices(P), support)
+    C_mask, q_mask = AB._cokernel_module(iota_sparse; cache=:auto, active_vertices=support, active_mask=support_mask)
+    @test C_mask.dims == C_full.dims
+    @test C_mask.edge_maps == C_full.edge_maps
+    @test q_mask.comps == q_full.comps
+end
+
+@testset "IndicatorResolutions packed injective plan parity" begin
+    P = diamond_poset()
+    mult = [2, 0, 3, 0]
+    active = [1, 3]
+    KQQ = CM.coeff_type(CM.QQField())
+    Edims, active_sources = IR._injective_active_plan(P, mult, active)
+    gid_starts = Vector{Int}(undef, FF.nvertices(P) + 1)
+    IR._fill_generator_starts!(gid_starts, mult)
+    gids = IR._injective_active_gid_plan(active_sources, gid_starts, Edims)
+    ids = IR._injective_active_ids(active_sources, gid_starts, Edims)
+    for u in 1:FF.nvertices(P)
+        @test IR._projection_identity_sparse(KQQ, gids, u, u) == IR._projection_identity_sparse(KQQ, ids[u], ids[u])
+    end
+
+    field = CM.QQField()
+    K = CM.coeff_type(field)
+    c(x) = CM.coerce(field, x)
+    edge = Dict{Tuple{Int,Int}, Matrix{K}}(
+        (1, 2) => reshape(K[c(1), c(0)], 1, 2),
+        (1, 3) => reshape(K[c(0), c(1)], 1, 2),
+        (2, 4) => zeros(K, 0, 1),
+        (3, 4) => zeros(K, 0, 1),
+    )
+    M = MD.PModule{K}(P, [2, 1, 1, 0], edge; field=field)
+    old_min_socle = IR._INDICATOR_INJECTIVE_PACKED_PLAN_MIN_SOCLE_VERTICES[]
+    old_min_gens = IR._INDICATOR_INJECTIVE_PACKED_PLAN_MIN_TOTAL_GENS[]
+    old_min_hull = IR._INDICATOR_INJECTIVE_PACKED_PLAN_MIN_TOTAL_HULL_DIMS[]
+    try
+        IR._INDICATOR_INJECTIVE_PACKED_PLAN_MIN_SOCLE_VERTICES[] = typemax(Int)
+        IR._INDICATOR_INJECTIVE_PACKED_PLAN_MIN_TOTAL_GENS[] = typemax(Int)
+        IR._INDICATOR_INJECTIVE_PACKED_PLAN_MIN_TOTAL_HULL_DIMS[] = typemax(Int)
+        E_ids, iota_ids, gens_ids = IR._injective_hull(M; support_vertices=IR._nonzero_dim_vertices(M.dims), threads=false)
+        IR._INDICATOR_INJECTIVE_PACKED_PLAN_MIN_SOCLE_VERTICES[] = 0
+        IR._INDICATOR_INJECTIVE_PACKED_PLAN_MIN_TOTAL_GENS[] = 0
+        IR._INDICATOR_INJECTIVE_PACKED_PLAN_MIN_TOTAL_HULL_DIMS[] = 0
+        E_packed, iota_packed, gens_packed = IR._injective_hull(M; support_vertices=IR._nonzero_dim_vertices(M.dims), threads=false)
+        @test E_packed.dims == E_ids.dims
+        @test E_packed.edge_maps == E_ids.edge_maps
+        @test iota_packed.comps == iota_ids.comps
+        @test gens_packed == gens_ids
+    finally
+        IR._INDICATOR_INJECTIVE_PACKED_PLAN_MIN_SOCLE_VERTICES[] = old_min_socle
+        IR._INDICATOR_INJECTIVE_PACKED_PLAN_MIN_TOTAL_GENS[] = old_min_gens
+        IR._INDICATOR_INJECTIVE_PACKED_PLAN_MIN_TOTAL_HULL_DIMS[] = old_min_hull
+    end
+end
+
+@testset "IndicatorResolutions downset rho value-only parity" begin
+    P = diamond_poset()
+    field = CM.QQField()
+    K = CM.coeff_type(field)
+    c(x) = CM.coerce(field, x)
+    edge = Dict{Tuple{Int,Int}, Matrix{K}}(
+        (1, 2) => reshape(K[c(1), c(0)], 1, 2),
+        (1, 3) => reshape(K[c(0), c(1)], 1, 2),
+        (2, 4) => zeros(K, 0, 1),
+        (3, 4) => zeros(K, 0, 1),
+    )
+    M = MD.PModule{K}(P, [2, 1, 1, 0], edge; field=field)
+    FF.build_cache!(P; cover=true, updown=true)
+    cc = MD._get_cover_cache(P)
+    old = IR._INDICATOR_DOWNSET_RHO_VALUE_ONLY_REUSE[]
+    try
+        IR._INDICATOR_DOWNSET_RHO_VALUE_ONLY_REUSE[] = false
+        E_old, dE_old = IR.downset_resolution(M; maxlen=2, cache=cc, threads=false)
+        IR._INDICATOR_DOWNSET_RHO_VALUE_ONLY_REUSE[] = true
+        E_new, dE_new = IR.downset_resolution(M; maxlen=2, cache=cc, threads=false)
+        @test length(E_new) == length(E_old)
+        @test length(dE_new) == length(dE_old)
+        @test [Ei.D0 for Ei in E_new] == [Ei.D0 for Ei in E_old]
+        @test [Ei.D1 for Ei in E_new] == [Ei.D1 for Ei in E_old]
+        @test dE_new == dE_old
+    finally
+        IR._INDICATOR_DOWNSET_RHO_VALUE_ONLY_REUSE[] = old
+    end
+end
+
+@testset "IndicatorResolutions downset rho sparse-workspace parity" begin
+    P = diamond_poset()
+    field = CM.QQField()
+    K = CM.coeff_type(field)
+
+    U = [FF.principal_upset(P, 2), FF.principal_upset(P, 3)]
+    D = [FF.principal_downset(P, 4)]
+    Phi = spzeros(K, 1, 2)
+    Phi[1, 1] = CM.coerce(field, 1)
+    Phi[1, 2] = CM.coerce(field, 1)
+    H = FF.FringeModule{K}(P, U, D, Phi; field=field)
+    M = IR.pmodule_from_fringe(H)
+    cc = MD._get_cover_cache(P)
+
+    old = IR._INDICATOR_DOWNSET_RHO_SPARSE_WORKSPACE[]
+    try
+        IR._INDICATOR_DOWNSET_RHO_SPARSE_WORKSPACE[] = false
+        E_off, dE_off = IR.downset_resolution(M; maxlen=2, cache=cc, threads=false)
+
+        IR._INDICATOR_DOWNSET_RHO_SPARSE_WORKSPACE[] = true
+        E_on, dE_on = IR.downset_resolution(M; maxlen=2, cache=cc, threads=false)
+
+        @test length(E_on) == length(E_off)
+        @test dE_on == dE_off
+    finally
+        IR._INDICATOR_DOWNSET_RHO_SPARSE_WORKSPACE[] = old
+    end
+end
+
+@testset "IndicatorResolutions downset cokernel transport reuse parity" begin
+    P = diamond_poset()
+    field = CM.QQField()
+    K = CM.coeff_type(field)
+    c(x) = CM.coerce(field, x)
+    edge = Dict{Tuple{Int,Int}, Matrix{K}}(
+        (1, 2) => reshape(K[c(1), c(0)], 1, 2),
+        (1, 3) => reshape(K[c(0), c(1)], 1, 2),
+        (2, 4) => zeros(K, 0, 1),
+        (3, 4) => zeros(K, 0, 1),
+    )
+    M = MD.PModule{K}(P, [2, 1, 1, 0], edge; field=field)
+    FF.build_cache!(P; cover=true, updown=true)
+    cc = MD._get_cover_cache(P)
+    old = IR._INDICATOR_DOWNSET_COKERNEL_TRANSPORT_REUSE[]
+    old_min_vertices = IR._INDICATOR_DOWNSET_TRANSPORT_REUSE_MIN_VERTICES[]
+    old_min_total_dims = IR._INDICATOR_DOWNSET_TRANSPORT_REUSE_MIN_TOTAL_DIMS[]
+    try
+        IR._INDICATOR_DOWNSET_TRANSPORT_REUSE_MIN_VERTICES[] = 0
+        IR._INDICATOR_DOWNSET_TRANSPORT_REUSE_MIN_TOTAL_DIMS[] = 0
+        IR._INDICATOR_DOWNSET_COKERNEL_TRANSPORT_REUSE[] = false
+        E_old, dE_old = IR.downset_resolution(M; maxlen=2, cache=cc, threads=false)
+        IR._INDICATOR_DOWNSET_COKERNEL_TRANSPORT_REUSE[] = true
+        E_new, dE_new = IR.downset_resolution(M; maxlen=2, cache=cc, threads=false)
+        @test length(E_new) == length(E_old)
+        @test length(dE_new) == length(dE_old)
+        @test [Ei.D0 for Ei in E_new] == [Ei.D0 for Ei in E_old]
+        @test [Ei.D1 for Ei in E_new] == [Ei.D1 for Ei in E_old]
+        @test dE_new == dE_old
+    finally
+        IR._INDICATOR_DOWNSET_COKERNEL_TRANSPORT_REUSE[] = old
+        IR._INDICATOR_DOWNSET_TRANSPORT_REUSE_MIN_VERTICES[] = old_min_vertices
+        IR._INDICATOR_DOWNSET_TRANSPORT_REUSE_MIN_TOTAL_DIMS[] = old_min_total_dims
+    end
+end
+
+@testset "IndicatorResolutions cached cover-graph parity" begin
+    P = diamond_poset()
+    AB = TamerOp.AbelianCategories
+    field = CM.QQField()
+    K = CM.coeff_type(field)
+    c(x) = CM.coerce(field, x)
+    edge = Dict{Tuple{Int,Int}, Matrix{K}}(
+        (1, 2) => reshape(K[c(1), c(0)], 1, 2),
+        (1, 3) => reshape(K[c(0), c(1)], 1, 2),
+        (2, 4) => zeros(K, 0, 1),
+        (3, 4) => zeros(K, 0, 1),
+    )
+    M = MD.PModule{K}(P, [2, 1, 1, 0], edge; field=field)
+    FF.build_cache!(P; cover=true, updown=true)
+    cc = MD._get_cover_cache(P)
+    graph_lists = AB._cover_graph_lists(cc)
+    support0 = IR._nonzero_dim_vertices(M.dims)
+
+    E0_ref, iota0_ref, gens0_ref = IR._injective_hull(M; cache=cc, support_vertices=support0, threads=false)
+    E0_new, iota0_new, gens0_new = IR._injective_hull(M; cache=cc, support_vertices=support0, graph_lists=graph_lists, threads=false)
+    @test E0_new.dims == E0_ref.dims
+    @test E0_new.edge_maps == E0_ref.edge_maps
+    @test iota0_new.comps == iota0_ref.comps
+    @test gens0_new == gens0_ref
+
+    C0_ref, q0_ref = AB._cokernel_module(iota0_ref; cache=cc, active_vertices=support0)
+    C0_new, q0_new = AB._cokernel_module(iota0_new; cache=cc, active_vertices=support0, graph_lists=graph_lists)
+    @test C0_new.dims == C0_ref.dims
+    @test C0_new.edge_maps == C0_ref.edge_maps
+    @test q0_new.comps == q0_ref.comps
+
+    support1 = IR._nonzero_dim_vertices(C0_ref.dims)
+    E1_ref, j_ref, gens1_ref = IR._injective_hull(C0_ref; cache=cc, support_vertices=support1, threads=false)
+    E1_new, j_new, gens1_new = IR._injective_hull(C0_new; cache=cc, support_vertices=support1, graph_lists=graph_lists, threads=false)
+    @test E1_new.dims == E1_ref.dims
+    @test E1_new.edge_maps == E1_ref.edge_maps
+    @test j_new.comps == j_ref.comps
+    @test gens1_new == gens1_ref
+
+    C1_ref, q1_ref = AB._cokernel_module(j_ref; cache=cc, active_vertices=support1)
+    C1_new, q1_new = AB._cokernel_module(j_new; cache=cc, active_vertices=support1, graph_lists=graph_lists)
+    @test C1_new.dims == C1_ref.dims
+    @test C1_new.edge_maps == C1_ref.edge_maps
+    @test q1_new.comps == q1_ref.comps
+end
+
+@testset "IndicatorResolutions injective generator plan parity" begin
+    P = diamond_poset()
+    field = CM.QQField()
+    K = CM.coeff_type(field)
+    c(x) = CM.coerce(field, x)
+    edge = Dict{Tuple{Int,Int}, Matrix{K}}(
+        (1, 2) => reshape(K[c(1), c(0)], 1, 2),
+        (1, 3) => reshape(K[c(0), c(1)], 1, 2),
+        (2, 4) => zeros(K, 0, 1),
+        (3, 4) => zeros(K, 0, 1),
+    )
+    M = MD.PModule{K}(P, [2, 1, 1, 0], edge; field=field)
+    FF.build_cache!(P; cover=true, updown=true)
+    cc = MD._get_cover_cache(P)
+    support = IR._nonzero_dim_vertices(M.dims)
+    E_ref, iota_ref, gens_ref = IR._injective_hull(M; cache=cc, support_vertices=support, threads=false)
+    E_plan, iota_plan, plan = IR._injective_hull(M; cache=cc, support_vertices=support, materialize_gens=false, threads=false)
+    @test E_plan.dims == E_ref.dims
+    @test E_plan.edge_maps == E_ref.edge_maps
+    @test iota_plan.comps == iota_ref.comps
+    @test gens_ref isa IR.InjectiveGenerators
+    @test [collect(g) for g in gens_ref] == IR._materialize_injective_gens(plan)
+    @test IR._principal_downsets_from_plan(P, plan) == IR._principal_downsets_from_gens(P, gens_ref)
+
+    old_min_socle = IR._INDICATOR_INJECTIVE_PACKED_PLAN_MIN_SOCLE_VERTICES[]
+    old_min_gens = IR._INDICATOR_INJECTIVE_PACKED_PLAN_MIN_TOTAL_GENS[]
+    old_min_hull = IR._INDICATOR_INJECTIVE_PACKED_PLAN_MIN_TOTAL_HULL_DIMS[]
+    try
+        IR._INDICATOR_INJECTIVE_PACKED_PLAN_MIN_SOCLE_VERTICES[] = 0
+        IR._INDICATOR_INJECTIVE_PACKED_PLAN_MIN_TOTAL_GENS[] = 0
+        IR._INDICATOR_INJECTIVE_PACKED_PLAN_MIN_TOTAL_HULL_DIMS[] = 0
+        E_packed, iota_packed, plan_packed = IR._injective_hull(M; cache=cc, support_vertices=support, materialize_gens=false, threads=false)
+        IR._INDICATOR_INJECTIVE_PACKED_PLAN_MIN_SOCLE_VERTICES[] = typemax(Int)
+        IR._INDICATOR_INJECTIVE_PACKED_PLAN_MIN_TOTAL_GENS[] = typemax(Int)
+        IR._INDICATOR_INJECTIVE_PACKED_PLAN_MIN_TOTAL_HULL_DIMS[] = typemax(Int)
+        E_simple, iota_simple, plan_simple = IR._injective_hull(M; cache=cc, support_vertices=support, materialize_gens=false, threads=false)
+        @test E_packed.dims == E_simple.dims == E_ref.dims
+        @test E_packed.edge_maps == E_simple.edge_maps == E_ref.edge_maps
+        @test iota_packed.comps == iota_simple.comps == iota_ref.comps
+        @test [collect(g) for g in gens_ref] == IR._materialize_injective_gens(plan_packed) == IR._materialize_injective_gens(plan_simple)
+    finally
+        IR._INDICATOR_INJECTIVE_PACKED_PLAN_MIN_SOCLE_VERTICES[] = old_min_socle
+        IR._INDICATOR_INJECTIVE_PACKED_PLAN_MIN_TOTAL_GENS[] = old_min_gens
+        IR._INDICATOR_INJECTIVE_PACKED_PLAN_MIN_TOTAL_HULL_DIMS[] = old_min_hull
+    end
+end
+
+@testset "IndicatorResolutions downset auto profile" begin
+    field = CM.QQField()
+    K = CM.coeff_type(field)
+    grid_poset(nx, ny) = begin
+        rel = falses(nx * ny, nx * ny)
+        idx(ix, iy) = (iy - 1) * nx + ix
+        @inbounds for y1 in 1:ny, x1 in 1:nx
+            i = idx(x1, y1)
+            for y2 in y1:ny, x2 in x1:nx
+                rel[i, idx(x2, y2)] = true
+            end
+        end
+        FF.FinitePoset(rel; check=false)
+    end
+    zero_edge_module(P, dim) = begin
+        edge = Dict{Tuple{Int,Int},Matrix{K}}()
+        for (u, v) in FF.cover_edges(P)
+            edge[(u, v)] = zeros(K, dim, dim)
+        end
+        MD.PModule{K}(P, fill(dim, FF.nvertices(P)), edge; field=field)
+    end
+    P_small = grid_poset(4, 4)
+    FF.build_cache!(P_small; cover=true, updown=true)
+    small = zero_edge_module(P_small, 1)
+    prof_small = IR._indicator_downset_auto_profile(small; maxlen=2)
+    @test prof_small.transport_reuse == false
+    @test prof_small.injective_reuse == false
+    @test prof_small.prefix_cache == false
+
+    P_mid = grid_poset(8, 8)
+    FF.build_cache!(P_mid; cover=true, updown=true)
+    mid = zero_edge_module(P_mid, 2)
+    prof_mid = IR._indicator_downset_auto_profile(mid; maxlen=2)
+    @test prof_mid.transport_reuse == true
+    @test prof_mid.injective_reuse == false
+    @test prof_mid.prefix_cache == false
+
+    P_big = grid_poset(12, 12)
+    FF.build_cache!(P_big; cover=true, updown=true)
+    big = zero_edge_module(P_big, 2)
+    prof_big = IR._indicator_downset_auto_profile(big; maxlen=3)
+    @test prof_big.transport_reuse == true
+    @test prof_big.injective_reuse == false
+    @test prof_big.prefix_cache == false
+end
+
+@testset "IndicatorResolutions projective generator plan parity" begin
+    P = diamond_poset()
+    field = CM.QQField()
+    K = CM.coeff_type(field)
+    c(x) = CM.coerce(field, x)
+    edge = Dict{Tuple{Int,Int}, Matrix{K}}(
+        (1, 2) => reshape(K[c(1), c(0)], 1, 2),
+        (1, 3) => reshape(K[c(0), c(1)], 1, 2),
+        (2, 4) => zeros(K, 0, 1),
+        (3, 4) => zeros(K, 0, 1),
+    )
+    M = MD.PModule{K}(P, [2, 1, 1, 0], edge; field=field)
+    FF.build_cache!(P; cover=true, updown=true)
+    cc = MD._get_cover_cache(P)
+    F_ref, pi_ref, gens_ref = IR.projective_cover(M; cache=cc, threads=false)
+    F_plan, pi_plan, plan = IR.projective_cover(M; cache=cc, materialize_gens=false, threads=false)
+    @test F_plan.dims == F_ref.dims
+    @test F_plan.edge_maps == F_ref.edge_maps
+    @test pi_plan.comps == pi_ref.comps
+    @test gens_ref isa IR.ProjectiveGenerators
+    @test [collect(g) for g in gens_ref] == IR._materialize_projective_gens(plan)
+    @test IR._principal_upsets_from_plan(P, plan) == IR._principal_upsets_from_gens(P, gens_ref)
+end
+
 @testset "IndicatorResolutions explicit workspace/cache parity" begin
     P = diamond_poset()
     field = CM.QQField()
@@ -344,6 +798,88 @@ end
     @test dE_opt == dE_ref
 end
 
+@testset "IndicatorResolutions downset support narrowing parity" begin
+    P = diamond_poset()
+    field = CM.QQField()
+    K = CM.coeff_type(field)
+
+    U = [FF.principal_upset(P, 2), FF.principal_upset(P, 3)]
+    D = [FF.principal_downset(P, 4)]
+    Phi = spzeros(K, 1, 2)
+    Phi[1, 1] = CM.coerce(field, 1)
+    Phi[1, 2] = CM.coerce(field, 1)
+    H = FF.FringeModule{K}(P, U, D, Phi; field=field)
+    M = IR.pmodule_from_fringe(H)
+
+    old = IR._INDICATOR_DOWNSET_SUPPORT_NARROWING[]
+    try
+        IR._INDICATOR_DOWNSET_SUPPORT_NARROWING[] = false
+        E_off, dE_off = IR.downset_resolution(M; maxlen=3, threads=false)
+        IR._INDICATOR_DOWNSET_SUPPORT_NARROWING[] = true
+        E_on, dE_on = IR.downset_resolution(M; maxlen=3, threads=false)
+        @test length(E_on) == length(E_off)
+        @test dE_on == dE_off
+        @test [length(E.D0) for E in E_on] == [length(E.D0) for E in E_off]
+    finally
+        IR._INDICATOR_DOWNSET_SUPPORT_NARROWING[] = old
+    end
+end
+
+@testset "IndicatorResolutions downset frontier-vertices parity" begin
+    P = diamond_poset()
+    field = CM.QQField()
+    K = CM.coeff_type(field)
+
+    U = [FF.principal_upset(P, 2), FF.principal_upset(P, 3)]
+    D = [FF.principal_downset(P, 4)]
+    Phi = spzeros(K, 1, 2)
+    Phi[1, 1] = CM.coerce(field, 1)
+    Phi[1, 2] = CM.coerce(field, 1)
+    H = FF.FringeModule{K}(P, U, D, Phi; field=field)
+    M = IR.pmodule_from_fringe(H)
+
+    old = IR._INDICATOR_DOWNSET_FRONTIER_VERTICES[]
+    try
+        IR._INDICATOR_DOWNSET_FRONTIER_VERTICES[] = false
+        E_off, dE_off = IR.downset_resolution(M; maxlen=3, threads=false)
+        IR._INDICATOR_DOWNSET_FRONTIER_VERTICES[] = true
+        E_on, dE_on = IR.downset_resolution(M; maxlen=3, threads=false)
+        @test length(E_on) == length(E_off)
+        @test dE_on == dE_off
+        @test [length(E.D0) for E in E_on] == [length(E.D0) for E in E_off]
+    finally
+        IR._INDICATOR_DOWNSET_FRONTIER_VERTICES[] = old
+    end
+end
+
+@testset "IndicatorResolutions upset active-source delta parity" begin
+    P = diamond_poset()
+    field = CM.QQField()
+    K = CM.coeff_type(field)
+
+    U = [FF.principal_upset(P, 2), FF.principal_upset(P, 3)]
+    D = [FF.principal_downset(P, 4)]
+    Phi = spzeros(K, 1, 2)
+    Phi[1, 1] = CM.coerce(field, 1)
+    Phi[1, 2] = CM.coerce(field, 1)
+    H = FF.FringeModule{K}(P, U, D, Phi; field=field)
+    M = IR.pmodule_from_fringe(H)
+
+    old = IR._INDICATOR_UPSET_ACTIVE_SOURCE_DELTA[]
+    try
+        IR._INDICATOR_UPSET_ACTIVE_SOURCE_DELTA[] = false
+        F_ref, dF_ref = IR.upset_resolution(M; maxlen=3, threads=false)
+
+        IR._INDICATOR_UPSET_ACTIVE_SOURCE_DELTA[] = true
+        F_opt, dF_opt = IR.upset_resolution(M; maxlen=3, threads=false)
+
+        @test length(F_opt) == length(F_ref)
+        @test dF_opt == dF_ref
+    finally
+        IR._INDICATOR_UPSET_ACTIVE_SOURCE_DELTA[] = old
+    end
+end
+
 @testset "IndicatorResolutions fringe wrapper parity" begin
     P = diamond_poset()
     field = CM.QQField()
@@ -365,6 +901,154 @@ end
     @test dF == dF_ref
     @test length(E) == length(E_ref)
     @test dE == dE_ref
+end
+
+@testset "IndicatorResolutions fringe_presentation roundtrip" begin
+    P = diamond_poset()
+    field = CM.QQField()
+    K = CM.coeff_type(field)
+
+    U = [FF.principal_upset(P, 1), FF.principal_upset(P, 2), FF.principal_upset(P, 3)]
+    D = [FF.principal_downset(P, 2), FF.principal_downset(P, 3), FF.principal_downset(P, 4)]
+    Phi = spzeros(K, 3, 3)
+    Phi[1, 1] = CM.coerce(field, 1)
+    Phi[2, 1] = CM.coerce(field, 1)
+    Phi[2, 3] = CM.coerce(field, 1)
+    Phi[3, 2] = CM.coerce(field, 1)
+    Phi[3, 3] = CM.coerce(field, 1)
+    H = FF.FringeModule{K}(P, U, D, Phi; field=field)
+
+    M = IR.pmodule_from_fringe(H)
+    H2 = IR.fringe_presentation(M)
+    M2 = IR.pmodule_from_fringe(H2)
+
+    @test H2.P === P
+    @test M2.dims == M.dims
+    @test M2.edge_maps == M.edge_maps
+end
+
+@testset "IndicatorResolutions UX surface" begin
+    P = diamond_poset()
+    field = CM.QQField()
+    K = CM.coeff_type(field)
+
+    U = [FF.principal_upset(P, 1), FF.principal_upset(P, 2), FF.principal_upset(P, 3)]
+    D = [FF.principal_downset(P, 2), FF.principal_downset(P, 3), FF.principal_downset(P, 4)]
+    Phi = spzeros(K, 3, 3)
+    Phi[1, 1] = CM.coerce(field, 1)
+    Phi[2, 1] = CM.coerce(field, 1)
+    Phi[2, 3] = CM.coerce(field, 1)
+    Phi[3, 2] = CM.coerce(field, 1)
+    Phi[3, 3] = CM.coerce(field, 1)
+    H = FF.FringeModule{K}(P, U, D, Phi; field=field)
+    M = IR.pmodule_from_fringe(H)
+
+    cover = IR.projective_cover(M; threads=false)
+    @test cover isa IR.ProjectiveCoverResult
+    @test TO.describe(cover).kind == :projective_cover
+    @test IR.cover_module(cover) === first(cover)
+    @test IR.cover_map(cover) === collect(cover)[2]
+    @test IR.augmentation(cover) === IR.cover_map(cover)
+    @test IR.resolution_generators(cover) === collect(cover)[3]
+    @test IR.generator_vertices(IR.resolution_generators(cover)) == IR.generator_vertices(cover.generators)
+    @test IR.generator_blocks(IR.resolution_generators(cover)) == IR.generator_blocks(cover.generators)
+    @test IR.materialize_generators(cover) == IR.materialize_generators(IR.resolution_generators(cover))
+    @test TO.describe(IR.resolution_generators(cover)).side == :projective
+    @test IR.resolution_length(cover) == 0
+    @test IR.generator_count(cover) == sum(IR.generator_count_by_degree(cover))
+    rep_cover = IR.check_projective_cover(cover)
+    @test rep_cover.valid
+    @test occursin("IndicatorResolutionValidationSummary", sprint(show, IR.indicator_resolution_validation_summary(rep_cover)))
+    @test IR.cover_summary(cover).side == :projective
+    @test IR.projective_cover(M; output=:summary, threads=false).side == :projective
+    @test_throws ArgumentError IR.projective_cover(M; output=:bogus, threads=false)
+
+    hull = IR.injective_hull(M; threads=false)
+    @test hull isa IR.InjectiveHullResult
+    @test TO.describe(hull).kind == :injective_hull
+    @test IR.hull_module(hull) === first(hull)
+    @test IR.hull_map(hull) === collect(hull)[2]
+    @test IR.coaugmentation(hull) === IR.hull_map(hull)
+    @test IR.resolution_generators(hull) === collect(hull)[3]
+    @test IR.materialize_generators(hull) == IR.materialize_generators(IR.resolution_generators(hull))
+    @test TO.describe(IR.resolution_generators(hull)).side == :injective
+    @test IR.resolution_length(hull) == 0
+    @test IR.generator_count(hull) == sum(IR.generator_count_by_degree(hull))
+    rep_hull = IR.check_injective_hull(hull)
+    @test rep_hull.valid
+    @test IR.hull_summary(hull).side == :injective
+    @test IR.injective_hull(M; output=:summary, threads=false).side == :injective
+
+    up = IR.upset_resolution(M; maxlen=2, threads=false)
+    down = IR.downset_resolution(M; maxlen=2, threads=false)
+    both = IR.indicator_resolutions(H, H; maxlen=2, threads=false)
+
+    @test up isa IR.UpsetResolutionResult
+    @test down isa IR.DownsetResolutionResult
+    @test both isa IR.IndicatorResolutionsResult
+    @test TO.describe(up).side == :upset
+    @test TO.describe(down).side == :downset
+    @test TO.describe(both).kind == :indicator_resolutions
+    @test TO.describe(IR.projective_resolution(both)) == TO.describe(up)
+    @test TO.describe(IR.injective_resolution(both)) == TO.describe(down)
+    @test IR.resolution_modules(up) === first(up)
+    @test IR.resolution_maps(up) === collect(up)[2]
+    @test length(IR.resolution_modules(both).projective) == length(IR.resolution_modules(up))
+    @test length(IR.resolution_modules(both).injective) == length(IR.resolution_modules(down))
+    @test all(A == B for (A, B) in zip(IR.resolution_maps(both).projective, IR.resolution_maps(up)))
+    @test all(A == B for (A, B) in zip(IR.resolution_maps(both).injective, IR.resolution_maps(down)))
+    @test all(
+        A.U0 == B.U0 && A.U1 == B.U1 && A.delta == B.delta
+        for (A, B) in zip(IR.resolution_modules(both).projective, IR.resolution_modules(up))
+    )
+    @test all(
+        A.D0 == B.D0 && A.D1 == B.D1 && A.rho == B.rho
+        for (A, B) in zip(IR.resolution_modules(both).injective, IR.resolution_modules(down))
+    )
+    @test IR.augmentation(up) isa MD.PMorphism
+    @test IR.coaugmentation(down) isa MD.PMorphism
+    @test eltype(IR.resolution_generators(up)) <: IR.ProjectiveGenerators
+    @test eltype(IR.resolution_generators(down)) <: IR.InjectiveGenerators
+    @test eltype(IR.resolution_generators(both).projective) <: IR.ProjectiveGenerators
+    @test eltype(IR.resolution_generators(both).injective) <: IR.InjectiveGenerators
+    @test TO.describe(first(IR.resolution_generators(up))).side == :projective
+    @test TO.describe(first(IR.resolution_generators(down))).side == :injective
+    @test IR.materialize_generators(up) == [IR.materialize_generators(g) for g in IR.resolution_generators(up)]
+    @test IR.materialize_generators(down) == [IR.materialize_generators(g) for g in IR.resolution_generators(down)]
+    @test keys(IR.materialize_generators(both)) == (:projective, :injective)
+    @test IR.check_resolution(up).valid
+    @test IR.check_resolution(down).valid
+    @test IR.check_resolution(both).valid
+    @test IR.resolution_summary(up).resolution_length == length(IR.resolution_maps(up))
+    @test IR.resolution_summary(both).projective.side == :upset
+    @test IR.resolution_length(up) == length(IR.resolution_maps(up))
+    @test IR.resolution_length(down) == length(IR.resolution_maps(down))
+    @test IR.resolution_length(both).projective == IR.resolution_length(up)
+    @test IR.generator_count(up) == sum(IR.generator_count_by_degree(up))
+    @test IR.generator_count(down) == sum(IR.generator_count_by_degree(down))
+    @test IR.generator_count(both).injective == IR.generator_count(down)
+    @test IR.upset_resolution(M; maxlen=2, output=:summary, threads=false).side == :upset
+    @test IR.downset_resolution(M; maxlen=2, output=:summary, threads=false).side == :downset
+    @test IR.indicator_resolutions(H, H; maxlen=2, output=:summary, threads=false).kind == :indicator_resolutions
+    @test_throws ArgumentError IR.downset_resolution(M; maxlen=2, output=:bad, threads=false)
+
+    H2 = IR.fringe_presentation(M)
+    @test IR.presentation_module(H2) === H2
+    @test IR.presentation_map(H2) == FF.fringe_coefficients(H2)
+    rep_present = IR.check_fringe_presentation(H2; source=M)
+    @test rep_present.valid
+    @test IR.presentation_summary(H2).kind == :fringe_presentation
+
+    @test TamerOp.Advanced.cover_module === IR.cover_module
+    @test TamerOp.Advanced.hull_module === IR.hull_module
+    @test TamerOp.Advanced.resolution_modules === IR.resolution_modules
+    @test TamerOp.Advanced.hull_summary === IR.hull_summary
+    @test TamerOp.Advanced.presentation_summary === IR.presentation_summary
+    @test TamerOp.Advanced.materialize_generators === IR.materialize_generators
+    @test TamerOp.Advanced.resolution_length === IR.resolution_length
+    @test TamerOp.Advanced.generator_count === IR.generator_count
+    @test TamerOp.Advanced.check_projective_cover === IR.check_projective_cover
+    @test TamerOp.Advanced.indicator_resolution_validation_summary === IR.indicator_resolution_validation_summary
 end
 
 @testset "IndicatorResolutions cache miss lifecycle parity" begin
@@ -405,19 +1089,25 @@ end
     H = FF.FringeModule{K}(P, U, D, Phi; field=field)
 
     payload = IR.indicator_resolutions(H, H; maxlen=3, threads=false)
+    cache_payload = IR._indicator_resolutions_cache_payload(payload)
     key = CM._resolution_key3(H, H, 3)
+    PT = typeof(P)
+    UP = TamerOp.IndicatorTypes.UpsetPresentation{K,PT,Nothing,SparseMatrixCSC{K,Int}}
+    DP = TamerOp.IndicatorTypes.DownsetCopresentation{K,PT,Nothing,SparseMatrixCSC{K,Int}}
     cache_val_type = Tuple{
-        Vector{PosetModules.IndicatorTypes.UpsetPresentation{K}},
+        Vector{UP},
         Vector{SparseMatrixCSC{K,Int}},
-        Vector{PosetModules.IndicatorTypes.DownsetCopresentation{K}},
+        Vector{DP},
         Vector{SparseMatrixCSC{K,Int}},
     }
 
     rc = CM.ResolutionCache()
-    stored = IR._resolution_cache_indicator_store!(rc, key, payload)
-    @test stored === payload
-    @test IR._resolution_cache_indicator_get(rc, key, cache_val_type) === payload
-    @test rc.indicator_primary_type === typeof(payload)
+    stored = IR._resolution_cache_indicator_store!(rc, key, cache_payload)
+    @test stored === cache_payload
+    @test IR._resolution_cache_indicator_get(rc, key, cache_val_type) === cache_payload
+    @test rc.indicator_primary_type === typeof(cache_payload)
+    @test eltype(cache_payload[1]) === UP
+    @test eltype(cache_payload[3]) === DP
 
     other_key = CM._resolution_key3(H, H, 4)
     @test IR._resolution_cache_indicator_store!(rc, other_key, 17) == 17
@@ -547,7 +1237,7 @@ end
     S[1, 1] = one(K)
     f = MD.PMorphism{K}(Dom, Cod, [S, S])
 
-    AB = PosetModules.AbelianCategories
+    AB = TamerOp.AbelianCategories
     @test AB._is_partial_permutation(field, S)
 
     Kmod, iota = AB.kernel_with_inclusion(f)
@@ -598,7 +1288,7 @@ end
     S3[1:2, 1:2] .= S
     f2 = MD.PMorphism{K}(dom2, cod2, [S3, S3])
 
-    AB = PosetModules.AbelianCategories
+    AB = TamerOp.AbelianCategories
     kcache = Any[]
     AB.kernel_with_inclusion(f1; incremental_cache=kcache)
     K_inc, i_inc = AB.kernel_with_inclusion(f2; incremental_cache=kcache)
@@ -667,13 +1357,19 @@ end
     H = FF.FringeModule{K}(P, U, D, Phi; field=field)
     M = IR.pmodule_from_fringe(H)
 
-    old = IR.INDICATOR_INCREMENTAL_LINALG[]
+    old_up = IR.INDICATOR_INCREMENTAL_LINALG[]
+    old_down_maps = IR.INDICATOR_DOWNSET_INCREMENTAL_LINALG_MIN_MAPS[]
+    old_down_entries = IR.INDICATOR_DOWNSET_INCREMENTAL_LINALG_MIN_ENTRIES[]
     try
         IR.INDICATOR_INCREMENTAL_LINALG[] = false
+        IR.INDICATOR_DOWNSET_INCREMENTAL_LINALG_MIN_MAPS[] = typemax(Int)
+        IR.INDICATOR_DOWNSET_INCREMENTAL_LINALG_MIN_ENTRIES[] = typemax(Int)
         F_off, dF_off = IR.upset_resolution(M; maxlen=2, threads=false)
         E_off, dE_off = IR.downset_resolution(M; maxlen=2, threads=false)
 
         IR.INDICATOR_INCREMENTAL_LINALG[] = true
+        IR.INDICATOR_DOWNSET_INCREMENTAL_LINALG_MIN_MAPS[] = 1
+        IR.INDICATOR_DOWNSET_INCREMENTAL_LINALG_MIN_ENTRIES[] = 0
         F_on, dF_on = IR.upset_resolution(M; maxlen=2, threads=false)
         E_on, dE_on = IR.downset_resolution(M; maxlen=2, threads=false)
 
@@ -682,7 +1378,9 @@ end
         @test length(E_off) == length(E_on)
         @test dE_off == dE_on
     finally
-        IR.INDICATOR_INCREMENTAL_LINALG[] = old
+        IR.INDICATOR_INCREMENTAL_LINALG[] = old_up
+        IR.INDICATOR_DOWNSET_INCREMENTAL_LINALG_MIN_MAPS[] = old_down_maps
+        IR.INDICATOR_DOWNSET_INCREMENTAL_LINALG_MIN_ENTRIES[] = old_down_entries
     end
 end
 
@@ -697,24 +1395,41 @@ end
     Phi[1, 1] = CM.coerce(field, 1)
     Phi[1, 2] = CM.coerce(field, 1)
     H = FF.FringeModule{K}(P, U, D, Phi; field=field)
-    M = IR.pmodule_from_fringe(H)
+    M0 = IR.pmodule_from_fringe(H)
+    M = M0
+    for _ in 1:5
+        M = MD.direct_sum(M, M0)
+    end
 
-    IR._clear_indicator_prefix_caches!()
-    F1, dF1 = IR.upset_resolution(M; maxlen=1, threads=false)
-    E1, dE1 = IR.downset_resolution(M; maxlen=1, threads=false)
-    @test length(dF1) <= 1
-    @test length(dE1) <= 1
-    @test IR._upset_prefix_steps(M) == length(dF1)
-    @test IR._downset_prefix_steps(M) == length(dE1)
+    old_up_prefix = IR.INDICATOR_PREFIX_CACHE_ENABLED[]
+    old_up_steps = IR.INDICATOR_UPSET_PREFIX_CACHE_MIN_STEPS[]
+    old_up_vertices = IR.INDICATOR_UPSET_PREFIX_CACHE_MIN_VERTICES[]
+    old_up_dims = IR.INDICATOR_UPSET_PREFIX_CACHE_MIN_TOTAL_DIMS[]
+    try
+        IR.INDICATOR_PREFIX_CACHE_ENABLED[] = true
+        IR.INDICATOR_UPSET_PREFIX_CACHE_MIN_STEPS[] = 1
+        IR.INDICATOR_UPSET_PREFIX_CACHE_MIN_VERTICES[] = 1
+        IR.INDICATOR_UPSET_PREFIX_CACHE_MIN_TOTAL_DIMS[] = 0
+        IR._clear_indicator_prefix_caches!()
+        F1, dF1 = IR.upset_resolution(M; maxlen=1, threads=false)
+        E1, dE1 = IR.downset_resolution(M; maxlen=1, threads=false)
+        @test length(dF1) <= 1
+        @test length(dE1) <= 1
+        @test IR._upset_prefix_steps(M) == length(dF1)
 
-    F2, dF2 = IR.upset_resolution(M; maxlen=2, threads=false)
-    E2, dE2 = IR.downset_resolution(M; maxlen=2, threads=false)
-    @test length(F2) >= length(F1)
-    @test length(E2) >= length(E1)
-    @test length(dF2) >= length(dF1)
-    @test length(dE2) >= length(dE1)
-    @test IR._upset_prefix_steps(M) == length(dF2)
-    @test IR._downset_prefix_steps(M) == length(dE2)
+        F2, dF2 = IR.upset_resolution(M; maxlen=2, threads=false)
+        E2, dE2 = IR.downset_resolution(M; maxlen=2, threads=false)
+        @test length(F2) >= length(F1)
+        @test length(E2) >= length(E1)
+        @test length(dF2) >= length(dF1)
+        @test length(dE2) >= length(dE1)
+        @test IR._upset_prefix_steps(M) == length(dF2)
+    finally
+        IR.INDICATOR_PREFIX_CACHE_ENABLED[] = old_up_prefix
+        IR.INDICATOR_UPSET_PREFIX_CACHE_MIN_STEPS[] = old_up_steps
+        IR.INDICATOR_UPSET_PREFIX_CACHE_MIN_VERTICES[] = old_up_vertices
+        IR.INDICATOR_UPSET_PREFIX_CACHE_MIN_TOTAL_DIMS[] = old_up_dims
+    end
 end
 
 @testset "IndicatorResolutions thread gate tiny-case policy" begin
@@ -780,6 +1495,8 @@ end
     F_coerced = IR.UpsetPresentation(P, [U2], FF.Upset[], spzeros(Float64, 0, 1), nothing; field=field)
     @test eltype(F_infer.delta) == K
     @test eltype(F_coerced.delta) == K
+    @test F_infer isa IR.UpsetPresentation{K,typeof(P),Nothing,SparseMatrixCSC{K,Int}}
+    @test F_coerced isa IR.UpsetPresentation{K,typeof(P),Nothing,SparseMatrixCSC{K,Int}}
     @test_throws MethodError IR.UpsetPresentation{K}(P, [U2], FF.Upset[], spzeros(K, 0, 1), nothing; field=field)
 
     # delta is |U1| x |U0| = 1 x 2. Put a nonzero at (U2 row, U3 col).
@@ -801,6 +1518,8 @@ end
     E_coerced = IR.DownsetCopresentation(P, [D2], FF.Downset[], spzeros(Float64, 0, 1), nothing; field=field)
     @test eltype(E_infer.rho) == K
     @test eltype(E_coerced.rho) == K
+    @test E_infer isa IR.DownsetCopresentation{K,typeof(P),Nothing,SparseMatrixCSC{K,Int}}
+    @test E_coerced isa IR.DownsetCopresentation{K,typeof(P),Nothing,SparseMatrixCSC{K,Int}}
     @test_throws MethodError IR.DownsetCopresentation{K}(P, [D2], FF.Downset[], spzeros(K, 0, 1), nothing; field=field)
 
     rho_bad = spzeros(K, 1, 1)
@@ -808,6 +1527,73 @@ end
 
     @test_throws ErrorException IR.verify_downset_resolution([E0, E1], [rho_bad];
         check_d2=false, check_exactness=false)
+end
+
+@testset "IndicatorTypes inspection and validation UX" begin
+    IT = TamerOp.IndicatorTypes
+    P = chain_poset(3)
+    P2 = chain_poset(3)
+    U1 = FF.principal_upset(P, 1)
+    U2 = FF.principal_upset(P, 2)
+    D2 = FF.principal_downset(P, 2)
+    D3 = FF.principal_downset(P, 3)
+
+    delta = reshape(QQ[1], 1, 1)
+    rho = reshape(QQ[1], 1, 1)
+
+    F = IT.UpsetPresentation{QQ}(P, [U1], [U2], delta, nothing)
+    E = IT.DownsetCopresentation{QQ}(P, [D2], [D3], rho, nothing)
+
+    @test TO.ambient_poset(F) === P
+    @test TO.base_poset(F) === P
+    @test TO.field(F) == CM.QQField()
+    @test TO.describe(F).kind == :upset_presentation
+    @test TO.describe(F).ngenerators == 1
+    @test IT.generator_labels(F) == [U1]
+    @test IT.relation_labels(F) == [U2]
+    @test IT.presentation_matrix(F) == delta
+    @test IT.attached_fringe(F) === nothing
+    @test sprint(show, F) == "UpsetPresentation(field=QQ, nvertices=3, ngenerators=1, nrelations=1)"
+    @test occursin("matrix_size: (1, 1)", repr("text/plain", F))
+
+    @test TO.ambient_poset(E) === P
+    @test TO.base_poset(E) === P
+    @test TO.field(E) == CM.QQField()
+    @test TO.describe(E).kind == :downset_copresentation
+    @test TO.describe(E).ncogenerators == 1
+    @test IT.cogenerator_labels(E) == [D2]
+    @test IT.corelation_labels(E) == [D3]
+    @test IT.copresentation_matrix(E) == rho
+    @test IT.attached_fringe(E) === nothing
+    @test sprint(show, E) == "DownsetCopresentation(field=QQ, nvertices=3, ncogenerators=1, ncorelations=1)"
+    @test occursin("matrix_size: (1, 1)", repr("text/plain", E))
+
+    repF = IT.check_upset_presentation(F)
+    repE = IT.check_downset_copresentation(E)
+    @test repF.valid
+    @test repE.valid
+    @test IT.check_upset_presentation(F; throw=true).valid
+    @test IT.check_downset_copresentation(E; throw=true).valid
+
+    Ubad = FF.principal_upset(P2, 1)
+    Dbad = FF.principal_downset(P2, 2)
+    F_bad = IT.UpsetPresentation{QQ,typeof(P),Nothing,Matrix{QQ}}(P, [Ubad], [U2], delta, nothing)
+    E_bad = IT.DownsetCopresentation{QQ,typeof(P),Nothing,Matrix{QQ}}(P, [Dbad], [D3], rho, nothing)
+    repF_bad = IT.check_upset_presentation(F_bad)
+    repE_bad = IT.check_downset_copresentation(E_bad)
+    @test !repF_bad.valid
+    @test !repE_bad.valid
+    @test any(occursin("ambient poset", s) || occursin("does not belong to the ambient poset", s) for s in repF_bad.issues)
+    @test any(occursin("ambient poset", s) || occursin("does not belong to the ambient poset", s) for s in repE_bad.issues)
+    @test_throws ArgumentError IT.check_upset_presentation(F_bad; throw=true)
+    @test_throws ArgumentError IT.check_downset_copresentation(E_bad; throw=true)
+
+    @test TOA.UpsetPresentation === IT.UpsetPresentation
+    @test TOA.DownsetCopresentation === IT.DownsetCopresentation
+    @test TOA.check_upset_presentation === IT.check_upset_presentation
+    @test TOA.check_downset_copresentation === IT.check_downset_copresentation
+    @test TOA.generator_labels === IT.generator_labels
+    @test TOA.copresentation_matrix === IT.copresentation_matrix
 end
 
 
@@ -1474,6 +2260,8 @@ end
     old_scalar_overlap = MD.MAP_LEQ_MANY_LONG_SCALAR_MAX_OVERLAP_QQ[]
     old_scalar_target = MD.MAP_LEQ_MANY_LONG_SCALAR_MAX_TARGET_REPEAT_QQ[]
     old_scalar_hops = MD.MAP_LEQ_MANY_LONG_MIN_AVG_HOPS_QQ[]
+    old_nemo_hops = MD.MAP_LEQ_QQ_NEMO_LONG_MIN_HOPS[]
+    old_nemo_work = MD.MAP_LEQ_QQ_NEMO_LONG_MIN_WORK[]
     try
         MD.MAP_LEQ_MANY_PLAN_MIN_LEN[] = typemax(Int)
         MD.MAP_LEQ_MANY_ONEOFF_LONG_MIN_LEN[] = 1
@@ -1500,6 +2288,8 @@ end
         MD.MAP_LEQ_MANY_LONG_SCALAR_MAX_OVERLAP_QQ[] = old_scalar_overlap
         MD.MAP_LEQ_MANY_LONG_SCALAR_MAX_TARGET_REPEAT_QQ[] = old_scalar_target
         MD.MAP_LEQ_MANY_LONG_MIN_AVG_HOPS_QQ[] = old_scalar_hops
+        MD.MAP_LEQ_QQ_NEMO_LONG_MIN_HOPS[] = old_nemo_hops
+        MD.MAP_LEQ_QQ_NEMO_LONG_MIN_WORK[] = old_nemo_work
     end
 end
 
@@ -1531,6 +2321,8 @@ end
     old_oneoff_long = MD.MAP_LEQ_MANY_ONEOFF_LONG_MIN_LONG[]
     old_oneoff_overlap = MD.MAP_LEQ_MANY_ONEOFF_MIN_OVERLAP_QQ[]
     old_oneoff_target = MD.MAP_LEQ_MANY_ONEOFF_MIN_TARGET_REPEAT_QQ[]
+    old_nemo_hops = MD.MAP_LEQ_QQ_NEMO_LONG_MIN_HOPS[]
+    old_nemo_work = MD.MAP_LEQ_QQ_NEMO_LONG_MIN_WORK[]
     try
         MD.MAP_LEQ_MANY_PLAN_MIN_LEN[] = 1
         MD.MAP_LEQ_MANY_ONEOFF_LONG_MIN_LEN[] = 1
@@ -1544,12 +2336,27 @@ end
         batch = MD.map_leq_many(M, pairs; cache=cc)
         @test any(!isempty(d) for d in M.map_many_plan)
         @test all(batch[i] == MD.map_leq(M, pairs[i][1], pairs[i][2]; cache=cc) for i in eachindex(pairs))
+
+        if MD.FieldLinAlg._have_nemo()
+            MD.MAP_LEQ_QQ_NEMO_LONG_MIN_HOPS[] = 1
+            MD.MAP_LEQ_QQ_NEMO_LONG_MIN_WORK[] = 0
+            MD.FieldLinAlg._reset_conversion_counters!()
+            FF._clear_chain_parent_cache!(cc)
+            MD._clear_map_leq_memo!(M)
+            MD._clear_map_leq_many_plan_cache!(M)
+            batch = MD.map_leq_many(M, pairs; cache=cc)
+            counters = MD.FieldLinAlg._conversion_counters()
+            @test counters.qq_to_nemo > 0
+            @test all(batch[i] == MD.map_leq(M, pairs[i][1], pairs[i][2]; cache=cc) for i in eachindex(pairs))
+        end
     finally
         MD.MAP_LEQ_MANY_PLAN_MIN_LEN[] = old_plan_min
         MD.MAP_LEQ_MANY_ONEOFF_LONG_MIN_LEN[] = old_oneoff_min
         MD.MAP_LEQ_MANY_ONEOFF_LONG_MIN_LONG[] = old_oneoff_long
         MD.MAP_LEQ_MANY_ONEOFF_MIN_OVERLAP_QQ[] = old_oneoff_overlap
         MD.MAP_LEQ_MANY_ONEOFF_MIN_TARGET_REPEAT_QQ[] = old_oneoff_target
+        MD.MAP_LEQ_QQ_NEMO_LONG_MIN_HOPS[] = old_nemo_hops
+        MD.MAP_LEQ_QQ_NEMO_LONG_MIN_WORK[] = old_nemo_work
     end
 end
 
@@ -1599,6 +2406,9 @@ end
     old_oneoff_target = MD.MAP_LEQ_MANY_ONEOFF_MIN_TARGET_REPEAT_QQ[]
     old_scalar_overlap = MD.MAP_LEQ_MANY_LONG_SCALAR_MAX_OVERLAP_QQ[]
     old_scalar_target = MD.MAP_LEQ_MANY_LONG_SCALAR_MAX_TARGET_REPEAT_QQ[]
+    old_scalar_hops = MD.MAP_LEQ_MANY_LONG_MIN_AVG_HOPS_QQ[]
+    old_nemo_hops = MD.MAP_LEQ_QQ_NEMO_LONG_MIN_HOPS[]
+    old_nemo_work = MD.MAP_LEQ_QQ_NEMO_LONG_MIN_WORK[]
     try
         MD.MAP_LEQ_MANY_PLAN_MIN_LEN[] = typemax(Int)
         MD.MAP_LEQ_MANY_ONEOFF_LONG_MIN_LEN[] = 1
@@ -1607,6 +2417,7 @@ end
         MD.MAP_LEQ_MANY_ONEOFF_MIN_TARGET_REPEAT_QQ[] = 1.0
         MD.MAP_LEQ_MANY_LONG_SCALAR_MAX_OVERLAP_QQ[] = 1.0
         MD.MAP_LEQ_MANY_LONG_SCALAR_MAX_TARGET_REPEAT_QQ[] = 1.0
+        MD.MAP_LEQ_MANY_LONG_MIN_AVG_HOPS_QQ[] = 0.0
         FF._clear_chain_parent_cache!(cc)
         MD._clear_map_leq_memo!(M)
         MD._clear_map_leq_many_plan_cache!(M)
@@ -1625,6 +2436,18 @@ end
         @test map(objectid, out) == ids
         @test sum(length.(M.map_compose)) == 0
         @test all(out[i] == MD.map_leq(M, pairs[i][1], pairs[i][2]; cache=cc) for i in eachindex(pairs))
+
+        if MD.FieldLinAlg._have_nemo()
+            MD.MAP_LEQ_QQ_NEMO_LONG_MIN_HOPS[] = 1
+            MD.MAP_LEQ_QQ_NEMO_LONG_MIN_WORK[] = 0
+            MD.FieldLinAlg._reset_conversion_counters!()
+            FF._clear_chain_parent_cache!(cc)
+            MD._clear_map_leq_memo!(M)
+            @test MD._map_leq_many_scalar_long_batch!(out, M, arena, stats)
+            counters = MD.FieldLinAlg._conversion_counters()
+            @test counters.qq_to_nemo > 0
+            @test all(out[i] == MD.map_leq(M, pairs[i][1], pairs[i][2]; cache=cc) for i in eachindex(pairs))
+        end
     finally
         MD.MAP_LEQ_MANY_PLAN_MIN_LEN[] = old_plan_min
         MD.MAP_LEQ_MANY_ONEOFF_LONG_MIN_LEN[] = old_oneoff_min
@@ -1633,6 +2456,9 @@ end
         MD.MAP_LEQ_MANY_ONEOFF_MIN_TARGET_REPEAT_QQ[] = old_oneoff_target
         MD.MAP_LEQ_MANY_LONG_SCALAR_MAX_OVERLAP_QQ[] = old_scalar_overlap
         MD.MAP_LEQ_MANY_LONG_SCALAR_MAX_TARGET_REPEAT_QQ[] = old_scalar_target
+        MD.MAP_LEQ_MANY_LONG_MIN_AVG_HOPS_QQ[] = old_scalar_hops
+        MD.MAP_LEQ_QQ_NEMO_LONG_MIN_HOPS[] = old_nemo_hops
+        MD.MAP_LEQ_QQ_NEMO_LONG_MIN_WORK[] = old_nemo_work
     end
 end
 
@@ -1903,7 +2729,12 @@ end
         A = MD.map_leq(M, 1, 6; cache=cc)
         @test A == K[c(720) c(0); c(0) c(720)]
         @test sum(length.(M.map_compose)) == 0
-        @test any(any(d.seen) for d in M.map_compose_dense)
+        if M.map_pred_slot_dense === nothing
+            @test any(!isempty(d) for d in M.map_pred_slot)
+        else
+            @test any(any(d.seen) for d in M.map_pred_slot_dense)
+        end
+        @test all(!any(d.seen) for d in M.map_compose_dense)
 
         MD._clear_map_leq_memo!(M)
         @test all(!any(d.seen) for d in M.map_compose_dense)

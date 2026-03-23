@@ -1,7 +1,7 @@
 example=90_advanced_indicator_resolutions_and_ext
 timestamp_utc=2026-02-18T18:20:00
 poset_vertices=2
-projective_resolution_type=Main.PosetModules.DerivedFunctors.Resolutions.ProjectiveResolution{Rational{BigInt}}
-injective_resolution_type=Main.PosetModules.DerivedFunctors.Resolutions.InjectiveResolution{Rational{BigInt}}
+projective_resolution_type=Main.TamerOp.DerivedFunctors.Resolutions.ProjectiveResolution{Rational{BigInt}}
+injective_resolution_type=Main.TamerOp.DerivedFunctors.Resolutions.InjectiveResolution{Rational{BigInt}}
 ext_dims=1,0,0
 ext_cache_reuse=true

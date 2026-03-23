@@ -1,3 +1,0 @@
-case,family,stage,cache_mode,median_ms,p90_ms,median_alloc_kib
-t2_degree_local_probe_graded_fan,point,module,local_on,0.12975,0.944298,212.179688
-t2_degree_local_probe_graded_fan,point,module,local_off,3.86979,4.537422,1689.96875

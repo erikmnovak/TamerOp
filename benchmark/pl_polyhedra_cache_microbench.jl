@@ -3,15 +3,15 @@
 using Random
 
 try
-    using PosetModules
+    using TamerOp
 catch
-    include(joinpath(@__DIR__, "..", "src", "PosetModules.jl"))
-    using .PosetModules
+    include(joinpath(@__DIR__, "..", "src", "TamerOp.jl"))
+    using .TamerOp
 end
 
-const PM = PosetModules.Advanced
-const PLP = PM.PLPolyhedra
-const RG = PM.RegionGeometry
+const TO = TamerOp.Advanced
+const PLP = TO.PLPolyhedra
+const RG = TO.RegionGeometry
 
 function _parse_arg(args, key::String, default::Int)
     for a in args
@@ -53,6 +53,68 @@ function _with_bool_toggle(f::Function, ref::Base.RefValue{Bool}, value::Bool)
     finally
         ref[] = old
     end
+end
+
+function _packed_to_vectors(buckets)
+    out = Vector{Vector{Int}}(undef, length(buckets.ptr) - 1)
+    @inbounds for i in eachindex(out)
+        lo = buckets.ptr[i]
+        hi = buckets.ptr[i + 1] - 1
+        out[i] = hi < lo ? Int[] : collect(@view buckets.idx[lo:hi])
+    end
+    return out
+end
+
+function _bench_prefetched_bucket_scan_packed!(dest::Vector{Int}, pi, X)
+    @inbounds for col in 1:size(X, 2)
+        bid = PLP._spatial_bucket_id_col(pi.prefilter, X, col)
+        if bid == 0
+            dest[col] = PLP._locate_hybrid_col(
+                pi, X, col;
+                cache=nothing,
+                verify_safe=false,
+                use_multiproj=false,
+                tol=PLP.LOCATE_FLOAT_TOL,
+                boundary_tol=PLP.LOCATE_BOUNDARY_TOL,
+            )
+        else
+            cands = pi.prefilter.spatial.buckets[bid]
+            dest[col] = isempty(cands) ? 0 : PLP._locate_hybrid_col_prefetched(
+                pi, X, col, cands;
+                verify_safe=false,
+                use_multiproj=false,
+                tol=PLP.LOCATE_FLOAT_TOL,
+                boundary_tol=PLP.LOCATE_BOUNDARY_TOL,
+            )
+        end
+    end
+    return dest
+end
+
+function _bench_prefetched_bucket_scan_legacy!(dest::Vector{Int}, pi, X, legacy_buckets)
+    @inbounds for col in 1:size(X, 2)
+        bid = PLP._spatial_bucket_id_col(pi.prefilter, X, col)
+        if bid == 0
+            dest[col] = PLP._locate_hybrid_col(
+                pi, X, col;
+                cache=nothing,
+                verify_safe=false,
+                use_multiproj=false,
+                tol=PLP.LOCATE_FLOAT_TOL,
+                boundary_tol=PLP.LOCATE_BOUNDARY_TOL,
+            )
+        else
+            cands = legacy_buckets[bid]
+            dest[col] = isempty(cands) ? 0 : PLP._locate_hybrid_col_prefetched(
+                pi, X, col, cands;
+                verify_safe=false,
+                use_multiproj=false,
+                tol=PLP.LOCATE_FLOAT_TOL,
+                boundary_tol=PLP.LOCATE_BOUNDARY_TOL,
+            )
+        end
+    end
+    return dest
 end
 
 function _make_poly_fixture(nregions::Int)
@@ -183,6 +245,7 @@ function run_microbench(; nregions::Int=64, nqueries::Int=12_000,
         Xg[2, j] = rand(rng_grid) * float(grid_side) - 1e-3
     end
     dest_g = Vector{Int}(undef, nqueries_grid)
+    legacy_grid_buckets = _packed_to_vectors(pi_grid.prefilter.spatial.buckets)
     push!(rows, _bench("plpoly_locate_many_grid_nocache_serial", reps_grid, () -> begin
         PLP.locate_many!(dest_g, pi_grid, Xg; threaded=false, mode=:fast)
     end))
@@ -198,6 +261,55 @@ function run_microbench(; nregions::Int=64, nqueries::Int=12_000,
         _with_bool_toggle(PLP._LOCATE_BUCKET_GROUPING, true) do
             PLP.locate_many!(dest_g, pi_grid, Xg; threaded=true, mode=:fast)
         end
+    end))
+    push!(rows, _bench("plpoly_locate_many_grid_group_auto", reps_grid, () -> begin
+        PLP.locate_many!(dest_g, pi_grid, Xg; threaded=true, mode=:fast)
+    end))
+    push!(rows, _bench("plpoly_prefetched_bucket_scan_legacy", reps_grid, () -> begin
+        _bench_prefetched_bucket_scan_legacy!(dest_g, pi_grid, Xg, legacy_grid_buckets)
+    end))
+    push!(rows, _bench("plpoly_prefetched_bucket_scan_packed", reps_grid, () -> begin
+        _bench_prefetched_bucket_scan_packed!(dest_g, pi_grid, Xg)
+    end))
+    push!(rows, _bench("plpoly_prefetched_bucket_scan_exactcache_off", reps_grid, () -> begin
+        _with_bool_toggle(() -> _bench_prefetched_bucket_scan_packed!(dest_g, pi_grid, Xg),
+                          PLP._LOCATE_COL_QQ_CACHE, false)
+    end))
+    push!(rows, _bench("plpoly_prefetched_bucket_scan_exactcache_on", reps_grid, () -> begin
+        _with_bool_toggle(() -> _bench_prefetched_bucket_scan_packed!(dest_g, pi_grid, Xg),
+                          PLP._LOCATE_COL_QQ_CACHE, true)
+    end))
+    push!(rows, _bench("plpoly_prefetched_bucket_scan_rowdotcache_off", reps_grid, () -> begin
+        _with_bool_toggle(() -> _with_bool_toggle(() -> _bench_prefetched_bucket_scan_packed!(dest_g, pi_grid, Xg),
+                                                  PLP._LOCATE_COL_QQ_CACHE, true),
+                          PLP._LOCATE_ROW_DOT_CACHE, false)
+    end))
+    push!(rows, _bench("plpoly_prefetched_bucket_scan_rowdotcache_on", reps_grid, () -> begin
+        _with_bool_toggle(() -> _with_bool_toggle(() -> _bench_prefetched_bucket_scan_packed!(dest_g, pi_grid, Xg),
+                                                  PLP._LOCATE_COL_QQ_CACHE, true),
+                          PLP._LOCATE_ROW_DOT_CACHE, true)
+    end))
+    push!(rows, _bench("plpoly_locate_many_grid_group_on_exactcache_off", reps_grid, () -> begin
+        _with_bool_toggle(() -> _with_bool_toggle(() -> PLP.locate_many!(dest_g, pi_grid, Xg; threaded=true, mode=:fast),
+                                                  PLP._LOCATE_BUCKET_GROUPING, true),
+                          PLP._LOCATE_COL_QQ_CACHE, false)
+    end))
+    push!(rows, _bench("plpoly_locate_many_grid_group_on_exactcache_on", reps_grid, () -> begin
+        _with_bool_toggle(() -> _with_bool_toggle(() -> PLP.locate_many!(dest_g, pi_grid, Xg; threaded=true, mode=:fast),
+                                                  PLP._LOCATE_BUCKET_GROUPING, true),
+                          PLP._LOCATE_COL_QQ_CACHE, true)
+    end))
+    push!(rows, _bench("plpoly_locate_many_grid_group_on_rowdotcache_off", reps_grid, () -> begin
+        _with_bool_toggle(() -> _with_bool_toggle(() -> _with_bool_toggle(() -> PLP.locate_many!(dest_g, pi_grid, Xg; threaded=true, mode=:fast),
+                                                                          PLP._LOCATE_BUCKET_GROUPING, true),
+                                                  PLP._LOCATE_COL_QQ_CACHE, true),
+                          PLP._LOCATE_ROW_DOT_CACHE, false)
+    end))
+    push!(rows, _bench("plpoly_locate_many_grid_group_on_rowdotcache_on", reps_grid, () -> begin
+        _with_bool_toggle(() -> _with_bool_toggle(() -> _with_bool_toggle(() -> PLP.locate_many!(dest_g, pi_grid, Xg; threaded=true, mode=:fast),
+                                                                          PLP._LOCATE_BUCKET_GROUPING, true),
+                                                  PLP._LOCATE_COL_QQ_CACHE, true),
+                          PLP._LOCATE_ROW_DOT_CACHE, true)
     end))
 
     push!(rows, _bench("plpoly_boundary_breakdown_batch_off", reps_breakdown, () -> begin
@@ -295,6 +407,9 @@ function run_microbench(; nregions::Int=64, nqueries::Int=12_000,
         _with_bool_toggle(PLP._LOCATE_BUCKET_GROUPING, true) do
             PLP.locate_many!(dest_skew, pi_grid, Xg_skew; threaded=true, mode=:fast)
         end
+    end))
+    push!(rows, _bench("plpoly_locate_many_grid_group_auto_skewed", reps_grid, () -> begin
+        PLP.locate_many!(dest_skew, pi_grid, Xg_skew; threaded=true, mode=:fast)
     end))
     return rows
 end

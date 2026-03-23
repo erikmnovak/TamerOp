@@ -33,18 +33,18 @@ println("Mask size: ", size(masks[1]))
 
 stage("2) Encode each image with ImageDistanceBifiltration")
 
-field = PM.CoreModules.F2()
-encodings = Vector{PM.EncodingResult}(undef, length(imgs))
+field = TO.CoreModules.F2()
+encodings = Vector{TO.EncodingResult}(undef, length(imgs))
 for i in eachindex(imgs)
-    filt = PM.ImageDistanceBifiltration(; mask=masks[i])
-    encodings[i] = PM.encode(imgs[i], filt; degree=0, field=field, cache=:auto)
+    filt = TO.ImageDistanceBifiltration(; mask=masks[i])
+    encodings[i] = TO.encode(imgs[i], filt; degree=0, field=field, cache=:auto)
 end
 
 samples = to_encoding_samples(encodings, labels; prefix="img")
 
 stage("3) Direct invariant sanity checks on the first sample")
 
-opts = PM.InvariantOptions(
+opts = TO.InvariantOptions(
     ;
     axes_policy=:encoding,
     max_axis_len=64,
@@ -53,7 +53,7 @@ opts = PM.InvariantOptions(
     pl_mode=:fast,
 )
 
-surf0 = PM.euler_surface(encodings[1]; opts=opts)
+surf0 = TO.euler_surface(encodings[1]; opts=opts)
 println("euler_surface(first image) size: ", size(surf0))
 
 dirs = [[1.0, 0.0], [0.0, 1.0], [1.0, 1.0]]
@@ -62,19 +62,19 @@ offs = [
     collect(range(-0.5, stop=0.5, length=5)),
     collect(range(-0.7, stop=0.7, length=5)),
 ]
-sb0 = PM.slice_barcodes(encodings[1]; opts=opts, directions=dirs, offsets=offs, threads=true)
+sb0 = TO.slice_barcodes(encodings[1]; opts=opts, directions=dirs, offsets=offs, threads=true)
 println("slice_barcodes(first image) keys: ", collect(keys(sb0)))
 
 stage("4) Featurize dataset")
 
-euler_spec = PM.EulerSurfaceSpec(
+euler_spec = TO.EulerSurfaceSpec(
     ;
     axes_policy=:encoding,
     max_axis_len=64,
     threads=true,
 )
 
-sbar_spec = PM.SlicedBarcodeSpec(
+sbar_spec = TO.SlicedBarcodeSpec(
     ;
     directions=dirs,
     offsets=offs,
@@ -84,21 +84,21 @@ sbar_spec = PM.SlicedBarcodeSpec(
     threads=true,
 )
 
-spec = PM.CompositeSpec((euler_spec, sbar_spec))
+spec = TO.CompositeSpec((euler_spec, sbar_spec))
 
-sc = PM.SessionCache()
-fs = PM.batch_transform(
+sc = TO.SessionCache()
+fs = TO.batch_transform(
     samples,
     spec;
     opts=opts,
     idfun=s -> s.id,
     labelfun=s -> s.label,
-    batch=PM.BatchOptions(threaded=true, backend=:threads, progress=false, deterministic=true),
+    batch=TO.BatchOptions(threaded=true, backend=:threads, progress=false, deterministic=true),
     cache=sc,
 )
 
 println("Feature matrix shape: ", size(fs.X))
-println("First 5 feature names: ", PM.feature_names(spec)[1:5])
+println("First 5 feature names: ", TO.feature_names(spec)[1:5])
 
 stage("5) Save outputs")
 

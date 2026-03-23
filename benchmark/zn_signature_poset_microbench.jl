@@ -2,26 +2,26 @@
 
 using Random
 
-if isdefined(Main, :PosetModules)
-    const PosetModules = getfield(Main, :PosetModules)
+if isdefined(Main, :TamerOp)
+    const TamerOp = getfield(Main, :TamerOp)
 else
     try
-        using PosetModules
+        using TamerOp
     catch
-        include(joinpath(@__DIR__, "..", "src", "PosetModules.jl"))
-        using .PosetModules
+        include(joinpath(@__DIR__, "..", "src", "TamerOp.jl"))
+        using .TamerOp
     end
 end
 
-const PM = PosetModules.Advanced
-const CM = PM.CoreModules
-const OPT = PM.Options
-const DT = PM.DataTypes
-const EC = PM.EncodingCore
-const RES = PM.Results
-const FF = PM.FiniteFringe
-const FZ = PM.FlangeZn
-const ZE = PM.ZnEncoding
+const TO = TamerOp.Advanced
+const CM = TO.CoreModules
+const OPT = TO.Options
+const DT = TO.DataTypes
+const EC = TO.EncodingCore
+const RES = TO.Results
+const FF = TO.FiniteFringe
+const FZ = TO.FlangeZn
+const ZE = TO.ZnEncoding
 
 function _parse_arg(args, key::String, default::Int)
     for a in args
@@ -232,7 +232,7 @@ function _repeat_pmodule_via_fringe(P::FF.AbstractPoset, pi::ZE.ZnEncodingMap, F
     s = 0
     for _ in 1:reps
         H = ZE._pushforward_flange_to_fringe(P, pi, FG; strict=true)
-        M = PosetModules.IndicatorResolutions.pmodule_from_fringe(H)
+        M = TamerOp.IndicatorResolutions.pmodule_from_fringe(H)
         s += sum(M.dims)
     end
     return s
@@ -241,11 +241,11 @@ end
 function _repeat_workflow_encode(FG::FZ.Flange, reps::Int; use_session::Bool, warm_session::Bool=false)
     cache = use_session ? CM.SessionCache() : nothing
     if use_session && warm_session
-        PosetModules.encode(FG; backend=:zn, cache=cache)
+        TamerOp.encode(FG; backend=:zn, cache=cache)
     end
     total = 0
     for _ in 1:reps
-        enc = PosetModules.encode(FG; backend=:zn, cache=cache)
+        enc = TamerOp.encode(FG; backend=:zn, cache=cache)
         total += length(enc.H.U) + length(enc.H.D)
     end
     return total

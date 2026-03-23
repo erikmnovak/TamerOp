@@ -1,7 +1,0 @@
-case,family,stage,cache_mode,median_ms,p90_ms,median_alloc_kib
-t2_degree_local_probe_graded_fan,point,module,local_on,0.113377,0.137227,212.117188
-t2_degree_local_probe_graded_fan,point,module,local_off,4.418734,4.527755,1689.875
-monotone_rank_probe_graded_t1,point,cohomology_dims,monotone_on,1.132209,2.133484,1246.070312
-monotone_rank_probe_graded_t1,point,cohomology_dims,monotone_off,38.538502,47.411783,34184.742188
-degree_local_all_t_probe_graded_t1,point,encoding_result,all_t_on,2522.525261,2749.459438,1.716840328125e6
-degree_local_all_t_probe_graded_t1,point,encoding_result,all_t_off,2747.07246,3008.808257,1.716981609375e6

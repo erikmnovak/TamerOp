@@ -31,7 +31,7 @@ max_dim = 1
 
 [[cases]]
 id = "parity_n5000_d2_s11"
-regime = "normalized_parity"
+regime = "rips_parity"
 dataset = "gaussian_shell"
 n_points = 5000
 ambient_dim = 2
@@ -40,7 +40,7 @@ max_dim = 1
 
 [[cases]]
 id = "parity_n5000_d2_s17"
-regime = "normalized_parity"
+regime = "rips_parity"
 dataset = "gaussian_shell"
 n_points = 5000
 ambient_dim = 2
@@ -49,7 +49,7 @@ max_dim = 1
 
 [[cases]]
 id = "parity_n10000_d2_s11"
-regime = "normalized_parity"
+regime = "rips_parity"
 dataset = "gaussian_shell"
 n_points = 10000
 ambient_dim = 2
@@ -58,7 +58,7 @@ max_dim = 1
 
 [[cases]]
 id = "parity_n20000_d2_s11"
-regime = "normalized_parity"
+regime = "rips_parity"
 dataset = "gaussian_shell"
 n_points = 20000
 ambient_dim = 2
@@ -67,7 +67,7 @@ max_dim = 1
 
 [[cases]]
 id = "parity_n5000_d8_s11"
-regime = "normalized_parity"
+regime = "rips_parity"
 dataset = "gaussian_shell"
 n_points = 5000
 ambient_dim = 8
@@ -76,7 +76,7 @@ max_dim = 1
 
 [[cases]]
 id = "parity_n10000_d8_s11"
-regime = "normalized_parity"
+regime = "rips_parity"
 dataset = "gaussian_shell"
 n_points = 10000
 ambient_dim = 8
@@ -184,7 +184,7 @@ max_dim = 1
 
 [[cases]]
 id = "alpha_n200_d2_md2_s11"
-regime = "alpha_function_delaunay"
+regime = "alpha_parity"
 dataset = "gaussian_shell"
 n_points = 200
 ambient_dim = 2
@@ -193,7 +193,7 @@ max_dim = 2
 
 [[cases]]
 id = "alpha_n300_d2_md2_s17"
-regime = "alpha_function_delaunay"
+regime = "alpha_parity"
 dataset = "gaussian_shell"
 n_points = 300
 ambient_dim = 2

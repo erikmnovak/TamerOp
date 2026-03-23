@@ -4,6 +4,17 @@
 # Scope:
 #   Backend routing for individual operations together with Nemo conversion and
 #   backend-wrapper helpers used across the FieldLinAlg kernels.
+# Owns:
+#   - `_choose_linalg_backend` and operation-specific routing policy,
+#   - backend conversion/wrapper helpers,
+#   - sparse/dense shape heuristics that decide which kernel family runs.
+# Does not own:
+#   - threshold state (`thresholds.jl`),
+#   - actual elimination/solve kernels,
+#   - public API wrappers.
+# Depends on:
+#   - `thresholds.jl` for all routing thresholds and backend traits,
+#   - later engine files for the kernels selected here.
 # -----------------------------------------------------------------------------
 
 function _choose_linalg_backend(field::AbstractCoeffField, A; op::Symbol=:rank, backend::Symbol=:auto)
@@ -32,13 +43,12 @@ function _choose_linalg_backend(field::AbstractCoeffField, A; op::Symbol=:rank, 
                 return :julia_sparse
             end
             if op == :solve
-                if _qq_sparse_solve_use_julia(shape, dens, nnzA)
-                    return :julia_sparse
-                end
                 solve_thr = _qq_sparse_solve_threshold(shape, dens_bucket)
                 use_ge = _qq_sparse_solve_use_ge(shape, dens_bucket)
-                nnzA = _sparse_nnz(A)
                 choose_nemo = use_ge ? (nnzA >= solve_thr) : (nnzA <= solve_thr)
+                if !choose_nemo && _qq_sparse_solve_use_julia(shape, dens, nnzA)
+                    return :julia_sparse
+                end
                 if _have_nemo() && choose_nemo
                     return :nemo
                 end
@@ -115,6 +125,126 @@ function _choose_linalg_backend(field::AbstractCoeffField, A; op::Symbol=:rank, 
         return :float_dense_qr
     end
     return :julia_exact
+end
+
+"""
+    _explain_backend_choice(field, A; op=:rank, backend=:auto)
+
+Internal debugging helper for FieldLinAlg backend selection.
+
+Returns a compact named tuple describing:
+- the chosen backend,
+- the shape bucket used for QQ routing (when applicable),
+- sparse-density / nnz summary,
+- thresholds consulted,
+- a human-readable reason for the choice.
+"""
+function _explain_backend_choice(field::AbstractCoeffField, A; op::Symbol=:rank, backend::Symbol=:auto)
+    chosen = _choose_linalg_backend(field, A; op=op, backend=backend)
+    m, n = size(A)
+    work = m * n
+    sparse_like = _is_sparse_like(A)
+    nnzA = sparse_like ? _sparse_nnz(A) : nothing
+    density = sparse_like && work > 0 ? nnzA / work : nothing
+    fill = sparse_like && field isa QQField ? _qq_sparse_solve_fill(A) : nothing
+    shape_bucket = field isa QQField ? _qq_shape_bucket(m, n) : nothing
+    density_bucket = sparse_like && field isa QQField ? _qq_sparse_density_bucket(fill) : nothing
+    thresholds = NamedTuple[]
+    reason = "default exact backend"
+
+    if backend != :auto
+        return (
+            chosen_backend = chosen,
+            shape_bucket = shape_bucket,
+            density_summary = (sparse = sparse_like, nnz = nnzA, work = work, density = density, fill = fill, density_bucket = density_bucket),
+            thresholds_consulted = thresholds,
+            reason = "backend keyword forced to $(backend)",
+        )
+    end
+
+    if field isa QQField
+        if sparse_like
+            if op == :colspace
+                push!(thresholds, (name=:qq_sparse_colspace_rule, value=:heuristic))
+                reason = chosen == :julia_sparse ?
+                    "QQ sparse colspace heuristic stayed on Julia sparse path" :
+                    "QQ sparse colspace heuristic chose Nemo"
+            elseif op == :nullspace
+                push!(thresholds, (name=:qq_nemo_nullspace_threshold, value=_qq_nemo_threshold(:nullspace, shape_bucket)))
+                reason = chosen == :julia_sparse ?
+                    "QQ sparse nullspace heuristic stayed on Julia sparse path" :
+                    "QQ sparse nullspace crossed the Nemo threshold"
+            elseif op == :solve
+                solve_thr = _qq_sparse_solve_threshold(shape_bucket, density_bucket)
+                push!(thresholds, (name=:qq_sparse_solve_threshold, value=solve_thr))
+                push!(thresholds, (name=:qq_sparse_solve_policy_ge, value=_qq_sparse_solve_use_ge(shape_bucket, density_bucket)))
+                reason = chosen == :julia_sparse ?
+                    "QQ sparse solve heuristic stayed on Julia sparse path" :
+                    "QQ sparse solve heuristic selected Nemo"
+            else
+                push!(thresholds, (name=:qq_sparse_rank_julia_rule, value=:heuristic))
+                push!(thresholds, (name=:qq_nemo_rank_threshold, value=_qq_nemo_threshold(:rank, shape_bucket)))
+                reason = chosen == :julia_sparse ?
+                    "QQ sparse rank stayed on Julia sparse path" :
+                    "QQ sparse rank crossed the Nemo threshold"
+            end
+        else
+            if op == :nullspace
+                push!(thresholds, (name=:qq_nemo_nullspace_threshold, value=_qq_nemo_threshold(:nullspace, shape_bucket)))
+                push!(thresholds, (name=:qq_modular_nullspace_threshold, value=_qq_modular_threshold(:nullspace, shape_bucket)))
+                reason = chosen == :nemo ? "QQ dense nullspace crossed the Nemo threshold" :
+                         chosen == :modular ? "QQ dense nullspace crossed the modular threshold" :
+                         "QQ dense nullspace stayed on Julia exact path"
+            elseif op == :solve
+                push!(thresholds, (name=:qq_nemo_solve_threshold, value=_qq_nemo_threshold(:solve, shape_bucket)))
+                push!(thresholds, (name=:qq_modular_solve_threshold, value=_qq_modular_threshold(:solve, shape_bucket)))
+                reason = chosen == :nemo ? "QQ dense solve crossed the Nemo threshold" :
+                         chosen == :modular ? "QQ dense solve crossed the modular threshold" :
+                         "QQ dense solve stayed on Julia exact path"
+            else
+                push!(thresholds, (name=:qq_nemo_rank_threshold, value=_qq_nemo_threshold(:rank, shape_bucket)))
+                reason = chosen == :nemo ?
+                    "QQ dense rank crossed the Nemo threshold" :
+                    "QQ dense rank stayed on Julia exact path"
+            end
+        end
+    elseif field isa PrimeField && field.p == 2
+        reason = "F2 uses the dedicated bit-packed engine"
+    elseif field isa PrimeField && field.p == 3
+        reason = "F3 uses the dedicated table-based engine"
+    elseif field isa PrimeField
+        if sparse_like
+            reason = "generic prime-field sparse input stays on the Julia sparse exact path"
+        else
+            push!(thresholds, (name=:fp_nemo_rank_threshold, value=FP_NEMO_RANK_THRESHOLD[]))
+            push!(thresholds, (name=:fp_nemo_nullspace_threshold, value=FP_NEMO_NULLSPACE_THRESHOLD[]))
+            push!(thresholds, (name=:fp_nemo_solve_threshold, value=FP_NEMO_SOLVE_THRESHOLD[]))
+            reason = chosen == :nemo ?
+                "generic prime-field dense input crossed the Nemo threshold" :
+                "generic prime-field dense input stayed on the Julia exact path"
+        end
+    elseif field isa RealField
+        if sparse_like
+            push!(thresholds, (name=:float_sparse_svds_min_dim, value=FLOAT_SPARSE_SVDS_MIN_DIM[]))
+            push!(thresholds, (name=:float_sparse_svds_min_nnz, value=FLOAT_SPARSE_SVDS_MIN_NNZ[]))
+            reason = chosen == :float_sparse_svds ?
+                "real sparse nullspace crossed the SVDS gate" :
+                "real sparse input stayed on sparse QR / sparse direct path"
+        else
+            push!(thresholds, (name=:float_nullspace_svd_threshold, value=FLOAT_NULLSPACE_SVD_THRESHOLD[]))
+            reason = chosen == :float_dense_svd ?
+                "real dense nullspace crossed the dense-SVD threshold" :
+                "real dense input stayed on the dense QR path"
+        end
+    end
+
+    return (
+        chosen_backend = chosen,
+        shape_bucket = shape_bucket,
+        density_summary = (sparse = sparse_like, nnz = nnzA, work = work, density = density, fill = fill, density_bucket = density_bucket),
+        thresholds_consulted = thresholds,
+        reason = reason,
+    )
 end
 
 # Conversions between Matrix{QQ} and Nemo matrices.
@@ -311,4 +441,3 @@ end
     F.p == p || error("Field mismatch for Nemo backend matrix conversion")
     return _to_nemo_fp_mat(A)
 end
-

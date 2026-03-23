@@ -1,0 +1,1 @@
+tool,case_id,regime,invariant_kind,degree,n_points,ambient_dim,max_dim,cold_ms,cold_alloc_kib,warm_median_ms,warm_p90_ms,warm_alloc_median_kib,output_term_count,output_abs_mass,output_measure_canonical,notes,timestamp_utc

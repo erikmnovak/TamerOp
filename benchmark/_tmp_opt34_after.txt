@@ -1,4 +1,0 @@
-lowdim_h0_auto_ms,72.752447
-lowdim_h0_auto_alloc_kib,107673.1171875
-cochain_d2_auto_ms,1231.049165
-cochain_d2_auto_alloc_kib,769505.1640625

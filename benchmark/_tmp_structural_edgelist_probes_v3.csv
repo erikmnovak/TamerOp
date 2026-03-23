@@ -1,5 +1,0 @@
-case,family,stage,cache_mode,median_ms,p90_ms,median_alloc_kib
-structural_map_probe_graded_t1,point,cohomology_dims,structural_on,0.48631,0.65514,843.15625
-structural_map_probe_graded_t1,point,cohomology_dims,structural_off,1.340326,2.144567,1441.117188
-packed_edgelist_probe_graph_clique,graph,graded_complex,packed_on,0.870209,1.108664,619.804688
-packed_edgelist_probe_graph_clique,graph,graded_complex,packed_off,0.902537,1.095604,612.492188

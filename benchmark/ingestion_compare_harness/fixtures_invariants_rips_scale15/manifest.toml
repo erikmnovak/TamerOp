@@ -1,0 +1,62 @@
+[meta]
+version = 1
+cases_file = "benchmark/ingestion_compare_harness/cases_invariants_rips.toml"
+scale = 15.0
+
+[invariant_eligibility]
+rips_codensity_parity = ["euler_signed_measure"]
+rips_lowerstar_parity = ["euler_signed_measure"]
+
+[[cases]]
+id = "inv_rips_codensity_n750_d2_s11"
+regime = "rips_codensity_parity"
+dataset = "gaussian_shell"
+path = "inv_rips_codensity_n750_d2_s11.csv"
+n_points = 11250
+ambient_dim = 2
+seed = 11
+max_dim = 1
+codensity_policy = "radius_k+dtm_mass"
+codensity_k = 16
+codensity_radius = 0.0248351063121
+codensity_dtm_mass = 0.00142222222222
+
+[[cases]]
+id = "inv_rips_codensity_n750_d8_s11"
+regime = "rips_codensity_parity"
+dataset = "gaussian_shell"
+path = "inv_rips_codensity_n750_d8_s11.csv"
+n_points = 11250
+ambient_dim = 8
+seed = 11
+max_dim = 1
+codensity_policy = "radius_k+dtm_mass"
+codensity_k = 16
+codensity_radius = 0.357068259443
+codensity_dtm_mass = 0.00142222222222
+
+[[cases]]
+id = "inv_rips_lowerstar_n1000_d2_s11"
+regime = "rips_lowerstar_parity"
+dataset = "gaussian_shell"
+path = "inv_rips_lowerstar_n1000_d2_s11.csv"
+n_points = 15000
+ambient_dim = 2
+seed = 11
+max_dim = 1
+lowerstar_policy = "radius_k+coord1_function"
+lowerstar_k = 16
+lowerstar_radius = 0.0220460216594
+
+[[cases]]
+id = "inv_rips_lowerstar_n1000_d8_s11"
+regime = "rips_lowerstar_parity"
+dataset = "gaussian_shell"
+path = "inv_rips_lowerstar_n1000_d8_s11.csv"
+n_points = 15000
+ambient_dim = 8
+seed = 11
+max_dim = 1
+lowerstar_policy = "radius_k+coord1_function"
+lowerstar_k = 16
+lowerstar_radius = 0.33421207651

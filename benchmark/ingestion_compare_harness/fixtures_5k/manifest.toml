@@ -44,7 +44,7 @@ claim_radius = 0.384231177443
 
 [[cases]]
 id = "parity_n5000_d2_s11"
-regime = "normalized_parity"
+regime = "rips_parity"
 dataset = "gaussian_shell"
 path = "parity_n5000_d2_s11.csv"
 n_points = 500
@@ -54,7 +54,7 @@ max_dim = 1
 
 [[cases]]
 id = "parity_n5000_d2_s17"
-regime = "normalized_parity"
+regime = "rips_parity"
 dataset = "gaussian_shell"
 path = "parity_n5000_d2_s17.csv"
 n_points = 500
@@ -64,7 +64,7 @@ max_dim = 1
 
 [[cases]]
 id = "parity_n10000_d2_s11"
-regime = "normalized_parity"
+regime = "rips_parity"
 dataset = "gaussian_shell"
 path = "parity_n10000_d2_s11.csv"
 n_points = 1000
@@ -74,7 +74,7 @@ max_dim = 1
 
 [[cases]]
 id = "parity_n20000_d2_s11"
-regime = "normalized_parity"
+regime = "rips_parity"
 dataset = "gaussian_shell"
 path = "parity_n20000_d2_s11.csv"
 n_points = 2000
@@ -84,7 +84,7 @@ max_dim = 1
 
 [[cases]]
 id = "parity_n5000_d8_s11"
-regime = "normalized_parity"
+regime = "rips_parity"
 dataset = "gaussian_shell"
 path = "parity_n5000_d8_s11.csv"
 n_points = 500
@@ -94,7 +94,7 @@ max_dim = 1
 
 [[cases]]
 id = "parity_n10000_d8_s11"
-regime = "normalized_parity"
+regime = "rips_parity"
 dataset = "gaussian_shell"
 path = "parity_n10000_d8_s11.csv"
 n_points = 1000

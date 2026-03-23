@@ -1,0 +1,24 @@
+[meta]
+version = 1
+description = "End-to-end invariant comparison cases for landmark Euler parity."
+
+[invariant_eligibility]
+landmark_parity = ["euler_signed_measure"]
+
+[[cases]]
+id = "inv_landmark_n5000_d2_md1_s11"
+regime = "landmark_parity"
+dataset = "gaussian_shell"
+n_points = 5000
+ambient_dim = 2
+seed = 11
+max_dim = 1
+
+[[cases]]
+id = "inv_landmark_n5000_d8_md1_s11"
+regime = "landmark_parity"
+dataset = "gaussian_shell"
+n_points = 5000
+ambient_dim = 8
+seed = 11
+max_dim = 1

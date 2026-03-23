@@ -1,6 +1,0 @@
-probe,median_ms,median_bytes
-plpoly_locate_many_cached,333.408276,0
-plpoly_boundary_breakdown_cachemiss,0.032778999999999996,1216
-plpoly_region_adjacency_cachemiss,30.424605,1426216
-plpoly_membership_relaxed_uncached,3.7e-5,0
-plpoly_region_facets_rebuild,108.93767899999999,91926152

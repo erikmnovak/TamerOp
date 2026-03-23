@@ -1,0 +1,10 @@
+[profile] desktop (reps=4, trim_between_reps=True, trim_between_cases=True)
+Invariants: ['euler_signed_measure']
+[KeOps] Warning : CUDA libraries not found or could not be loaded; Switching to CPU only.
+[skip] inv_core_delaunay_n150_d2_md2_s11 euler_signed_measure: multipers signed_measure does not support Euler on CoreDelaunay k-critical outputs in the local build.
+Traceback (most recent call last):
+  File "/home/eriknovak/Documents/duke_fall_2025/tamer-op/benchmark/ingestion_compare_harness/run_multipers_invariants.py", line 432, in <module>
+    main()
+  File "/home/eriknovak/Documents/duke_fall_2025/tamer-op/benchmark/ingestion_compare_harness/run_multipers_invariants.py", line 426, in main
+    raise RuntimeError("No invariant benchmark rows were produced.")
+RuntimeError: No invariant benchmark rows were produced.

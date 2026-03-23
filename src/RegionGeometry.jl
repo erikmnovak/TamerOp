@@ -6,6 +6,17 @@ Geometry-related extension points and generic geometry utilities for encoding ma
 This module intentionally lives outside `CoreModules` to keep `CoreModules` a small
 project prelude (scalars, tiny utilities, and core interface hooks).
 
+There are two distinct audiences here:
+
+- Backend implementers extend the low-level hook functions such as
+  `region_weights`, `region_bbox`, `region_adjacency`,
+  `region_boundary_measure`, and `region_chebyshev_ball` for a concrete
+  encoding-map type.
+- End users usually call the derived region-geometry queries such as
+  `region_volume`, `region_diameter`, `region_aspect_ratio`,
+  `region_isoperimetric_ratio`, `region_anisotropy_scores`,
+  `check_region_geometry`, and `region_geometry_summary`.
+
 Design:
 - Backends extend hook functions such as `region_weights`, `region_bbox`,
   `region_adjacency`, and `region_boundary_measure`.
@@ -21,29 +32,192 @@ module RegionGeometry
 using LinearAlgebra
 using Random
 
-import ..EncodingCore: locate, locate_many!, _geometry_fingerprint, _locate_call_style
+using ..CoreModules: EncodingCache, GeometryCachePayload
+import ..EncodingCore: locate, locate_many!, CompiledEncoding,
+                       _geometry_fingerprint, _locate_call_style
 
-# Internal, inspectable gates for A/B testing and conservative rollout.
+# Internal runtime gates/thresholds. Keep only knobs that remain meaningful
+# runtime policy choices; benchmark-era always-on branches should be collapsed.
 const _REGION_BATCHED_LOCATE = Ref(true)
 const _REGION_FAST_WRAPPERS = Ref(true)
 const _REGION_BATCHED_LOCATE_MIN_PROPOSALS = Ref(128)
 const _REGION_LOCATE_BATCH_SIZE = Ref(256)
 const _REGION_DIRECT_VOLUME = Ref(true)
 const _REGION_WORKSPACE_REUSE = Ref(true)
-const _REGION_BLOCKED_PROJECTION = Ref(true)
 const _REGION_BLOCKED_PROJECTION_MIN_ACCEPTED = Ref(8)
-const _REGION_BLOCKED_COVARIANCE = Ref(true)
 const _REGION_SAMPLED_SUMMARY_CACHE = Ref(true)
-const _REGION_SHARDED_SAMPLE_CACHE = Ref(true)
-const _REGION_FAST_CACHE_KEYS = Ref(true)
 const _REGION_SAMPLE_CACHE_MAX = Ref(256)
 const _REGION_CACHE_SHARDS = 16
+
+"""
+    RegionGeometryValidationSummary
+
+Notebook/REPL-friendly wrapper for reports returned by `check_region_geometry`.
+
+Use `region_geometry_validation_summary(report)` to pretty-print backend support
+for region-geometry hooks and derived user-facing queries.
+"""
+struct RegionGeometryValidationSummary{R}
+    report::R
+end
+
+"""
+    RegionGeometrySummary
+
+Typed exploratory wrapper returned by `region_geometry_summary(pi, r; ...)`.
+
+This is the preferred owner-local summary object for quick region inspection.
+It records:
+- which quantities were available,
+- which quantities were unavailable and why,
+- whether a finite box was used,
+- whether each reported quantity came from a bbox-based, hook-based, or
+  sampling-based computation path.
+
+Use semantic accessors such as `region_bbox(summary)`, `region_volume(summary)`,
+and `region_boundary(summary)` instead of inspecting the raw report directly.
+"""
+struct RegionGeometrySummary{R}
+    report::R
+end
+
+"""
+    RegionPrincipalDirectionsSummary
+
+Typed exploratory wrapper for principal-direction and covariance summaries of a
+single region.
+
+This wraps the richer result produced by `region_principal_directions_summary`
+and provides a stable owner-local inspection surface for:
+- principal values/eigenvalues,
+- principal vectors/eigenvectors,
+- covariance matrix,
+- anisotropy scores derived from the same covariance estimate.
+"""
+struct RegionPrincipalDirectionsSummary{R}
+    report::R
+end
+
+"""
+    region_geometry_validation_summary(report) -> RegionGeometryValidationSummary
+
+Wrap the raw `NamedTuple` report returned by `check_region_geometry(pi)` in a
+plain-text display helper.
+
+This is the preferred presentation layer for notebooks and the REPL. Keep the raw
+report when you want programmatic access to booleans such as
+`report.hooks.boundary_measure` or `report.queries.region_circumradius`.
+"""
+@inline region_geometry_validation_summary(report::NamedTuple) = RegionGeometryValidationSummary(report)
+
+"""
+    region_bbox(summary::RegionGeometrySummary)
+
+Return the bounding box stored in a `RegionGeometrySummary`, or `nothing` when
+it was unavailable.
+"""
+@inline region_bbox(summary::RegionGeometrySummary) = summary.report.bbox
+
+"""
+    region_volume(summary::RegionGeometrySummary)
+
+Return the region volume stored in a `RegionGeometrySummary`, or `nothing` when
+it was unavailable.
+"""
+@inline region_volume(summary::RegionGeometrySummary) = summary.report.volume
+
+"""
+    region_boundary(summary::RegionGeometrySummary)
+
+Return the boundary measure stored in a `RegionGeometrySummary`, or `nothing`
+when it was unavailable.
+"""
+@inline region_boundary(summary::RegionGeometrySummary) = summary.report.boundary_measure
+
+"""
+    available_quantities(summary::RegionGeometrySummary)
+
+Return the names of the quantities that were successfully computed in
+`region_geometry_summary(...)`.
+"""
+@inline available_quantities(summary::RegionGeometrySummary) = summary.report.available
+
+"""
+    unavailable_quantities(summary::RegionGeometrySummary)
+
+Return `(name => reason)` pairs for quantities that were unavailable in
+`region_geometry_summary(...)`.
+"""
+@inline unavailable_quantities(summary::RegionGeometrySummary) = summary.report.unavailable
+
+"""
+    quantity_sources(summary::RegionGeometrySummary)
+
+Return a `NamedTuple` describing how each quantity is computed:
+- `:bbox_based`
+- `:hook_based`
+- `:sampling_based`
+- `:diagnostic_heavy`
+"""
+@inline quantity_sources(summary::RegionGeometrySummary) = summary.report.quantity_sources
+
+"""
+    finite_box_used(summary::RegionGeometrySummary)
+
+Return `true` when `region_geometry_summary(...)` evaluated the region inside a
+finite `box=(a,b)`.
+"""
+@inline finite_box_used(summary::RegionGeometrySummary) = summary.report.finite_box
+
+"""
+    principal_values(summary::RegionPrincipalDirectionsSummary)
+
+Return the principal values (eigenvalues of the covariance matrix), sorted in
+descending order.
+"""
+@inline principal_values(summary::RegionPrincipalDirectionsSummary) = summary.report.evals
+
+"""
+    principal_vectors(summary::RegionPrincipalDirectionsSummary)
+
+Return the principal directions as a matrix whose columns are the eigenvectors
+matching `principal_values(summary)`.
+"""
+@inline principal_vectors(summary::RegionPrincipalDirectionsSummary) = summary.report.evecs
+
+"""
+    covariance_matrix(summary::RegionPrincipalDirectionsSummary)
+
+Return the covariance matrix estimated for the sampled region.
+"""
+@inline covariance_matrix(summary::RegionPrincipalDirectionsSummary) = summary.report.cov
+
+@inline _region_backend_type(pi) = typeof(pi)
+
+function _unsupported_region_geometry_message(fname::Symbol, pi;
+    note::AbstractString="",
+    fallback::AbstractString="")
+    msg = string(
+        fname,
+        " is not available for backend ",
+        _region_backend_type(pi),
+        ". Call `check_region_geometry(pi)` to inspect supported hooks and derived queries for this backend."
+    )
+    isempty(fallback) || (msg *= " " * fallback)
+    isempty(note) || (msg *= " " * note)
+    msg *= " Backend implementers should add a typed RegionGeometry method in the owning encoding/backend module."
+    return msg
+end
 
 # -----------------------------------------------------------------------------
 """
     region_weights(pi; box=nothing, kwargs...) -> AbstractVector
 
 Optional hook for weighting invariants computed on a finite encoding.
+
+Backend implementers add methods here. End users usually prefer the derived
+queries `region_volume(...)` or `region_geometry_summary(...)` unless they
+specifically need the full weight vector.
 
 Many invariants in multiparameter persistence reduce, after choosing a finite
 encoding map `pi : Q -> P`, to data indexed by regions/vertices in a finite
@@ -59,12 +233,22 @@ Common conventions:
 - `length(w)` should equal the number of encoded regions (i.e. `P.n`).
 - If no meaningful weighting is available, a method may return all ones.
 """
-function region_weights end
+function region_weights(pi; box=nothing, kwargs...)
+    throw(ArgumentError(_unsupported_region_geometry_message(
+        :region_weights,
+        pi;
+        fallback="If you only need a support check, use `check_region_geometry(pi)` first."
+    )))
+end
 
 """
     region_bbox(pi, r; box=nothing, kwargs...)
 
 Geometric hook: return a bounding box for region `r` of an encoding map `pi`.
+
+Backend implementers add methods here. End users usually call higher-level
+queries such as `region_diameter`, `region_widths`, `region_centroid`, or
+`region_geometry_summary`, all of which use `region_bbox` when available.
 
 Intended meaning:
 - For encodings of R^n: return an axis-aligned bounding box for the region in R^n.
@@ -79,7 +263,13 @@ Return convention:
 
 This is an extension point: concrete encoding map types may provide methods.
 """
-function region_bbox end
+function region_bbox(pi, r::Integer; box=nothing, kwargs...)
+    throw(ArgumentError(_unsupported_region_geometry_message(
+        :region_bbox,
+        pi;
+        fallback="Many downstream geometry queries fall back to `region_bbox`, so this is one of the most valuable hooks for backend implementers."
+    )))
+end
 
 """
     region_volume(pi, r; box=nothing, kwargs...) -> Real
@@ -119,6 +309,10 @@ Metrics supported by the default method:
 
 Concrete encodings may provide specialized methods, e.g. a vertex-based diameter
 for convex polyhedral regions.
+
+Cost profile:
+- cheap / bbox-based by default,
+- typically one of the cheapest geometric summaries once `region_bbox` is available.
 """
 function region_diameter(
     pi,
@@ -262,6 +456,9 @@ end
 
 Geometric hook: report how regions meet inside a finite bounding window.
 
+Backend implementers add methods here. End users usually call this directly
+only when they specifically need adjacency-driven invariants.
+
 Implementations should return a dictionary whose keys are unordered region pairs
 `(r,s)` with `r < s`. The value is the estimated (n-1)-dimensional measure of
 the interface between regions `r` and `s` inside `box=(a,b)`.
@@ -274,18 +471,29 @@ Notes:
 
 This is currently implemented for axis-aligned box grids (`PLEncodingMapBoxes`).
 """
-function region_adjacency end
+function region_adjacency(pi; box=nothing, kwargs...)
+    throw(ArgumentError(_unsupported_region_geometry_message(
+        :region_adjacency,
+        pi;
+        fallback="If you only need scalar shape statistics, many of them can still work without adjacency support."
+    )))
+end
 
 """
     region_facet_count(pi, r; kwargs...) -> Int
 
 Geometric hook: return a facet/constraint count for region `r`.
 
+This is primarily a backend/diagnostic hook rather than a first-line end-user
+query.
+
 For polyhedral backends, a reasonable default is the number of inequalities in
 the stored H-representation. This is a complexity proxy (it may count redundant
 inequalities and thus may exceed the true number of facets).
 """
-function region_facet_count end
+function region_facet_count(pi, r::Integer; kwargs...)
+    throw(ArgumentError(_unsupported_region_geometry_message(:region_facet_count, pi)))
+end
 
 """
     region_vertex_count(pi, r; box, kwargs...) -> Union{Nothing,Int}
@@ -293,10 +501,15 @@ function region_facet_count end
 Geometric hook: return the number of vertices of `region r` inside the window
 `box=(a,b)`.
 
+This is primarily a backend/diagnostic hook rather than a first-line end-user
+query.
+
 This may be expensive. Implementations are allowed to return `nothing` if vertex
 enumeration is not attempted (e.g. too many constraints / combinations).
 """
-function region_vertex_count end
+function region_vertex_count(pi, r::Integer; box=nothing, kwargs...)
+    throw(ArgumentError(_unsupported_region_geometry_message(:region_vertex_count, pi)))
+end
 
 
 """
@@ -310,9 +523,17 @@ This is the (n-1)-dimensional Hausdorff measure of the boundary of `R_r cap box`
 * general n: hypersurface measure
 
 Backends should implement this when feasible. The default method throws an error.
+
+Cost profile:
+- hook-dependent,
+- often substantially more expensive than bbox-based queries.
 """
 function region_boundary_measure(pi, r; box=nothing, strict=true)
-    error("region_boundary_measure not implemented for $(typeof(pi))")
+    throw(ArgumentError(_unsupported_region_geometry_message(
+        :region_boundary_measure,
+        pi;
+        fallback="If you only need a coarse size statistic, try `region_volume` or `region_diameter` when those are available."
+    )))
 end
 
 """
@@ -335,9 +556,17 @@ The total boundary measure should satisfy, approximately:
     region_boundary_measure(pi, r; box=box) approx sum(e.measure for e in breakdown)
 
 This is a diagnostic-level query and may not be implemented for all encodings.
+
+Cost profile:
+- diagnostic / heavy,
+- typically more expensive than the scalar `region_boundary_measure`.
 """
 function region_boundary_measure_breakdown(pi, r; box=nothing, kwargs...)
-    error("region_boundary_measure_breakdown not implemented for $(typeof(pi))")
+    throw(ArgumentError(_unsupported_region_geometry_message(
+        :region_boundary_measure_breakdown,
+        pi;
+        fallback="This is a diagnostic-level query; many backends only implement the scalar `region_boundary_measure`."
+    )))
 end
 
 
@@ -365,6 +594,489 @@ end
     mean_width_ndirs::Integer=256, mean_width_rng=Random.default_rng(),
     mean_width_directions=nothing, strict::Bool=true, closure::Bool=true,
     cache=nothing) = nothing
+@inline _region_geometry_summary_fast(pi, r::Integer;
+    box, strict::Bool=true, closure::Bool=true, cache=nothing,
+    mean_width_method::Symbol=:auto, mean_width_ndirs::Integer=256,
+    mean_width_rng=Random.default_rng(), mean_width_directions=nothing,
+    need_mean_width::Bool=false) = nothing
+@inline _region_weights_cached(pi; box, closure::Bool=true, cache=nothing, kwargs...) = nothing
+@inline _region_weights_closure(pi; box, closure::Bool=true, kwargs...) = nothing
+@inline _region_boundary_measure_cached(pi, r::Integer;
+    box, strict::Bool=true, closure::Bool=true, cache=nothing) = nothing
+@inline _region_boundary_measure_closure(pi, r::Integer;
+    box, strict::Bool=true, closure::Bool=true) = nothing
+@inline _region_boundary_measure_strict(pi, r::Integer; box, strict::Bool=true) = nothing
+@inline _region_bbox_cached(pi, r::Integer;
+    box, strict::Bool=true, closure::Bool=true, cache=nothing) = nothing
+@inline _region_bbox_closure(pi, r::Integer;
+    box, strict::Bool=true, closure::Bool=true) = nothing
+@inline _region_bbox_strict(pi, r::Integer; box, strict::Bool=true) = nothing
+@inline _region_centroid_cached(pi, r::Integer;
+    box, method::Symbol=:bbox, closure::Bool=true, cache=nothing) = nothing
+@inline _region_centroid_closure(pi, r::Integer;
+    box, method::Symbol=:bbox, closure::Bool=true) = nothing
+
+const _REGION_WEIGHTS_FALLBACK = which(region_weights, Tuple{Any})
+const _REGION_BBOX_FALLBACK = which(region_bbox, Tuple{Any, Int})
+const _REGION_ADJACENCY_FALLBACK = which(region_adjacency, Tuple{Any})
+const _REGION_FACET_COUNT_FALLBACK = which(region_facet_count, Tuple{Any, Int})
+const _REGION_VERTEX_COUNT_FALLBACK = which(region_vertex_count, Tuple{Any, Int})
+const _REGION_BOUNDARY_MEASURE_FALLBACK = which(region_boundary_measure, Tuple{Any, Int})
+const _REGION_BOUNDARY_BREAKDOWN_FALLBACK = which(region_boundary_measure_breakdown, Tuple{Any, Int})
+const _REGION_VOLUME_FAST_FALLBACK = which(_region_volume_fast, Tuple{Any, Int})
+const _REGION_CENTROID_FAST_FALLBACK = which(_region_centroid_fast, Tuple{Any, Int})
+const _REGION_BOUNDARY_FAST_FALLBACK = which(_region_boundary_measure_fast, Tuple{Any, Int})
+const _REGION_CIRCUMRADIUS_FAST_FALLBACK = which(_region_circumradius_fast, Tuple{Any, Int})
+const _REGION_MINKOWSKI_FAST_FALLBACK = which(_region_minkowski_functionals_fast, Tuple{Any, Int})
+const _REGION_GEOMETRY_SUMMARY_FAST_FALLBACK = which(_region_geometry_summary_fast, Tuple{Any, Int})
+
+@inline function _region_has_custom_method(f, fallback::Method, argtypes::Type{<:Tuple})
+    return which(f, argtypes) !== fallback
+end
+
+@inline _region_supports_weights(pi) = _region_has_custom_method(region_weights, _REGION_WEIGHTS_FALLBACK, Tuple{typeof(pi)})
+@inline _region_supports_bbox(pi) = _region_has_custom_method(region_bbox, _REGION_BBOX_FALLBACK, Tuple{typeof(pi), Int})
+@inline _region_supports_adjacency(pi) = _region_has_custom_method(region_adjacency, _REGION_ADJACENCY_FALLBACK, Tuple{typeof(pi)})
+@inline _region_supports_facet_count(pi) = _region_has_custom_method(region_facet_count, _REGION_FACET_COUNT_FALLBACK, Tuple{typeof(pi), Int})
+@inline _region_supports_vertex_count(pi) = _region_has_custom_method(region_vertex_count, _REGION_VERTEX_COUNT_FALLBACK, Tuple{typeof(pi), Int})
+@inline _region_supports_boundary_measure(pi) = _region_has_custom_method(region_boundary_measure, _REGION_BOUNDARY_MEASURE_FALLBACK, Tuple{typeof(pi), Int})
+@inline _region_supports_boundary_breakdown(pi) = _region_has_custom_method(region_boundary_measure_breakdown, _REGION_BOUNDARY_BREAKDOWN_FALLBACK, Tuple{typeof(pi), Int})
+@inline _region_supports_fast_volume(pi) = _region_has_custom_method(_region_volume_fast, _REGION_VOLUME_FAST_FALLBACK, Tuple{typeof(pi), Int})
+@inline _region_supports_fast_centroid(pi) = _region_has_custom_method(_region_centroid_fast, _REGION_CENTROID_FAST_FALLBACK, Tuple{typeof(pi), Int})
+@inline _region_supports_fast_boundary_measure(pi) = _region_has_custom_method(_region_boundary_measure_fast, _REGION_BOUNDARY_FAST_FALLBACK, Tuple{typeof(pi), Int})
+@inline _region_supports_fast_circumradius(pi) = _region_has_custom_method(_region_circumradius_fast, _REGION_CIRCUMRADIUS_FAST_FALLBACK, Tuple{typeof(pi), Int})
+@inline _region_supports_fast_minkowski(pi) = _region_has_custom_method(_region_minkowski_functionals_fast, _REGION_MINKOWSKI_FAST_FALLBACK, Tuple{typeof(pi), Int})
+@inline _region_supports_fast_summary(pi) = _region_has_custom_method(_region_geometry_summary_fast, _REGION_GEOMETRY_SUMMARY_FAST_FALLBACK, Tuple{typeof(pi), Int})
+
+@inline _region_anytrue(nt::NamedTuple) = any(values(nt))
+
+@inline function _region_count_hint(pi)
+    if hasproperty(pi, :P)
+        P = getproperty(pi, :P)
+        hasproperty(P, :n) && return Int(getproperty(P, :n))
+    end
+    hasproperty(pi, :sig_y) && return length(getproperty(pi, :sig_y))
+    hasproperty(pi, :regions) && return length(getproperty(pi, :regions))
+    return nothing
+end
+
+@inline function _region_ambient_dim_hint(pi)
+    hasproperty(pi, :n) && return Int(getproperty(pi, :n))
+    return nothing
+end
+
+@inline function _region_query_requires_box(query::Symbol)
+    return query in (
+        :summary,
+        :region_bbox, :region_widths, :region_diameter, :region_centroid,
+        :region_aspect_ratio, :region_boundary_measure, :region_boundary_measure_breakdown,
+        :region_adjacency, :region_chebyshev_ball, :region_circumradius,
+        :region_boundary_to_volume_ratio, :region_isoperimetric_ratio,
+        :region_principal_directions, :region_mean_width,
+        :region_minkowski_functionals, :region_covariance_anisotropy,
+        :region_covariance_eccentricity, :region_anisotropy_scores,
+        :region_perimeter, :region_surface_area,
+    )
+end
+
+@inline function _supported_region_syms(nt::NamedTuple)
+    return [k for (k, v) in pairs(nt) if v]
+end
+
+const _REGION_EXTRA_QUERIES = (
+    :region_mean_width,
+    :region_principal_directions,
+    :region_anisotropy_scores,
+)
+
+const _REGION_RECOMMENDED_QUERIES = (
+    :region_bbox,
+    :region_widths,
+    :region_volume,
+    :region_centroid,
+    :region_aspect_ratio,
+    :region_boundary_measure,
+    :region_circumradius,
+)
+
+@inline _region_supports_sampling_queries(pi) =
+    (_region_ambient_dim_hint(pi) !== nothing) || _region_anytrue(check_region_geometry(pi).queries)
+
+function _supports_extra_region_query(pi, query::Symbol)
+    if query === :region_mean_width
+        return _region_supports_sampling_queries(pi)
+    elseif query === :region_principal_directions
+        return _region_supports_sampling_queries(pi)
+    elseif query === :region_anisotropy_scores
+        return _region_supports_sampling_queries(pi)
+    end
+    return false
+end
+
+"""
+    check_region_geometry(pi; box=nothing, throw=false) -> NamedTuple
+
+Inspect which RegionGeometry hooks and common derived queries are available for
+backend `pi`.
+
+This helper is intended for both advanced users and backend implementers:
+- End users can call it before a geometry workflow to see which queries are
+  actually supported on a given encoding backend.
+- Backend implementers can use it as a quick capability report while adding new
+  geometry hooks.
+
+The returned report contains:
+- `hooks`: support for extension-hook functions such as `region_weights`,
+  `region_bbox`, `region_adjacency`, and `region_boundary_measure`
+- `fast_paths`: support for optional backend-provided fast wrappers
+- `queries`: support for common end-user queries derived from those hooks
+- `issues`: actionable guidance when support is partial or missing
+
+Use `region_geometry_validation_summary(report)` for notebook/REPL-friendly
+display.
+"""
+function check_region_geometry(pi; box=nothing, throw::Bool=false)
+    hooks = (
+        weights = _region_supports_weights(pi),
+        bbox = _region_supports_bbox(pi),
+        adjacency = _region_supports_adjacency(pi),
+        facet_count = _region_supports_facet_count(pi),
+        vertex_count = _region_supports_vertex_count(pi),
+        boundary_measure = _region_supports_boundary_measure(pi),
+        boundary_breakdown = _region_supports_boundary_breakdown(pi),
+        chebyshev_ball = _region_supports_chebyshev_ball(pi),
+    )
+    fast_paths = (
+        volume = _region_supports_fast_volume(pi),
+        centroid = _region_supports_fast_centroid(pi),
+        boundary_measure = _region_supports_fast_boundary_measure(pi),
+        circumradius = _region_supports_fast_circumradius(pi),
+        minkowski_functionals = _region_supports_fast_minkowski(pi),
+        geometry_summary = _region_supports_fast_summary(pi),
+    )
+    queries = (
+        region_volume = hooks.weights || fast_paths.volume || fast_paths.geometry_summary,
+        region_bbox = hooks.bbox,
+        region_widths = hooks.bbox,
+        region_diameter = hooks.bbox,
+        region_centroid = hooks.bbox || fast_paths.centroid,
+        region_aspect_ratio = hooks.bbox,
+        region_boundary_measure = hooks.boundary_measure || fast_paths.boundary_measure || fast_paths.geometry_summary,
+        region_boundary_measure_breakdown = hooks.boundary_breakdown,
+        region_adjacency = hooks.adjacency,
+        region_chebyshev_ball = hooks.chebyshev_ball,
+        region_circumradius = hooks.bbox || hooks.chebyshev_ball || fast_paths.circumradius,
+        region_boundary_to_volume_ratio = (hooks.weights || fast_paths.volume || fast_paths.geometry_summary) &&
+            (hooks.boundary_measure || fast_paths.boundary_measure || fast_paths.geometry_summary),
+        region_isoperimetric_ratio = (hooks.weights || fast_paths.volume || fast_paths.geometry_summary) &&
+            (hooks.boundary_measure || fast_paths.boundary_measure || fast_paths.geometry_summary),
+        region_minkowski_functionals = fast_paths.minkowski_functionals || fast_paths.geometry_summary ||
+            ((hooks.weights || fast_paths.volume) && (hooks.boundary_measure || fast_paths.boundary_measure)),
+    )
+
+    issues = String[]
+    _region_anytrue(hooks) || push!(issues,
+        "No RegionGeometry hook is implemented for this backend. End users should expect geometry queries to fail until the backend adds at least one typed hook such as `region_bbox` or `region_weights`.")
+    box === nothing && push!(issues,
+        "Many region-geometry queries require a finite `box=(a,b)`; support booleans above only indicate whether the backend and generic wrappers know how to answer the query once a box is supplied.")
+    hooks.boundary_measure || fast_paths.boundary_measure || fast_paths.geometry_summary || push!(issues,
+        "Boundary-based quantities (perimeter, surface area, boundary-to-volume ratio, isoperimetric ratio) are unavailable for this backend.")
+    hooks.chebyshev_ball || push!(issues,
+        "Inscribed-ball queries are unavailable; if you only need an outer-radius statistic, `region_circumradius(...; method=:bbox)` can still work when `region_bbox` is available.")
+
+    valid = _region_anytrue(queries)
+    report = (
+        kind = :region_geometry,
+        backend = _region_backend_type(pi),
+        valid = valid,
+        hooks = hooks,
+        fast_paths = fast_paths,
+        queries = queries,
+        issues = issues,
+    )
+    if throw && !valid
+        throw(ArgumentError("check_region_geometry: backend $(_region_backend_type(pi)) does not expose any supported region-geometry query. " *
+            (isempty(issues) ? "" : join(issues, " "))))
+    end
+    return report
+end
+
+"""
+    supported_region_hooks(pi) -> Vector{Symbol}
+
+Return the supported RegionGeometry extension hooks for backend `pi`.
+
+This is a thin semantic accessor on top of `check_region_geometry(pi)` and is
+useful in notebooks when you want a quick list rather than the full report.
+"""
+function supported_region_hooks(pi)
+    return _supported_region_syms(check_region_geometry(pi).hooks)
+end
+
+"""
+    supported_region_queries(pi) -> Vector{Symbol}
+
+Return the supported user-facing region-geometry queries for backend `pi`.
+
+This is a thin semantic accessor on top of `check_region_geometry(pi)` and is
+intended for quick exploratory inspection.
+"""
+function supported_region_queries(pi)
+    syms = Set(_supported_region_syms(check_region_geometry(pi).queries))
+    for q in _REGION_EXTRA_QUERIES
+        _supports_extra_region_query(pi, q) && push!(syms, q)
+    end
+    return sort!(collect(syms); by=string)
+end
+
+"""
+    supports_region_query(pi, query::Symbol) -> Bool
+
+Return `true` if `check_region_geometry(pi)` reports support for the named
+region-geometry query.
+
+Use the canonical query names, e.g.
+- `:region_bbox`
+- `:region_volume`
+- `:region_boundary_measure`
+- `:region_circumradius`
+"""
+function supports_region_query(pi, query::Symbol)
+    queries = check_region_geometry(pi).queries
+    if haskey(queries, query)
+        return getproperty(queries, query)
+    elseif query in _REGION_EXTRA_QUERIES
+        return _supports_extra_region_query(pi, query)
+    end
+    throw(ArgumentError(
+        "supports_region_query: unknown query=$query. Call `supported_region_queries(pi)` to inspect the canonical query names."
+    ))
+end
+
+"""
+    recommended_region_queries(pi) -> Vector{Symbol}
+
+Return a notebook-friendly subset of supported region queries that are usually
+the cheapest and safest first inspection calls once a finite `box=(a,b)` is
+available.
+
+These are not the only useful queries; they are the recommended first pass for
+interactive exploration before calling heavier sampling-based or diagnostic
+routines.
+"""
+function recommended_region_queries(pi)
+    supported = Set(supported_region_queries(pi))
+    return [q for q in _REGION_RECOMMENDED_QUERIES if q in supported]
+end
+
+"""
+    check_region_query(pi, r; box=nothing, query=:summary, throw=false) -> NamedTuple
+
+Validate the basic contract for a region-geometry query before calling a heavier
+`region_*` routine.
+
+This helper checks:
+- whether the region index `r` is plausible when the backend exposes a region count,
+- whether a supplied `box=(a,b)` has the expected ambient dimension when that
+  dimension is inspectable,
+- whether the chosen query class normally requires a finite `box`.
+
+This is a query-shape validator, not a geometry computation. Use it to surface
+common user mistakes before entering a heavier workflow.
+"""
+function check_region_query(pi, r::Integer; box=nothing, query::Symbol=:summary, throw::Bool=false)
+    issues = String[]
+    nregions = _region_count_hint(pi)
+    ambient = _region_ambient_dim_hint(pi)
+
+    if nregions !== nothing && !(1 <= r <= nregions)
+        push!(issues, "region index r=$r is out of range; expected 1 <= r <= $nregions.")
+    end
+
+    if box !== nothing
+        try
+            a, b = box
+            if ambient !== nothing
+                length(a) == ambient || push!(issues, "box lower corner has length $(length(a)), expected ambient dimension $ambient.")
+                length(b) == ambient || push!(issues, "box upper corner has length $(length(b)), expected ambient dimension $ambient.")
+            elseif length(a) != length(b)
+                push!(issues, "box endpoints have mismatched lengths $(length(a)) and $(length(b)).")
+            end
+        catch err
+            push!(issues, "box must have the form `(a,b)` with indexable endpoints. " * sprint(showerror, err))
+        end
+    elseif _region_query_requires_box(query)
+        push!(issues, "query=$query normally requires a finite `box=(a,b)`.")
+    end
+
+    if query !== :summary
+        try
+            supports_region_query(pi, query) || push!(issues,
+                "backend $(_region_backend_type(pi)) does not report support for query=$query. Call `check_region_geometry(pi)` for the full capability report.")
+        catch err
+            push!(issues, sprint(showerror, err))
+        end
+    end
+
+    report = (
+        kind = :region_query,
+        backend = _region_backend_type(pi),
+        query = query,
+        region = Int(r),
+        ambient_dim = ambient,
+        region_count = nregions,
+        valid = isempty(issues),
+        issues = issues,
+    )
+    if throw && !report.valid
+        throw(ArgumentError("check_region_query: " * join(issues, " ")))
+    end
+    return report
+end
+
+"""
+    region_geometry_summary(pi, r; box=nothing, strict=true, closure=true,
+                            cache=nothing, include_breakdown=false, kwargs...) -> RegionGeometrySummary
+
+Return a compact, user-facing summary of region `r` for backend `pi`.
+
+This is a cheap-first convenience wrapper for exploratory work. It collects the
+most common scalar/box summaries when they are supported by the backend:
+- `volume`
+- `bbox`
+- `widths`
+- `centroid`
+- `aspect_ratio`
+- `boundary_measure`
+- `circumradius`
+
+Unavailable quantities are returned as `nothing`. The typed summary records:
+- `available_quantities(summary)`,
+- `unavailable_quantities(summary)` with reasons,
+- whether a finite `box` was used,
+- whether each quantity came from a bbox-based, hook-based, or sampling-based
+  computation path.
+
+Best practices:
+- supply a finite `box=(a,b)` whenever possible; many geometry queries are only
+  meaningful on a bounded window,
+- call `check_region_geometry(pi)` first if you are unsure which quantities a
+  backend can provide,
+- use the individual `region_*` functions when you need one quantity only.
+
+Cost profile:
+- cheap-first wrapper,
+- it only evaluates supported quantities and records missing/heavy ones in
+  `issues`, so it is the preferred entrypoint for interactive exploration.
+"""
+function region_geometry_summary(pi, r::Integer; box=nothing, strict::Bool=true,
+    closure::Bool=true, cache=nothing, include_breakdown::Bool=false, kwargs...)
+    report = check_region_geometry(pi; box=box)
+    issues = String[]
+    q = report.queries
+    quantity_sources = (
+        volume = :hook_based,
+        bbox = :bbox_based,
+        widths = :bbox_based,
+        centroid = :bbox_based,
+        aspect_ratio = :bbox_based,
+        boundary_measure = :hook_based,
+        circumradius = :bbox_based,
+        boundary_breakdown = :diagnostic_heavy,
+    )
+    unavailable = Pair{Symbol,String}[]
+    available = Symbol[]
+
+    box_eff = _resolve_box(box, cache)
+    finite_box = box_eff !== nothing
+    finite_box || push!(issues,
+        "No finite `box=(a,b)` was supplied or recoverable from the cache; box-dependent quantities may be unavailable.")
+
+    function maybe_compute(thunk, name::Symbol, supported::Bool; requires_box::Bool=false)
+        if !supported
+            push!(unavailable, name => "backend $(_region_backend_type(pi)) does not report support for $name.")
+            return nothing
+        elseif requires_box && !finite_box
+            push!(unavailable, name => "requires a finite `box=(a,b)`.")
+            return nothing
+        end
+        try
+            value = thunk()
+            value === nothing ? push!(unavailable, name => "returned `nothing` for this region/query.") : push!(available, name)
+            return value
+        catch err
+            reason = sprint(showerror, err)
+            push!(issues, string(name, ": ", reason))
+            push!(unavailable, name => reason)
+            return nothing
+        end
+    end
+
+    bbox = maybe_compute(:bbox, q.region_bbox; requires_box=true) do
+        _region_bbox_maybe_cached(pi, r; box=box_eff, strict=strict, closure=closure, cache=cache)
+    end
+
+    widths = bbox === nothing ? nothing : maybe_compute(:widths, q.region_widths) do
+        lo, hi = bbox
+        [float(hi[i]) - float(lo[i]) for i in eachindex(lo, hi)]
+    end
+
+    volume = maybe_compute(:volume, q.region_volume; requires_box=true) do
+        _region_volume_maybe_cached(pi, r; box=box_eff, closure=closure, cache=cache)
+    end
+
+    centroid = maybe_compute(:centroid, q.region_centroid; requires_box=true) do
+        _region_centroid_maybe_cached(pi, r; box=box_eff, method=:bbox, closure=closure, cache=cache)
+    end
+
+    aspect_ratio = widths === nothing ? nothing : maybe_compute(:aspect_ratio, q.region_aspect_ratio) do
+        maxw = 0.0
+        minw = Inf
+        for wi in widths
+            aw = abs(float(wi))
+            isfinite(aw) || return Inf
+            maxw = max(maxw, aw)
+            if aw > 0.0
+                minw = min(minw, aw)
+            end
+        end
+        maxw == 0.0 ? 1.0 : (minw == Inf ? Inf : maxw / minw)
+    end
+
+    boundary_measure = maybe_compute(:boundary_measure, q.region_boundary_measure; requires_box=true) do
+        _region_boundary_measure_maybe_cached(pi, r; box=box_eff, strict=strict, closure=closure, cache=cache)
+    end
+
+    circumradius = maybe_compute(:circumradius, q.region_circumradius; requires_box=true) do
+        region_circumradius(pi, r; box=box_eff, strict=strict, closure=closure, cache=cache, kwargs...)
+    end
+
+    breakdown = include_breakdown ? maybe_compute(:boundary_breakdown,
+        q.region_boundary_measure_breakdown; requires_box=true) do
+            region_boundary_measure_breakdown(pi, r; box=box_eff, strict=strict, kwargs...)
+        end : nothing
+
+    return RegionGeometrySummary((
+        kind = :region_geometry_summary,
+        backend = _region_backend_type(pi),
+        region = Int(r),
+        box = box_eff,
+        finite_box = finite_box,
+        capabilities = report.queries,
+        quantity_sources = quantity_sources,
+        available = unique!(available),
+        unavailable = unavailable,
+        volume = volume,
+        bbox = bbox,
+        widths = widths,
+        centroid = centroid,
+        aspect_ratio = aspect_ratio,
+        boundary_measure = boundary_measure,
+        circumradius = circumradius,
+        boundary_breakdown = breakdown,
+        issues = issues,
+    ))
+end
 
 @inline _kwget(kwargs, key::Symbol, default) = get(kwargs, key, default)
 
@@ -410,14 +1122,14 @@ end
     return nothing
 end
 
-@inline function _compute_block_moments!(ws::_RegionBatchWorkspace,
+@inline function _compute_block_moments!(ws,
     X::AbstractMatrix{Float64}, ncols::Int)
     ncols <= 0 && return nothing
     n = size(X, 1)
     block_sum = ws.block_sum
     fill!(block_sum, 0.0)
     gram = ws.gram
-    if !_REGION_BLOCKED_COVARIANCE[] || ncols <= 1
+    if ncols <= 1
         fill!(gram, 0.0)
         @inbounds for j in 1:ncols
             for i in 1:n
@@ -438,7 +1150,7 @@ end
 end
 
 @inline function _accumulate_block_moments!(sumx::AbstractVector{Float64},
-    sumxx::AbstractMatrix{Float64}, ws::_RegionBatchWorkspace)
+    sumxx::AbstractMatrix{Float64}, ws)
     @inbounds for i in eachindex(sumx)
         sumx[i] += ws.block_sum[i]
     end
@@ -446,6 +1158,36 @@ end
         sumxx[i, j] += ws.gram[i, j]
     end
     return nothing
+end
+
+@inline _region_encoding_cache(::Any) = nothing
+@inline _region_encoding_cache(cache::EncodingCache) = cache
+@inline _region_encoding_cache(enc::CompiledEncoding) = enc.meta isa EncodingCache ? enc.meta : nothing
+@inline function _region_encoding_cache(pi, cache)
+    cache isa EncodingCache && return cache
+    return _region_encoding_cache(pi)
+end
+
+@inline function _region_geometry_cache_get(cache::Union{Nothing,EncodingCache}, key)
+    cache === nothing && return nothing
+    Base.lock(cache.lock)
+    try
+        entry = get(cache.geometry, key, nothing)
+        return entry === nothing ? nothing : entry.value
+    finally
+        Base.unlock(cache.lock)
+    end
+end
+
+@inline function _region_geometry_cache_set!(cache::Union{Nothing,EncodingCache}, key, value)
+    cache === nothing && return value
+    Base.lock(cache.lock)
+    try
+        cache.geometry[key] = GeometryCachePayload(value)
+    finally
+        Base.unlock(cache.lock)
+    end
+    return value
 end
 
 mutable struct _RegionBatchWorkspace
@@ -506,12 +1248,12 @@ function _RegionSampleCache(::Type{T}) where {T}
 end
 
 @inline function _region_cache_shard(cache::_RegionSampleCache, key::UInt64)
-    nshards = (_REGION_SHARDED_SAMPLE_CACHE[] ? length(cache.shards) : 1)
+    nshards = length(cache.shards)
     return Int(mod(key, UInt64(nshards))) + 1
 end
 
 @inline function _region_cache_shard_cap(cache::_RegionSampleCache)
-    return max(1, cld(_REGION_SAMPLE_CACHE_MAX[], max(1, (_REGION_SHARDED_SAMPLE_CACHE[] ? length(cache.shards) : 1))))
+    return max(1, cld(_REGION_SAMPLE_CACHE_MAX[], max(1, length(cache.shards))))
 end
 
 function Base.length(cache::_RegionSampleCache)
@@ -529,8 +1271,9 @@ struct _PrincipalSummaryEntry
     evecs::Matrix{Float64}
     mean_stderr::Vector{Float64}
     evals_stderr::Vector{Float64}
-    batch_evals::Vector{Vector{Float64}}
+    batch_evals::Matrix{Float64}
     batch_n_accepted::Vector{Int}
+    nbatches::Int
     n_accepted::Int
     n_proposed::Int
 end
@@ -591,6 +1334,26 @@ end
     return value
 end
 
+@inline _region_summary_cache_key(kind::Symbol, key::UInt64) = (kind, key)
+@inline _region_direction_cache_key(n::Integer, ndirs::Integer, rngh) = (:region_direction_bank, Int(n), Int(ndirs), UInt64(rngh))
+
+@inline function _region_summary_cache_get(global_cache::_RegionSampleCache{T},
+    enc_cache::Union{Nothing,EncodingCache}, kind::Symbol, key::UInt64) where {T}
+    if enc_cache !== nothing
+        cached = _region_geometry_cache_get(enc_cache, _region_summary_cache_key(kind, key))
+        cached === nothing || return cached
+    end
+    return _sample_cache_get(global_cache, key)
+end
+
+@inline function _region_summary_cache_set!(global_cache::_RegionSampleCache{T},
+    enc_cache::Union{Nothing,EncodingCache}, kind::Symbol, key::UInt64, value::T) where {T}
+    if enc_cache !== nothing
+        return _region_geometry_cache_set!(enc_cache, _region_summary_cache_key(kind, key), value)
+    end
+    return _sample_cache_insert!(global_cache, key, value)
+end
+
 @inline function _hash_float_sequence(xs)
     h = hash(length(xs))
     @inbounds for x in xs
@@ -618,9 +1381,6 @@ function _rng_cache_hash_slow(rng)
 end
 
 function _rng_cache_hash(rng::Random.MersenneTwister)
-    if !_REGION_FAST_CACHE_KEYS[]
-        return _rng_cache_hash_slow(rng)
-    end
     st = getfield(rng, :state)
     return hash((typeof(rng), getfield(rng, :seed), getfield(rng, :idxF), getfield(rng, :idxI),
         getfield(rng, :adv), getfield(rng, :adv_jump), getfield(rng, :adv_vals),
@@ -628,14 +1388,16 @@ function _rng_cache_hash(rng::Random.MersenneTwister)
 end
 
 function _rng_cache_hash(rng::Random.Xoshiro)
-    if !_REGION_FAST_CACHE_KEYS[]
-        return _rng_cache_hash_slow(rng)
-    end
     return hash((typeof(rng), getfield(rng, :s0), getfield(rng, :s1),
         getfield(rng, :s2), getfield(rng, :s3), getfield(rng, :s4)))
 end
 
 _rng_cache_hash(rng) = _rng_cache_hash_slow(rng)
+
+@inline _batch_eval_count(batch_evals::AbstractMatrix{<:Real}) = size(batch_evals, 2)
+@inline _batch_eval_count(batch_evals::AbstractVector) = length(batch_evals)
+@inline _batch_eval_column(batch_evals::AbstractMatrix{<:Real}, j::Integer) = view(batch_evals, :, j)
+@inline _batch_eval_column(batch_evals::AbstractVector, j::Integer) = batch_evals[j]
 
 function _directions_cache_hash(directions, ndirs::Integer)
     directions === nothing && return hash((:random, ndirs))
@@ -660,6 +1422,39 @@ function _mean_width_cache_key(pi, r::Integer;
     dirh = _directions_cache_hash(directions, ndirs)
     return UInt64(hash((_pi_geometry_cache_hash(pi), Int(r), _box_cache_hash(box),
         strict, closure, Int(nsamples), Int(max_proposals), Int(ndirs), dirh, rngh)))
+end
+
+@inline function _box_lower_widths(box)
+    a_in, b_in = box
+    n = length(a_in)
+    a = Vector{Float64}(undef, n)
+    widths = Vector{Float64}(undef, n)
+    @inbounds for i in 1:n
+        ai = float(a_in[i])
+        bi = float(b_in[i])
+        a[i] = ai
+        widths[i] = bi - ai
+    end
+    return a, widths
+end
+
+@inline function _fill_random_point!(x::AbstractVector{Float64},
+    a::AbstractVector{Float64}, widths::AbstractVector{Float64}, rng)
+    rand!(rng, x)
+    @inbounds for i in eachindex(x)
+        x[i] = muladd(x[i], widths[i], a[i])
+    end
+    return x
+end
+
+@inline function _fill_random_points!(X::AbstractMatrix{Float64},
+    a::AbstractVector{Float64}, widths::AbstractVector{Float64}, rng, ncols::Integer)
+    Xv = view(X, :, 1:ncols)
+    rand!(rng, Xv)
+    @inbounds for j in 1:ncols, i in eachindex(a)
+        X[i, j] = muladd(X[i, j], widths[i], a[i])
+    end
+    return X
 end
 
 
@@ -727,6 +1522,9 @@ Batching behavior:
 
 Speed notes:
 - Uses preallocated vectors and in-place Welford updates to reduce allocations.
+- Cost profile: sampling-based. This is heavier than bbox-based queries such as
+  `region_widths` or `region_diameter`, but more informative for anisotropy and
+  covariance structure.
 """
 function region_principal_directions(pi, r::Integer;
     box=nothing,
@@ -750,11 +1548,56 @@ function region_principal_directions(pi, r::Integer;
         max_proposals=max_proposals, return_info=return_info, nbatches=nbatches)
 end
 
-@inline function _batch_eval_from_moments(sumx::AbstractVector{Float64},
-    sumxx::AbstractMatrix{Float64}, nacc::Int)
+"""
+    region_principal_directions_summary(pi, r; box, epsilon=0.0, kwargs...) -> RegionPrincipalDirectionsSummary
+
+Typed exploratory wrapper around `region_principal_directions`.
+
+This is the preferred owner-local summary object when you want:
+- principal values and directions,
+- covariance accessors,
+- anisotropy scores derived from the same covariance estimate,
+- a stable object with compact/plain-text display.
+
+Use `principal_values`, `principal_vectors`, and `covariance_matrix` to inspect
+the result without field archaeology.
+"""
+function region_principal_directions_summary(pi, r::Integer; box=nothing,
+    epsilon::Real=0.0, kwargs...)
+    pd = region_principal_directions(pi, r; box=box, return_info=true, kwargs...)
+    evals = pd.evals
+    anisotropy = (
+        ratio = _covariance_anisotropy_from_evals(evals; kind=:ratio, epsilon=epsilon),
+        log_ratio = _covariance_anisotropy_from_evals(evals; kind=:log_ratio, epsilon=epsilon),
+        normalized = _covariance_anisotropy_from_evals(evals; kind=:normalized, epsilon=epsilon),
+        eccentricity = _covariance_eccentricity_from_evals(evals; epsilon=epsilon),
+    )
+    return RegionPrincipalDirectionsSummary((
+        backend = _region_backend_type(pi),
+        region = Int(r),
+        box = box,
+        epsilon = float(epsilon),
+        mean = pd.mean,
+        cov = pd.cov,
+        evals = pd.evals,
+        evecs = pd.evecs,
+        mean_stderr = pd.mean_stderr,
+        evals_stderr = pd.evals_stderr,
+        batch_evals = pd.batch_evals,
+        batch_n_accepted = pd.batch_n_accepted,
+        nbatches = pd.nbatches,
+        n_accepted = pd.n_accepted,
+        n_proposed = pd.n_proposed,
+        anisotropy = anisotropy,
+    ))
+end
+
+@inline function _batch_eval_from_moments!(dest::AbstractVector{Float64},
+    sumx::AbstractVector{Float64}, sumxx::AbstractMatrix{Float64}, nacc::Int)
     n = length(sumx)
     if nacc <= 1
-        return zeros(Float64, n)
+        fill!(dest, 0.0)
+        return dest
     end
     invn = inv(float(nacc))
     cov = Matrix{Float64}(undef, n, n)
@@ -764,11 +1607,14 @@ end
     end
     E = eigen(Symmetric(cov))
     p = sortperm(E.values, rev=true)
-    return E.values[p]
+    @inbounds for i in 1:n
+        dest[i] = E.values[p[i]]
+    end
+    return dest
 end
 
 function _principal_directions_result(sumx::Vector{Float64}, sumxx::Matrix{Float64},
-    batch_evals::Vector{Vector{Float64}}, batch_n::Vector{Int},
+    batch_evals::Matrix{Float64}, nbatches::Int, batch_n::Vector{Int},
     nacc::Int, nprop::Int, return_info::Bool)
     n = length(sumx)
     if nacc <= 1
@@ -793,14 +1639,14 @@ function _principal_directions_result(sumx::Vector{Float64}, sumxx::Matrix{Float
         evecs = E.vectors[:, p]
         mean_stderr = sqrt.(diag(cov) ./ nacc)
 
-        if length(batch_evals) >= 2
-            k = length(batch_evals)
+        if nbatches >= 2
+            k = nbatches
             evals_stderr = Vector{Float64}(undef, n)
             @inbounds for i in 1:n
                 s = 0.0
                 ss = 0.0
-                for bvals in batch_evals
-                    v = bvals[i]
+                for j in 1:nbatches
+                    v = batch_evals[i, j]
                     s += v
                     ss += v * v
                 end
@@ -820,13 +1666,13 @@ function _principal_directions_result(sumx::Vector{Float64}, sumxx::Matrix{Float
 
     return (mean=mean, cov=cov, evals=evals, evecs=evecs,
         mean_stderr=mean_stderr, evals_stderr=evals_stderr,
-        batch_evals=[copy(v) for v in batch_evals], batch_n_accepted=copy(batch_n),
-        nbatches=length(batch_evals),
+        batch_evals=copy(view(batch_evals, :, 1:nbatches)), batch_n_accepted=copy(batch_n),
+        nbatches=nbatches,
         n_accepted=nacc, n_proposed=nprop)
 end
 
 @inline _principal_cov_blocksize(nsamples::Integer) =
-    _REGION_BLOCKED_COVARIANCE[] ? max(1, min(Int(nsamples), _REGION_LOCATE_BATCH_SIZE[])) : 1
+    max(1, min(Int(nsamples), _REGION_LOCATE_BATCH_SIZE[]))
 
 @inline function _principal_flush_buffer!(sumx::AbstractVector{Float64}, sumxx::AbstractMatrix{Float64},
     sumx_b::AbstractVector{Float64}, sumxx_b::AbstractMatrix{Float64},
@@ -840,14 +1686,15 @@ end
     return 0
 end
 
-@inline function _principal_finish_batch!(batch_evals::Vector{Vector{Float64}}, batch_n::Vector{Int},
-    sumx_b::AbstractVector{Float64}, sumxx_b::AbstractMatrix{Float64}, nacc_b::Int)
+@inline function _principal_finish_batch!(batch_evals::AbstractMatrix{Float64}, batch_n::Vector{Int},
+    nbatches::Int, sumx_b::AbstractVector{Float64}, sumxx_b::AbstractMatrix{Float64}, nacc_b::Int)
     if nacc_b > 1
-        push!(batch_evals, _batch_eval_from_moments(sumx_b, sumxx_b, nacc_b))
+        _batch_eval_from_moments!(view(batch_evals, :, nbatches + 1), sumx_b, sumxx_b, nacc_b)
         push!(batch_n, nacc_b)
+        nbatches += 1
     end
     _zero_moments!(sumx_b, sumxx_b)
-    return nothing
+    return nbatches
 end
 
 function _region_principal_directions_scalar(pi, r::Integer;
@@ -873,6 +1720,7 @@ function _region_principal_directions_scalar(pi, r::Integer;
     accepted = ws.accepted
     _zero_moments!(sumx, sumxx)
     _zero_moments!(sumx_b, sumxx_b)
+    a_f, widths = _box_lower_widths(box)
 
     nacc = 0
     nprop = 0
@@ -880,21 +1728,19 @@ function _region_principal_directions_scalar(pi, r::Integer;
     nacc_b = 0
 
     want_batches = return_info ? (nbatches > 0 ? nbatches : 10) : 0
-    batch_evals = Vector{Vector{Float64}}()
+    batch_evals = Matrix{Float64}(undef, n, want_batches > 0 ? want_batches : 0)
     batch_n = Int[]
+    nbatch_used = 0
     if want_batches > 0
-        sizehint!(batch_evals, want_batches)
         sizehint!(batch_n, want_batches)
     end
     batch_target = want_batches > 0 ? max(2, Int(floor(nsamples / want_batches))) : 0
 
-    x0 = Float64[(a[i] + b[i]) / 2 for i in 1:n]
+    x0 = Float64[a_f[i] + 0.5 * widths[i] for i in 1:n]
     locate_style = _resolve_locate_style(pi, x0; strict=strict, closure=closure)
 
     while (nacc < nsamples) && (nprop < max_proposals)
-        @inbounds for i in 1:n
-            x[i] = rand(rng) * (b[i] - a[i]) + a[i]
-        end
+        _fill_random_point!(x, a_f, widths, rng)
         nprop += 1
 
         if _locate_dispatch(pi, x, locate_style; strict=strict, closure=closure) == r
@@ -911,7 +1757,7 @@ function _region_principal_directions_scalar(pi, r::Integer;
                 nbuf = _principal_flush_buffer!(sumx, sumxx, sumx_b, sumxx_b, accepted, nbuf, ws, want_batches)
             end
             if want_batches > 0 && nacc_b >= batch_target
-                _principal_finish_batch!(batch_evals, batch_n, sumx_b, sumxx_b, nacc_b)
+                nbatch_used = _principal_finish_batch!(batch_evals, batch_n, nbatch_used, sumx_b, sumxx_b, nacc_b)
                 nacc_b = 0
             end
         end
@@ -919,10 +1765,10 @@ function _region_principal_directions_scalar(pi, r::Integer;
 
     nbuf = _principal_flush_buffer!(sumx, sumxx, sumx_b, sumxx_b, accepted, nbuf, ws, want_batches)
     if want_batches > 0 && nacc_b > 0
-        _principal_finish_batch!(batch_evals, batch_n, sumx_b, sumxx_b, nacc_b)
+        nbatch_used = _principal_finish_batch!(batch_evals, batch_n, nbatch_used, sumx_b, sumxx_b, nacc_b)
     end
 
-    return _principal_directions_result(sumx, sumxx, batch_evals, batch_n, nacc, nprop, return_info)
+    return _principal_directions_result(sumx, sumxx, batch_evals, nbatch_used, batch_n, nacc, nprop, return_info)
 end
 
 function _region_principal_directions_batched(pi, r::Integer;
@@ -947,6 +1793,7 @@ function _region_principal_directions_batched(pi, r::Integer;
     accepted = ws.accepted
     _zero_moments!(sumx, sumxx)
     _zero_moments!(sumx_b, sumxx_b)
+    a_f, widths = _box_lower_widths(box)
 
     nacc = 0
     nprop = 0
@@ -954,22 +1801,20 @@ function _region_principal_directions_batched(pi, r::Integer;
     nacc_b = 0
 
     want_batches = return_info ? (nbatches > 0 ? nbatches : 10) : 0
-    batch_evals = Vector{Vector{Float64}}()
+    batch_evals = Matrix{Float64}(undef, n, want_batches > 0 ? want_batches : 0)
     batch_n = Int[]
+    nbatch_used = 0
     if want_batches > 0
-        sizehint!(batch_evals, want_batches)
         sizehint!(batch_n, want_batches)
     end
     batch_target = want_batches > 0 ? max(2, Int(floor(nsamples / want_batches))) : 0
 
-    x0 = Float64[(a[i] + b[i]) / 2 for i in 1:n]
+    x0 = Float64[a_f[i] + 0.5 * widths[i] for i in 1:n]
     locate_style = _resolve_locate_many_style(pi, x0; strict=strict, closure=closure)
 
     while (nacc < nsamples) && (nprop < max_proposals)
         nbatch = min(size(ws.X, 2), max_proposals - nprop)
-        @inbounds for j in 1:nbatch, i in 1:n
-            ws.X[i, j] = rand(rng) * (b[i] - a[i]) + a[i]
-        end
+        _fill_random_points!(ws.X, a_f, widths, rng, nbatch)
         Xbatch = view(ws.X, :, 1:nbatch)
         locbatch = view(ws.locs, 1:nbatch)
         _locate_many_dispatch!(locbatch, pi, Xbatch, locate_style; strict=strict, closure=closure)
@@ -990,7 +1835,7 @@ function _region_principal_directions_batched(pi, r::Integer;
                 nbuf = _principal_flush_buffer!(sumx, sumxx, sumx_b, sumxx_b, accepted, nbuf, ws, want_batches)
             end
             if want_batches > 0 && nacc_b >= batch_target
-                _principal_finish_batch!(batch_evals, batch_n, sumx_b, sumxx_b, nacc_b)
+                nbatch_used = _principal_finish_batch!(batch_evals, batch_n, nbatch_used, sumx_b, sumxx_b, nacc_b)
                 nacc_b = 0
             end
 
@@ -1000,10 +1845,10 @@ function _region_principal_directions_batched(pi, r::Integer;
 
     nbuf = _principal_flush_buffer!(sumx, sumxx, sumx_b, sumxx_b, accepted, nbuf, ws, want_batches)
     if want_batches > 0 && nacc_b > 0
-        _principal_finish_batch!(batch_evals, batch_n, sumx_b, sumxx_b, nacc_b)
+        nbatch_used = _principal_finish_batch!(batch_evals, batch_n, nbatch_used, sumx_b, sumxx_b, nacc_b)
     end
 
-    return _principal_directions_result(sumx, sumxx, batch_evals, batch_n, nacc, nprop, return_info)
+    return _principal_directions_result(sumx, sumxx, batch_evals, nbatch_used, batch_n, nacc, nprop, return_info)
 end
 
 
@@ -1104,22 +1949,14 @@ end
 
 function _region_weights_maybe_cached(pi; box=nothing, closure::Bool=true, cache=nothing, kwargs...)
     if cache !== nothing
-        try
-            return region_weights(pi; box=box, closure=closure, cache=cache, kwargs...)
-        catch e
-            if !(e isa MethodError)
-                rethrow()
-            end
-        end
+        cached = _region_weights_cached(pi; box=box, closure=closure, cache=cache, kwargs...)
+        cached === nothing || return cached
     end
-    try
-        return region_weights(pi; box=box, closure=closure, kwargs...)
-    catch e
-        if e isa MethodError
-            return region_weights(pi; box=box, kwargs...)
-        end
-        rethrow()
+    if closure
+        cached = _region_weights_closure(pi; box=box, closure=closure, kwargs...)
+        cached === nothing || return cached
     end
+    return region_weights(pi; box=box, kwargs...)
 end
 
 function _region_volume_from_weights(pi, r::Integer; box=nothing, closure::Bool=true, cache=nothing, kwargs...)
@@ -1131,30 +1968,18 @@ end
 function _region_boundary_measure_maybe_cached_slow(pi, r::Integer; box, strict::Bool=true,
     closure::Bool=true, cache=nothing)
     if cache !== nothing
-        try
-            return float(region_boundary_measure(pi, r; box=box, strict=strict, closure=closure, cache=cache))
-        catch e
-            if !(e isa MethodError)
-                rethrow()
-            end
-        end
+        cached = _region_boundary_measure_cached(pi, r;
+            box=box, strict=strict, closure=closure, cache=cache)
+        cached === nothing || return float(cached)
     end
-
-    try
-        return float(region_boundary_measure(pi, r; box=box, strict=strict, closure=closure))
-    catch e
-        if e isa MethodError
-            try
-                return float(region_boundary_measure(pi, r; box=box, strict=strict))
-            catch e2
-                if e2 isa MethodError
-                    return float(region_boundary_measure(pi, r; box=box))
-                end
-                rethrow()
-            end
-        end
-        rethrow()
+    if closure
+        cached = _region_boundary_measure_closure(pi, r;
+            box=box, strict=strict, closure=closure)
+        cached === nothing || return float(cached)
     end
+    cached = _region_boundary_measure_strict(pi, r; box=box, strict=strict)
+    cached === nothing || return float(cached)
+    return float(region_boundary_measure(pi, r; box=box))
 end
 
 function _region_boundary_measure_maybe_cached(pi, r::Integer; box, strict::Bool=true,
@@ -1174,45 +1999,17 @@ function _region_bbox_maybe_cached(pi, r::Integer; box, strict::Bool=true,
         fast = _region_bbox_fast(pi, r; box=box, strict=strict, closure=closure, cache=cache)
         fast === nothing || return fast
     end
-    if cache === nothing
-        try
-            return region_bbox(pi, r; box=box, strict=strict, closure=closure)
-        catch e
-            if e isa MethodError
-                try
-                    return region_bbox(pi, r; box=box, strict=strict)
-                catch e2
-                    if e2 isa MethodError
-                        return region_bbox(pi, r; box=box)
-                    end
-                    rethrow()
-                end
-            end
-            rethrow()
-        end
+    if cache !== nothing
+        cached = _region_bbox_cached(pi, r; box=box, strict=strict, closure=closure, cache=cache)
+        cached === nothing || return cached
     end
-    try
-        return region_bbox(pi, r; box=box, strict=strict, closure=closure, cache=cache)
-    catch e
-        if e isa MethodError
-            try
-                return region_bbox(pi, r; box=box, strict=strict, closure=closure)
-            catch e2
-                if e2 isa MethodError
-                    try
-                        return region_bbox(pi, r; box=box, strict=strict)
-                    catch e3
-                        if e3 isa MethodError
-                            return region_bbox(pi, r; box=box)
-                        end
-                        rethrow()
-                    end
-                end
-                rethrow()
-            end
-        end
-        rethrow()
+    if closure
+        cached = _region_bbox_closure(pi, r; box=box, strict=strict, closure=closure)
+        cached === nothing || return cached
     end
+    cached = _region_bbox_strict(pi, r; box=box, strict=strict)
+    cached === nothing || return cached
+    return region_bbox(pi, r; box=box)
 end
 
 @inline function _centroid_from_bbox(bb)
@@ -1240,32 +2037,16 @@ function _region_centroid_maybe_cached(pi, r::Integer; box, method::Symbol=:bbox
         return _centroid_from_bbox(_region_bbox_maybe_cached(pi, r;
             box=box, strict=true, closure=closure, cache=cache))
     end
-
-    if cache === nothing
-        try
-            return region_centroid(pi, r; box=box, method=method, closure=closure)
-        catch e
-            if e isa MethodError
-                return region_centroid(pi, r; box=box, method=method)
-            end
-            rethrow()
-        end
+    if cache !== nothing
+        cached = _region_centroid_cached(pi, r;
+            box=box, method=method, closure=closure, cache=cache)
+        cached === nothing || return cached
     end
-    try
-        return region_centroid(pi, r; box=box, method=method, closure=closure, cache=cache)
-    catch e
-        if e isa MethodError
-            try
-                return region_centroid(pi, r; box=box, method=method, closure=closure)
-            catch e2
-                if e2 isa MethodError
-                    return region_centroid(pi, r; box=box, method=method)
-                end
-                rethrow()
-            end
-        end
-        rethrow()
+    if closure
+        cached = _region_centroid_closure(pi, r; box=box, method=method, closure=closure)
+        cached === nothing || return cached
     end
+    return region_centroid(pi, r; box=box, method=method)
 end
 
 @inline function _principal_summary_result(entry::_PrincipalSummaryEntry, return_info::Bool)
@@ -1276,43 +2057,44 @@ end
     return (mean=copy(entry.mean), cov=copy(entry.cov), evals=copy(entry.evals),
         evecs=copy(entry.evecs), mean_stderr=copy(entry.mean_stderr),
         evals_stderr=copy(entry.evals_stderr),
-        batch_evals=[copy(v) for v in entry.batch_evals],
-        batch_n_accepted=copy(entry.batch_n_accepted), nbatches=length(entry.batch_evals),
+        batch_evals=copy(entry.batch_evals),
+        batch_n_accepted=copy(entry.batch_n_accepted), nbatches=entry.nbatches,
         n_accepted=entry.n_accepted, n_proposed=entry.n_proposed)
 end
 
 function _principal_summary_entry(mu, cov, evals, evecs, mean_stderr, evals_stderr,
     batch_evals, batch_n, nacc::Int, nprop::Int)
+    batch_eval_mat = if batch_evals isa Matrix{Float64}
+        copy(batch_evals)
+    elseif isempty(batch_evals)
+        Matrix{Float64}(undef, length(evals), 0)
+    else
+        hcat(batch_evals...)
+    end
+    nbatches = size(batch_eval_mat, 2)
     return _PrincipalSummaryEntry(copy(mu), copy(cov), copy(evals), copy(evecs),
-        copy(mean_stderr), copy(evals_stderr), [copy(v) for v in batch_evals], copy(batch_n),
-        nacc, nprop)
+        copy(mean_stderr), copy(evals_stderr), batch_eval_mat, copy(batch_n),
+        nbatches, nacc, nprop)
 end
 
 function _principal_directions_compute(pi, r::Integer; box, nsamples::Integer,
     rng, strict::Bool=true, closure::Bool=true, max_proposals::Integer=10*nsamples,
     return_info::Bool=false, nbatches::Int=0)
-    try
-        return region_principal_directions(pi, r; box=box, nsamples=nsamples, rng=rng,
-            strict=strict, closure=closure, max_proposals=max_proposals,
-            return_info=return_info, nbatches=nbatches)
-    catch e
-        if e isa MethodError
-            return region_principal_directions(pi, r; box=box, nsamples=nsamples, rng=rng,
-                strict=strict, max_proposals=max_proposals,
-                return_info=return_info, nbatches=nbatches)
-        end
-        rethrow()
-    end
+    return region_principal_directions(pi, r; box=box, nsamples=nsamples, rng=rng,
+        strict=strict, closure=closure, max_proposals=max_proposals,
+        return_info=return_info, nbatches=nbatches)
 end
 
 function _principal_summary_entry_maybe_closure(pi, r::Integer; box, nsamples::Integer,
     rng, strict::Bool=true, closure::Bool=true, max_proposals::Integer=10*nsamples,
     return_info::Bool=false, nbatches::Int=0)
+    enc_cache = _region_encoding_cache(pi, nothing)
     key = _REGION_SAMPLED_SUMMARY_CACHE[] ? _principal_summary_cache_key(pi, r;
         box=box, strict=strict, closure=closure, nsamples=nsamples,
         max_proposals=max_proposals, return_info=return_info, nbatches=nbatches, rng=rng) : nothing
     if key !== nothing
-        cached = _sample_cache_get(_REGION_PRINCIPAL_SUMMARY_CACHE, key)
+        cached = _region_summary_cache_get(_REGION_PRINCIPAL_SUMMARY_CACHE,
+            enc_cache, :principal_summary, key)
         cached === nothing || return cached
     end
 
@@ -1322,12 +2104,13 @@ function _principal_summary_entry_maybe_closure(pi, r::Integer; box, nsamples::I
     entry = _principal_summary_entry(pd.mean, pd.cov, pd.evals, pd.evecs,
         get(pd, :mean_stderr, fill(NaN, length(pd.mean))),
         get(pd, :evals_stderr, fill(NaN, length(pd.evals))),
-        get(pd, :batch_evals, Vector{Vector{Float64}}()),
+        get(pd, :batch_evals, Matrix{Float64}(undef, length(pd.evals), 0)),
         get(pd, :batch_n_accepted, Int[]),
         pd.n_accepted, pd.n_proposed)
 
     if key !== nothing
-        _sample_cache_insert!(_REGION_PRINCIPAL_SUMMARY_CACHE, key, entry)
+        _region_summary_cache_set!(_REGION_PRINCIPAL_SUMMARY_CACHE,
+            enc_cache, :principal_summary, key, entry)
     end
     return entry
 end
@@ -1339,6 +2122,19 @@ function _principal_directions_maybe_closure(pi, r::Integer; box, nsamples::Inte
         rng=rng, strict=strict, closure=closure, max_proposals=max_proposals,
         return_info=return_info, nbatches=nbatches)
     return _principal_summary_result(entry, return_info)
+end
+
+@inline function _region_geometry_summary_maybe_fast(pi, r::Integer;
+    box, strict::Bool=true, closure::Bool=true, cache=nothing,
+    mean_width_method::Symbol=:auto, mean_width_ndirs::Integer=256,
+    mean_width_rng=Random.default_rng(), mean_width_directions=nothing,
+    need_mean_width::Bool=false)
+    !_REGION_FAST_WRAPPERS[] && return nothing
+    return _region_geometry_summary_fast(pi, r;
+        box=box, strict=strict, closure=closure, cache=cache,
+        mean_width_method=mean_width_method, mean_width_ndirs=mean_width_ndirs,
+        mean_width_rng=mean_width_rng, mean_width_directions=mean_width_directions,
+        need_mean_width=need_mean_width)
 end
 
 function _mean_width_cached(pi, r::Integer; box, method::Symbol=:auto,
@@ -1370,8 +2166,15 @@ Backends that do not implement this should throw an error.
 """
 function region_chebyshev_ball(pi, r::Integer; box=nothing, metric::Symbol=:L2,
     method::Symbol=:auto, kwargs...)
-    error("region_chebyshev_ball not implemented for $(typeof(pi)).")
+    throw(ArgumentError(_unsupported_region_geometry_message(
+        :region_chebyshev_ball,
+        pi;
+        fallback="If you only need an outer-radius statistic, `region_circumradius(...; method=:bbox)` works whenever `region_bbox` is available."
+    )))
 end
+
+const _REGION_CHEBYSHEV_BALL_FALLBACK = which(region_chebyshev_ball, Tuple{Any, Int})
+@inline _region_supports_chebyshev_ball(pi) = _region_has_custom_method(region_chebyshev_ball, _REGION_CHEBYSHEV_BALL_FALLBACK, Tuple{typeof(pi), Int})
 
 """
     region_chebyshev_center(pi, r; kwargs...) -> Vector{Float64}
@@ -1447,7 +2250,10 @@ function region_circumradius(pi, r::Integer; box=nothing, center=:bbox,
             strict=strict, closure=closure, cache=cache)
         return _bbox_circumradius(lo, hi, c, metric)
     else
-        error("region_circumradius: method=$method not available for $(typeof(pi))")
+        throw(ArgumentError(
+            "region_circumradius: method=$method is not available for backend $(_region_backend_type(pi)). " *
+            "Use `method=:bbox` when `region_bbox` is supported, or call `check_region_geometry(pi)` to inspect available geometry queries."
+        ))
     end
 end
 
@@ -1467,8 +2273,14 @@ function region_boundary_to_volume_ratio(pi, r::Integer; box=nothing,
     strict::Bool=true, closure::Bool=true, cache=nothing)
     box === nothing && error("region_boundary_to_volume_ratio: box=(a,b) is required")
 
-    V = volume === nothing ? _region_volume_maybe_cached(pi, r; box=box, closure=closure, cache=cache) : float(volume)
-    S = boundary === nothing ? _region_boundary_measure_maybe_cached(pi, r; box=box, strict=strict, closure=closure, cache=cache) : float(boundary)
+    summary = (volume === nothing || boundary === nothing) ? _region_geometry_summary_maybe_fast(pi, r;
+        box=box, strict=strict, closure=closure, cache=cache, need_mean_width=false) : nothing
+    V = volume === nothing ? (summary === nothing ?
+        _region_volume_maybe_cached(pi, r; box=box, closure=closure, cache=cache) :
+        float(summary.volume)) : float(volume)
+    S = boundary === nothing ? (summary === nothing ?
+        _region_boundary_measure_maybe_cached(pi, r; box=box, strict=strict, closure=closure, cache=cache) :
+        float(summary.boundary_measure)) : float(boundary)
 
     if V == 0.0
         return (S == 0.0) ? NaN : Inf
@@ -1503,8 +2315,14 @@ function region_isoperimetric_ratio(pi, r::Integer; box=nothing,
     strict::Bool=true, closure::Bool=true, cache=nothing)
     box === nothing && error("region_isoperimetric_ratio: box=(a,b) is required")
 
-    V = volume === nothing ? _region_volume_maybe_cached(pi, r; box=box, closure=closure, cache=cache) : float(volume)
-    S = boundary === nothing ? _region_boundary_measure_maybe_cached(pi, r; box=box, strict=strict, closure=closure, cache=cache) : float(boundary)
+    summary = (volume === nothing || boundary === nothing) ? _region_geometry_summary_maybe_fast(pi, r;
+        box=box, strict=strict, closure=closure, cache=cache, need_mean_width=false) : nothing
+    V = volume === nothing ? (summary === nothing ?
+        _region_volume_maybe_cached(pi, r; box=box, closure=closure, cache=cache) :
+        float(summary.volume)) : float(volume)
+    S = boundary === nothing ? (summary === nothing ?
+        _region_boundary_measure_maybe_cached(pi, r; box=box, strict=strict, closure=closure, cache=cache) :
+        float(summary.boundary_measure)) : float(boundary)
 
     if kind === :boundary_to_volume
         return region_boundary_to_volume_ratio(pi, r; box=box, volume=V, boundary=S,
@@ -1564,10 +2382,31 @@ function _random_unit_directions(n::Integer, ndirs::Integer; rng=Random.default_
     return U
 end
 
-@inline function _direction_matrix(directions, n::Integer, ndirs::Integer; rng=Random.default_rng())
-    U = directions === nothing ? _random_unit_directions(n, ndirs; rng=rng) : Matrix{Float64}(directions)
-    size(U, 1) == n || error("region_mean_width: directions must have size (n,ndirs)")
-    return U
+@inline function _direction_matrix(directions::Matrix{Float64}, n::Integer, ndirs::Integer;
+    rng=Random.default_rng(), enc_cache::Union{Nothing,EncodingCache}=nothing)
+    _ = (rng, enc_cache, ndirs)
+    size(directions, 1) == n || error("region_mean_width: directions must have size (n,ndirs)")
+    return directions
+end
+
+@inline function _direction_matrix(directions, n::Integer, ndirs::Integer;
+    rng=Random.default_rng(), enc_cache::Union{Nothing,EncodingCache}=nothing)
+    if directions !== nothing
+        U = Matrix{Float64}(directions)
+        size(U, 1) == n || error("region_mean_width: directions must have size (n,ndirs)")
+        return U
+    end
+    if enc_cache !== nothing
+        rngh = _rng_cache_hash(rng)
+        if rngh !== nothing
+            key = _region_direction_cache_key(n, ndirs, rngh)
+            cached = _region_geometry_cache_get(enc_cache, key)
+            cached === nothing || return cached
+            return _region_geometry_cache_set!(enc_cache, key,
+                _random_unit_directions(n, ndirs; rng=rng))
+        end
+    end
+    return _random_unit_directions(n, ndirs; rng=rng)
 end
 
 function _update_projection_extrema_scalar!(minproj::AbstractVector{Float64}, maxproj::AbstractVector{Float64},
@@ -1593,7 +2432,7 @@ function _update_projection_extrema_blocked!(minproj::AbstractVector{Float64}, m
     if naccepted <= 0
         return nothing
     end
-    if !_REGION_BLOCKED_PROJECTION[] || naccepted < _REGION_BLOCKED_PROJECTION_MIN_ACCEPTED[]
+    if naccepted < _REGION_BLOCKED_PROJECTION_MIN_ACCEPTED[]
         @inbounds for j in 1:naccepted
             _update_projection_extrema_scalar!(minproj, maxproj, U, accepted, j)
         end
@@ -1638,6 +2477,10 @@ Supported methods:
 
 Backends may implement more accurate methods (e.g. using vertices or cell corners)
 by defining a more specific method.
+
+Cost profile:
+- `method=:cauchy` is cheap when available (boundary-based, planar),
+- `method=:mc` is sampling-based and substantially heavier.
 """
 function region_mean_width(pi, r::Integer; box=nothing, method::Symbol=:auto,
     ndirs::Integer=256, nsamples::Integer=4000, max_proposals::Integer=10*nsamples,
@@ -1659,11 +2502,13 @@ function region_mean_width(pi, r::Integer; box=nothing, method::Symbol=:auto,
         error("region_mean_width: unknown method=$method (use :auto, :cauchy, :mc)")
     end
 
+    enc_cache = _region_encoding_cache(pi, cache)
     key = _REGION_SAMPLED_SUMMARY_CACHE[] ? _mean_width_cache_key(pi, r;
         box=box, strict=strict, closure=closure, nsamples=nsamples,
         max_proposals=max_proposals, ndirs=ndirs, directions=directions, rng=rng) : nothing
     if key !== nothing
-        cached = _sample_cache_get(_REGION_MEAN_WIDTH_CACHE, key)
+        cached = _region_summary_cache_get(_REGION_MEAN_WIDTH_CACHE,
+            enc_cache, :mean_width, key)
         cached === nothing || return cached
     end
 
@@ -1672,15 +2517,16 @@ function region_mean_width(pi, r::Integer; box=nothing, method::Symbol=:auto,
     mw = if use_batched
         _region_mean_width_batched(pi, r; box=box, ndirs=ndirs, nsamples=nsamples,
             max_proposals=max_proposals, rng=rng, directions=directions,
-            strict=strict, closure=closure)
+            strict=strict, closure=closure, enc_cache=enc_cache)
     else
         _region_mean_width_scalar(pi, r; box=box, ndirs=ndirs, nsamples=nsamples,
         max_proposals=max_proposals, rng=rng, directions=directions,
-        strict=strict, closure=closure)
+        strict=strict, closure=closure, enc_cache=enc_cache)
     end
 
     if key !== nothing
-        _sample_cache_insert!(_REGION_MEAN_WIDTH_CACHE, key, float(mw))
+        _region_summary_cache_set!(_REGION_MEAN_WIDTH_CACHE,
+            enc_cache, :mean_width, key, float(mw))
     end
     return mw
 end
@@ -1688,27 +2534,26 @@ end
 function _region_mean_width_scalar(pi, r::Integer; box,
     ndirs::Integer=256, nsamples::Integer=4000, max_proposals::Integer=10*nsamples,
     rng=Random.default_rng(), directions=nothing,
-    strict::Bool=true, closure::Bool=true)
+    strict::Bool=true, closure::Bool=true,
+    enc_cache::Union{Nothing,EncodingCache}=nothing)
     box === nothing && error("region_mean_width: box=(a,b) is required")
-    a, b = box
-    n = length(a)
+    a_f, widths = _box_lower_widths(box)
+    n = length(a_f)
 
-    U = _direction_matrix(directions, n, ndirs; rng=rng)
+    U = _direction_matrix(directions, n, ndirs; rng=rng, enc_cache=enc_cache)
     ws = _region_workspace(n, 1, size(U, 2))
     minproj = ws.minproj
     maxproj = ws.maxproj
     fill!(minproj, Inf)
     fill!(maxproj, -Inf)
     x = ws.x
-    x0 = Float64[(a[i] + b[i]) / 2 for i in 1:n]
+    x0 = Float64[a_f[i] + 0.5 * widths[i] for i in 1:n]
     locate_style = _resolve_locate_style(pi, x0; strict=strict, closure=closure)
     nacc = 0
     proposals = 0
     @inbounds while nacc < nsamples && proposals < max_proposals
         proposals += 1
-        for i in 1:n
-            x[i] = a[i] + rand(rng) * (b[i] - a[i])
-        end
+        _fill_random_point!(x, a_f, widths, rng)
         q = _locate_dispatch(pi, x, locate_style; strict=strict, closure=closure)
         if q == r
             nacc += 1
@@ -1735,27 +2580,26 @@ end
 function _region_mean_width_batched(pi, r::Integer; box,
     ndirs::Integer=256, nsamples::Integer=4000, max_proposals::Integer=10*nsamples,
     rng=Random.default_rng(), directions=nothing,
-    strict::Bool=true, closure::Bool=true)
+    strict::Bool=true, closure::Bool=true,
+    enc_cache::Union{Nothing,EncodingCache}=nothing)
     box === nothing && error("region_mean_width: box=(a,b) is required")
-    a, b = box
-    n = length(a)
+    a_f, widths = _box_lower_widths(box)
+    n = length(a_f)
 
-    U = _direction_matrix(directions, n, ndirs; rng=rng)
+    U = _direction_matrix(directions, n, ndirs; rng=rng, enc_cache=enc_cache)
     ws = _region_workspace(n, max(1, _REGION_LOCATE_BATCH_SIZE[]), size(U, 2))
     minproj = ws.minproj
     maxproj = ws.maxproj
     fill!(minproj, Inf)
     fill!(maxproj, -Inf)
-    x0 = Float64[(a[i] + b[i]) / 2 for i in 1:n]
+    x0 = Float64[a_f[i] + 0.5 * widths[i] for i in 1:n]
     locate_style = _resolve_locate_many_style(pi, x0; strict=strict, closure=closure)
 
     nacc = 0
     proposals = 0
     @inbounds while nacc < nsamples && proposals < max_proposals
         nbatch = min(size(ws.X, 2), max_proposals - proposals)
-        for j in 1:nbatch, i in 1:n
-            ws.X[i, j] = a[i] + rand(rng) * (b[i] - a[i])
-        end
+        _fill_random_points!(ws.X, a_f, widths, rng, nbatch)
         Xbatch = view(ws.X, :, 1:nbatch)
         locbatch = view(ws.locs, 1:nbatch)
         _locate_many_dispatch!(locbatch, pi, Xbatch, locate_style; strict=strict, closure=closure)
@@ -1817,6 +2661,14 @@ function region_minkowski_functionals(pi, r::Integer; box=nothing,
     box === nothing && error("region_minkowski_functionals: box=(a,b) is required")
 
     if _REGION_FAST_WRAPPERS[]
+        summary = _region_geometry_summary_maybe_fast(pi, r;
+            box=box, strict=strict, closure=closure, cache=cache,
+            mean_width_method=mean_width_method, mean_width_ndirs=mean_width_ndirs,
+            mean_width_rng=mean_width_rng, mean_width_directions=mean_width_directions,
+            need_mean_width=true)
+        summary === nothing || return (volume=float(summary.volume),
+            boundary_measure=float(summary.boundary_measure),
+            mean_width=float(summary.mean_width))
         fast = _region_minkowski_functionals_fast(pi, r;
             box=box, volume=volume, boundary=boundary,
             mean_width_method=mean_width_method, mean_width_ndirs=mean_width_ndirs,
@@ -2000,6 +2852,11 @@ computed from batch-to-batch variability (standard error of the estimate),
 and includes `pca=pd` with sampling diagnostics.
 
 This answers: "how stable is this feature under sampling?"
+
+Cost profile:
+- sampling-based / diagnostic-heavy,
+- best used after cheaper bbox-based summaries suggest anisotropy is worth
+  measuring more carefully.
 """
 function region_anisotropy_scores(pi, r::Integer;
     box=nothing,
@@ -2054,15 +2911,16 @@ function region_anisotropy_scores(pi, r::Integer;
     normalized_se = NaN
     ecc_se = NaN
 
-    if haskey(pd, :batch_evals) && (pd.batch_evals !== nothing) && (length(pd.batch_evals) >= 2)
-        k = length(pd.batch_evals)
+    if haskey(pd, :batch_evals) && (pd.batch_evals !== nothing) && (_batch_eval_count(pd.batch_evals) >= 2)
+        k = _batch_eval_count(pd.batch_evals)
 
         sr = 0.0; ssr = 0.0
         slr = 0.0; sslr = 0.0
         sn = 0.0; ssn = 0.0
         se = 0.0; sse = 0.0
 
-        for bevals in pd.batch_evals
+        for j in 1:k
+            bevals = _batch_eval_column(pd.batch_evals, j)
             rb = _covariance_anisotropy_from_evals(bevals; kind=:ratio, epsilon=epsilon)
             lrb = _covariance_anisotropy_from_evals(bevals; kind=:log_ratio, epsilon=epsilon)
             nb = _covariance_anisotropy_from_evals(bevals; kind=:normalized, epsilon=epsilon)
@@ -2100,6 +2958,144 @@ function region_anisotropy_scores(pi, r::Integer;
         normalized=normalized, normalized_stderr=normalized_se,
         eccentricity=ecc, eccentricity_stderr=ecc_se,
         pca=pd)
+end
+
+"""
+    region_anisotropy_scores(summary::RegionPrincipalDirectionsSummary; epsilon=summary.report.epsilon)
+
+Compute anisotropy scores from an already-built principal-direction summary.
+
+This avoids re-running the sampling workflow when you already have a
+`RegionPrincipalDirectionsSummary`.
+"""
+function region_anisotropy_scores(summary::RegionPrincipalDirectionsSummary; epsilon::Real=summary.report.epsilon)
+    evals = principal_values(summary)
+    return (
+        ratio = _covariance_anisotropy_from_evals(evals; kind=:ratio, epsilon=epsilon),
+        log_ratio = _covariance_anisotropy_from_evals(evals; kind=:log_ratio, epsilon=epsilon),
+        normalized = _covariance_anisotropy_from_evals(evals; kind=:normalized, epsilon=epsilon),
+        eccentricity = _covariance_eccentricity_from_evals(evals; epsilon=epsilon),
+    )
+end
+
+"""
+    Base.show(io::IO, summary::RegionGeometryValidationSummary)
+
+Compact display for the report returned by `region_geometry_validation_summary`.
+"""
+function Base.show(io::IO, summary::RegionGeometryValidationSummary)
+    report = summary.report
+    nhooks = count(identity, values(report.hooks))
+    nqueries = count(identity, values(report.queries))
+    print(io, "RegionGeometryValidationSummary(backend=", report.backend,
+        ", valid=", report.valid,
+        ", hooks=", nhooks, "/", length(report.hooks),
+        ", queries=", nqueries, "/", length(report.queries), ")")
+end
+
+"""
+    Base.show(io::IO, ::MIME\"text/plain\", summary::RegionGeometryValidationSummary)
+
+Plain-text display for the report returned by `region_geometry_validation_summary`.
+"""
+function Base.show(io::IO, ::MIME"text/plain", summary::RegionGeometryValidationSummary)
+    report = summary.report
+    println(io, "RegionGeometryValidationSummary")
+    println(io, "  backend: ", report.backend)
+    println(io, "  valid:   ", report.valid)
+    supported_hooks = [String(k) for (k, v) in pairs(report.hooks) if v]
+    supported_queries = [String(k) for (k, v) in pairs(report.queries) if v]
+    println(io, "  supported hooks:   ", isempty(supported_hooks) ? "(none)" : join(supported_hooks, ", "))
+    println(io, "  supported queries: ", isempty(supported_queries) ? "(none)" : join(supported_queries, ", "))
+    if isempty(report.issues)
+        print(io, "  issues: none")
+    else
+        println(io, "  issues:")
+        for issue in report.issues
+            println(io, "    - ", issue)
+        end
+    end
+end
+
+"""
+    Base.show(io::IO, summary::RegionGeometrySummary)
+
+Compact display for region geometry summaries.
+"""
+function Base.show(io::IO, summary::RegionGeometrySummary)
+    report = summary.report
+    print(io, "RegionGeometrySummary(backend=", report.backend,
+        ", region=", report.region,
+        ", finite_box=", report.finite_box,
+        ", available=", length(report.available),
+        ", unavailable=", length(report.unavailable), ")")
+end
+
+"""
+    Base.show(io::IO, ::MIME"text/plain\", summary::RegionGeometrySummary)
+
+Plain-text display for region geometry summaries.
+"""
+function Base.show(io::IO, ::MIME"text/plain", summary::RegionGeometrySummary)
+    report = summary.report
+    println(io, "RegionGeometrySummary")
+    println(io, "  backend:         ", report.backend)
+    println(io, "  region:          ", report.region)
+    println(io, "  finite_box:      ", report.finite_box)
+    println(io, "  available:       ", isempty(report.available) ? "(none)" : join(string.(report.available), ", "))
+    println(io, "  quantity_sources:")
+    for (name, source) in pairs(report.quantity_sources)
+        println(io, "    - ", name, " => ", source)
+    end
+    if isempty(report.unavailable)
+        println(io, "  unavailable:     (none)")
+    else
+        println(io, "  unavailable:")
+        for pair in report.unavailable
+            println(io, "    - ", first(pair), ": ", last(pair))
+        end
+    end
+    if isempty(report.issues)
+        print(io, "  issues:          none")
+    else
+        println(io, "  issues:")
+        for issue in report.issues
+            println(io, "    - ", issue)
+        end
+    end
+end
+
+"""
+    Base.show(io::IO, summary::RegionPrincipalDirectionsSummary)
+
+Compact display for principal-direction summaries.
+"""
+function Base.show(io::IO, summary::RegionPrincipalDirectionsSummary)
+    report = summary.report
+    print(io, "RegionPrincipalDirectionsSummary(backend=", report.backend,
+        ", region=", report.region,
+        ", ambient_dim=", length(report.evals),
+        ", n_accepted=", report.n_accepted,
+        ", n_proposed=", report.n_proposed, ")")
+end
+
+"""
+    Base.show(io::IO, ::MIME\"text/plain\", summary::RegionPrincipalDirectionsSummary)
+
+Plain-text display for principal-direction summaries.
+"""
+function Base.show(io::IO, ::MIME"text/plain", summary::RegionPrincipalDirectionsSummary)
+    report = summary.report
+    println(io, "RegionPrincipalDirectionsSummary")
+    println(io, "  backend:      ", report.backend)
+    println(io, "  region:       ", report.region)
+    println(io, "  ambient_dim:  ", length(report.evals))
+    println(io, "  n_accepted:   ", report.n_accepted)
+    println(io, "  n_proposed:   ", report.n_proposed)
+    println(io, "  principal_values: ", join(string.(report.evals), ", "))
+    print(io, "  anisotropy: ratio=", report.anisotropy.ratio,
+        ", normalized=", report.anisotropy.normalized,
+        ", eccentricity=", report.anisotropy.eccentricity)
 end
 
 end # module

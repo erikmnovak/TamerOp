@@ -44,7 +44,7 @@ claim_radius = 0.276871438665
 
 [[cases]]
 id = "parity_n5000_d2_s11"
-regime = "normalized_parity"
+regime = "rips_parity"
 dataset = "gaussian_shell"
 path = "parity_n5000_d2_s11.csv"
 n_points = 5000
@@ -57,7 +57,7 @@ parity_radius = 0.0368887823796
 
 [[cases]]
 id = "parity_n5000_d2_s17"
-regime = "normalized_parity"
+regime = "rips_parity"
 dataset = "gaussian_shell"
 path = "parity_n5000_d2_s17.csv"
 n_points = 5000
@@ -70,7 +70,7 @@ parity_radius = 0.0384925016318
 
 [[cases]]
 id = "parity_n10000_d2_s11"
-regime = "normalized_parity"
+regime = "rips_parity"
 dataset = "gaussian_shell"
 path = "parity_n10000_d2_s11.csv"
 n_points = 10000
@@ -83,7 +83,7 @@ parity_radius = 0.0260112561876
 
 [[cases]]
 id = "parity_n20000_d2_s11"
-regime = "normalized_parity"
+regime = "rips_parity"
 dataset = "gaussian_shell"
 path = "parity_n20000_d2_s11.csv"
 n_points = 20000
@@ -96,7 +96,7 @@ parity_radius = 0.0182923384118
 
 [[cases]]
 id = "parity_n5000_d8_s11"
-regime = "normalized_parity"
+regime = "rips_parity"
 dataset = "gaussian_shell"
 path = "parity_n5000_d8_s11.csv"
 n_points = 5000
@@ -109,7 +109,7 @@ parity_radius = 0.409251123735
 
 [[cases]]
 id = "parity_n10000_d8_s11"
-regime = "normalized_parity"
+regime = "rips_parity"
 dataset = "gaussian_shell"
 path = "parity_n10000_d8_s11.csv"
 n_points = 10000
@@ -264,7 +264,7 @@ landmarks = [435, 1267, 1301, 1411, 1706, 2285, 2952, 3010, 3418, 3423, 3456, 36
 
 [[cases]]
 id = "alpha_n200_d2_md2_s11"
-regime = "alpha_function_delaunay"
+regime = "alpha_parity"
 dataset = "gaussian_shell"
 path = "alpha_n200_d2_md2_s11.csv"
 n_points = 200
@@ -274,7 +274,7 @@ max_dim = 2
 
 [[cases]]
 id = "alpha_n300_d2_md2_s17"
-regime = "alpha_function_delaunay"
+regime = "alpha_parity"
 dataset = "gaussian_shell"
 path = "alpha_n300_d2_md2_s17.csv"
 n_points = 300

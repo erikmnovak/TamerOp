@@ -1,3 +1,0 @@
-case,family,stage,cache_mode,median_ms,p90_ms,median_alloc_kib
-pointcloud_dim2_kernel_probe_rips_d2,point,simplex_tree,packed_on,0.391279,0.502074,1315.671875
-pointcloud_dim2_kernel_probe_rips_d2,point,simplex_tree,packed_off,17.898315,23.829326,55660.625

@@ -16,14 +16,14 @@ using LinearAlgebra
 using Random
 using SparseArrays
 
-const PM = let pm = nothing
+const TO = let pm = nothing
     try
-        @eval using PosetModules
-        pm = PosetModules
+        @eval using TamerOp
+        pm = TamerOp
     catch
         try
-            include(joinpath(@__DIR__, "..", "src", "PosetModules.jl"))
-            pm = PosetModules
+            include(joinpath(@__DIR__, "..", "src", "TamerOp.jl"))
+            pm = TamerOp
         catch
             @eval module _ChainComplexesBenchModules
                 include(joinpath(@__DIR__, "..", "src", "CoreModules.jl"))
@@ -36,9 +36,9 @@ const PM = let pm = nothing
     pm
 end
 
-const CM = PM.CoreModules
-const CC = PM.ChainComplexes
-const FL = PM.FieldLinAlg
+const CM = TO.CoreModules
+const CC = TO.ChainComplexes
+const FL = TO.FieldLinAlg
 
 function _parse_int_arg(args, key::String, default::Int)
     for a in args
@@ -465,9 +465,9 @@ function main(; reps::Int=7,
     fmap = _identity_cochain_map(C)
 
     tri = CC.mapping_cone_triangle(fmap)
-    les = CC.long_exact_sequence(tri)
+    les = CC.long_exact_sequence(tri; output=:full)
 
-    tmid = C.tmin + ((C.tmax - C.tmin) ÷ 2)
+    tmid = C.tmin + div(C.tmax - C.tmin, 2)
     Hmid = CC.cohomology_data(C, tmid)
     hvec = Hmid.dimH > 0 ? Hmid.Hrep[:, 1] : zeros(K, Hmid.dimC)
 
@@ -484,7 +484,7 @@ function main(; reps::Int=7,
     Asp = sparse(A)
 
     # Basis-extension fixture.
-    Cbasis_input = _random_matrix(rng, field, max(24, cdim_max), max(8, cdim_max ÷ 2); density=0.45)
+    Cbasis_input = _random_matrix(rng, field, max(24, cdim_max), max(8, div(cdim_max, 2)); density=0.45)
 
     DC = nothing
     ss_ref = nothing
@@ -505,8 +505,8 @@ function main(; reps::Int=7,
             dmax=dc_dim_max,
             density=min(0.45, density + 0.10),
         )
-        ss_ref = CC.spectral_sequence(DC; first=:vertical)
-        ssh_ref = CC.spectral_sequence(DC; first=:horizontal)
+        ss_ref = CC.spectral_sequence(DC; output=:full, first=:vertical)
+        ssh_ref = CC.spectral_sequence(DC; output=:full, first=:horizontal)
         dref = CC.differential(ss_ref, 1)
         Tot_ref, blocks_ref = CC._total_complex_with_blocks(DC)
         if field isa CM.QQField
@@ -528,10 +528,10 @@ function main(; reps::Int=7,
             all(iszero, bad) || error("fixture check failed: bd_curr * bd_next != 0")
         end
         if field isa CM.QQField && run_spectral
-            ss_verify = CC.spectral_sequence(DC; first=:vertical)
+            ss_verify = CC.spectral_sequence(DC; output=:full, first=:vertical)
             ss_verify.filt_img.value === nothing ||
                 error("fixture check failed: exact spectral sequence should keep filt_img lazy before basis access")
-            tmid = ss_verify.Tot.tmin + ((ss_verify.Tot.tmax - ss_verify.Tot.tmin) ÷ 2)
+            tmid = ss_verify.Tot.tmin + div(ss_verify.Tot.tmax - ss_verify.Tot.tmin, 2)
             tidx_mid = tmid - ss_verify.Tot.tmin + 1
             _ = CC.filtration_dims(ss_verify, tmid)
             ss_verify.filt_img.value === nothing ||
@@ -592,11 +592,11 @@ function main(; reps::Int=7,
             end; reps=reps))
 
             push!(rows, _bench("cc long_exact_sequence", () -> begin
-                _digest_les(CC.long_exact_sequence(tri))
+                _digest_les(CC.long_exact_sequence(tri; output=:full))
             end; reps=reps))
 
             push!(rows, _bench("cc exact long_exact_sequence focused", () -> begin
-                _digest_les(CC.long_exact_sequence(tri))
+                _digest_les(CC.long_exact_sequence(tri; output=:full))
             end; reps=reps))
         else
         push!(rows, _bench("cc solve_particular dense", () -> begin
@@ -615,12 +615,22 @@ function main(; reps::Int=7,
             FL.rank(field, Bext)
         end; reps=reps))
 
+        push!(rows, _bench("cc diff_summaries", () -> begin
+            Hs = CC._diff_summaries(C)
+            sum(s.rank + size(s.ker, 2) + size(s.img, 2) for s in Hs)
+        end; reps=reps))
+
         push!(rows, _bench("cc cohomology_data degree", () -> begin
             _digest_H(CC.cohomology_data(C, tmid))
         end; reps=reps))
 
         push!(rows, _bench("cc cohomology_data all", () -> begin
             _digest_Hall(CC.cohomology_data(C))
+        end; reps=reps))
+
+        push!(rows, _bench("cc cohomology_data all + basis", () -> begin
+            Hall = CC.cohomology_data(C)
+            sum(size(CC.basis(H), 2) for H in Hall)
         end; reps=reps))
 
         push!(rows, _bench("cc cohomology_dims", () -> begin
@@ -673,7 +683,7 @@ function main(; reps::Int=7,
         end; reps=reps))
 
         push!(rows, _bench("cc long_exact_sequence", () -> begin
-            _digest_les(CC.long_exact_sequence(tri))
+            _digest_les(CC.long_exact_sequence(tri; output=:full))
         end; reps=reps))
 
         push!(rows, _bench("cc total_complex", () -> begin
@@ -683,7 +693,7 @@ function main(; reps::Int=7,
 
         if profile == "qq_exact" || suite == "exact"
             push!(rows, _bench("cc exact long_exact_sequence focused", () -> begin
-                _digest_les(CC.long_exact_sequence(tri))
+                _digest_les(CC.long_exact_sequence(tri; output=:full))
             end; reps=reps))
         end
         end
@@ -700,43 +710,23 @@ function main(; reps::Int=7,
 
         if run_exact_spectral_only
             push!(rows, _bench("cc exact horizontal build auto", () -> begin
-                oldh = CC._spectral_exact_horizontal_filtimg_mode[]
                 oldb = CC._spectral_exact_filtimg_basis_mode[]
                 try
-                    CC._spectral_exact_horizontal_filtimg_mode[] = :auto
                     CC._spectral_exact_filtimg_basis_mode[] = :auto
-                    ss = CC.spectral_sequence(DCv; first=:horizontal)
+                    ss = CC.spectral_sequence(DCv; output=:full, first=:horizontal)
                     _digest_ss_page(CC.page(ss, 1)) + _digest_ss_diff(CC.differential(ss, 1))
                 finally
-                    CC._spectral_exact_horizontal_filtimg_mode[] = oldh
                     CC._spectral_exact_filtimg_basis_mode[] = oldb
                 end
             end; reps=reps))
 
             push!(rows, _bench("cc exact horizontal build old_policy", () -> begin
-                oldh = CC._spectral_exact_horizontal_filtimg_mode[]
                 oldb = CC._spectral_exact_filtimg_basis_mode[]
                 try
-                    CC._spectral_exact_horizontal_filtimg_mode[] = :optimized
                     CC._spectral_exact_filtimg_basis_mode[] = :full
-                    ss = CC.spectral_sequence(DCv; first=:horizontal)
+                    ss = CC.spectral_sequence(DCv; output=:full, first=:horizontal)
                     _digest_ss_page(CC.page(ss, 1)) + _digest_ss_diff(CC.differential(ss, 1))
                 finally
-                    CC._spectral_exact_horizontal_filtimg_mode[] = oldh
-                    CC._spectral_exact_filtimg_basis_mode[] = oldb
-                end
-            end; reps=reps))
-
-            push!(rows, _bench("cc exact horizontal build legacy", () -> begin
-                oldh = CC._spectral_exact_horizontal_filtimg_mode[]
-                oldb = CC._spectral_exact_filtimg_basis_mode[]
-                try
-                    CC._spectral_exact_horizontal_filtimg_mode[] = :legacy
-                    CC._spectral_exact_filtimg_basis_mode[] = :columnwise
-                    ss = CC.spectral_sequence(DCv; first=:horizontal)
-                    _digest_ss_page(CC.page(ss, 1)) + _digest_ss_diff(CC.differential(ss, 1))
-                finally
-                    CC._spectral_exact_horizontal_filtimg_mode[] = oldh
                     CC._spectral_exact_filtimg_basis_mode[] = oldb
                 end
             end; reps=reps))
@@ -745,8 +735,8 @@ function main(; reps::Int=7,
                 oldb = CC._spectral_exact_filtimg_basis_mode[]
                 try
                     CC._spectral_exact_filtimg_basis_mode[] = :auto
-                    ss = CC.spectral_sequence(DCv; first=:vertical)
-                    tmid = ss.Tot.tmin + ((ss.Tot.tmax - ss.Tot.tmin) ÷ 2)
+                    ss = CC.spectral_sequence(DCv; output=:full, first=:vertical)
+                    tmid = ss.Tot.tmin + div(ss.Tot.tmax - ss.Tot.tmin, 2)
                     B = CC.filtration_basis(ss, ss.pmin, tmid)
                     size(B, 1) + size(B, 2)
                 finally
@@ -758,8 +748,8 @@ function main(; reps::Int=7,
                 oldb = CC._spectral_exact_filtimg_basis_mode[]
                 try
                     CC._spectral_exact_filtimg_basis_mode[] = :full
-                    ss = CC.spectral_sequence(DCv; first=:vertical)
-                    tmid = ss.Tot.tmin + ((ss.Tot.tmax - ss.Tot.tmin) ÷ 2)
+                    ss = CC.spectral_sequence(DCv; output=:full, first=:vertical)
+                    tmid = ss.Tot.tmin + div(ss.Tot.tmax - ss.Tot.tmin, 2)
                     B = CC.filtration_basis(ss, ss.pmin, tmid)
                     size(B, 1) + size(B, 2)
                 finally
@@ -771,8 +761,8 @@ function main(; reps::Int=7,
                 oldb = CC._spectral_exact_filtimg_basis_mode[]
                 try
                     CC._spectral_exact_filtimg_basis_mode[] = :columnwise
-                    ss = CC.spectral_sequence(DCv; first=:vertical)
-                    tmid = ss.Tot.tmin + ((ss.Tot.tmax - ss.Tot.tmin) ÷ 2)
+                    ss = CC.spectral_sequence(DCv; output=:full, first=:vertical)
+                    tmid = ss.Tot.tmin + div(ss.Tot.tmax - ss.Tot.tmin, 2)
                     B = CC.filtration_basis(ss, ss.pmin, tmid)
                     size(B, 1) + size(B, 2)
                 finally
@@ -782,8 +772,10 @@ function main(; reps::Int=7,
 
             push!(rows, _bench("cc exact page_terms inf prebuilt auto_materialization", () -> begin
                 oldb = CC._spectral_exact_filtimg_basis_mode[]
+                olds = CC._spectral_exact_filtimg_summary_reuse[]
                 try
                     CC._spectral_exact_filtimg_basis_mode[] = :auto
+                    CC._spectral_exact_filtimg_summary_reuse[] = true
                     ssref.Einf_spaces.value = nothing
                     ssref.filt_img.value = nothing
                     for lv in ssref.filt_img_cols
@@ -792,6 +784,26 @@ function main(; reps::Int=7,
                     _digest_ss_terms(CC.page_terms(ssref, :inf))
                 finally
                     CC._spectral_exact_filtimg_basis_mode[] = oldb
+                    CC._spectral_exact_filtimg_summary_reuse[] = olds
+                end
+            end; reps=reps))
+
+            push!(rows, _bench("cc exact page_terms inf prebuilt no_summary_reuse", () -> begin
+                oldb = CC._spectral_exact_filtimg_basis_mode[]
+                olds = CC._spectral_exact_filtimg_summary_reuse[]
+                try
+                    CC._spectral_exact_filtimg_basis_mode[] = :auto
+                    CC._spectral_exact_filtimg_summary_reuse[] = false
+                    ssref.Einf_spaces.value = nothing
+                    ssref.filt_img.value = nothing
+                    for lv in ssref.filt_img_cols
+                        lv.value = nothing
+                    end
+                    CC._ss_clear_filtimg_summary_cache!(ssref)
+                    _digest_ss_terms(CC.page_terms(ssref, :inf))
+                finally
+                    CC._spectral_exact_filtimg_basis_mode[] = oldb
+                    CC._spectral_exact_filtimg_summary_reuse[] = olds
                 end
             end; reps=reps))
 
@@ -826,10 +838,8 @@ function main(; reps::Int=7,
             end; reps=reps))
 
             push!(rows, _bench("cc exact horizontal page_terms inf auto_materialization", () -> begin
-                oldh = CC._spectral_exact_horizontal_filtimg_mode[]
                 oldb = CC._spectral_exact_filtimg_basis_mode[]
                 try
-                    CC._spectral_exact_horizontal_filtimg_mode[] = :auto
                     CC._spectral_exact_filtimg_basis_mode[] = :auto
                     sshref.Einf_spaces.value = nothing
                     sshref.filt_img.value = nothing
@@ -838,16 +848,13 @@ function main(; reps::Int=7,
                     end
                     _digest_ss_terms(CC.page_terms(sshref, :inf))
                 finally
-                    CC._spectral_exact_horizontal_filtimg_mode[] = oldh
                     CC._spectral_exact_filtimg_basis_mode[] = oldb
                 end
             end; reps=reps))
 
             push!(rows, _bench("cc exact horizontal page_terms inf old_materialization", () -> begin
-                oldh = CC._spectral_exact_horizontal_filtimg_mode[]
                 oldb = CC._spectral_exact_filtimg_basis_mode[]
                 try
-                    CC._spectral_exact_horizontal_filtimg_mode[] = :optimized
                     CC._spectral_exact_filtimg_basis_mode[] = :full
                     sshref.Einf_spaces.value = nothing
                     sshref.filt_img.value = nothing
@@ -856,7 +863,6 @@ function main(; reps::Int=7,
                     end
                     _digest_ss_terms(CC.page_terms(sshref, :inf))
                 finally
-                    CC._spectral_exact_horizontal_filtimg_mode[] = oldh
                     CC._spectral_exact_filtimg_basis_mode[] = oldb
                 end
             end; reps=reps))
@@ -883,57 +889,29 @@ function main(; reps::Int=7,
         else
 
         push!(rows, _bench("cc spectral_sequence build", () -> begin
-            ss = CC.spectral_sequence(DCv; first=:vertical)
+            ss = CC.spectral_sequence(DCv; output=:full, first=:vertical)
             _digest_ss_page(CC.page(ss, 1)) + _digest_ss_diff(CC.differential(ss, 1))
         end; reps=reps))
 
         push!(rows, _bench("cc spectral_sequence build horizontal", () -> begin
-            ss = CC.spectral_sequence(DCv; first=:horizontal)
+            ss = CC.spectral_sequence(DCv; output=:full, first=:horizontal)
             _digest_ss_page(CC.page(ss, 1)) + _digest_ss_diff(CC.differential(ss, 1))
         end; reps=reps))
 
         if profile == "qq_exact" || suite == "exact"
-            push!(rows, _bench("cc exact vertical build direct", () -> begin
-                old = CC._spectral_exact_vertical_filtimg_mode[]
-                try
-                    CC._spectral_exact_vertical_filtimg_mode[] = :direct
-                    ss = CC.spectral_sequence(DCv; first=:vertical)
-                    _digest_ss_page(CC.page(ss, 1)) + _digest_ss_diff(CC.differential(ss, 1))
-                finally
-                    CC._spectral_exact_vertical_filtimg_mode[] = old
-                end
+            push!(rows, _bench("cc exact vertical build canonical", () -> begin
+                ss = CC.spectral_sequence(DCv; output=:full, first=:vertical)
+                _digest_ss_page(CC.page(ss, 1)) + _digest_ss_diff(CC.differential(ss, 1))
             end; reps=reps))
 
-            push!(rows, _bench("cc exact vertical build batched", () -> begin
-                old = CC._spectral_exact_vertical_filtimg_mode[]
+            push!(rows, _bench("cc exact horizontal build full_materialization", () -> begin
+                old = CC._spectral_exact_filtimg_basis_mode[]
                 try
-                    CC._spectral_exact_vertical_filtimg_mode[] = :batched
-                    ss = CC.spectral_sequence(DCv; first=:vertical)
+                    CC._spectral_exact_filtimg_basis_mode[] = :full
+                    ss = CC.spectral_sequence(DCv; output=:full, first=:horizontal)
                     _digest_ss_page(CC.page(ss, 1)) + _digest_ss_diff(CC.differential(ss, 1))
                 finally
-                    CC._spectral_exact_vertical_filtimg_mode[] = old
-                end
-            end; reps=reps))
-
-            push!(rows, _bench("cc exact horizontal build optimized", () -> begin
-                old = CC._spectral_exact_horizontal_filtimg_mode[]
-                try
-                    CC._spectral_exact_horizontal_filtimg_mode[] = :optimized
-                    ss = CC.spectral_sequence(DCv; first=:horizontal)
-                    _digest_ss_page(CC.page(ss, 1)) + _digest_ss_diff(CC.differential(ss, 1))
-                finally
-                    CC._spectral_exact_horizontal_filtimg_mode[] = old
-                end
-            end; reps=reps))
-
-            push!(rows, _bench("cc exact horizontal build legacy", () -> begin
-                old = CC._spectral_exact_horizontal_filtimg_mode[]
-                try
-                    CC._spectral_exact_horizontal_filtimg_mode[] = :legacy
-                    ss = CC.spectral_sequence(DCv; first=:horizontal)
-                    _digest_ss_page(CC.page(ss, 1)) + _digest_ss_diff(CC.differential(ss, 1))
-                finally
-                    CC._spectral_exact_horizontal_filtimg_mode[] = old
+                    CC._spectral_exact_filtimg_basis_mode[] = old
                 end
             end; reps=reps))
         end
@@ -943,7 +921,7 @@ function main(; reps::Int=7,
         end; reps=reps, inner_reps=tiny_inner_reps))
 
         push!(rows, _bench("cc spectral page_terms r2 materialize", () -> begin
-            ss = CC.spectral_sequence(DCv; first=:vertical)
+            ss = CC.spectral_sequence(DCv; output=:full, first=:vertical)
             _digest_ss_terms(CC.page_terms(ss, 2))
         end; reps=reps))
 
@@ -990,20 +968,42 @@ function main(; reps::Int=7,
             end; reps=reps))
 
             push!(rows, _bench("cc exact filtration_dims mid warm", () -> begin
-                tmid = ssref.Tot.tmin + ((ssref.Tot.tmax - ssref.Tot.tmin) ÷ 2)
+                tmid = ssref.Tot.tmin + div(ssref.Tot.tmax - ssref.Tot.tmin, 2)
                 sum(values(CC.filtration_dims(ssref, tmid)))
             end; reps=reps, inner_reps=tiny_inner_reps))
 
             push!(rows, _bench("cc exact filtration_basis mid materialize", () -> begin
-                ss = CC.spectral_sequence(DCv; first=:vertical)
-                tmid = ss.Tot.tmin + ((ss.Tot.tmax - ss.Tot.tmin) ÷ 2)
+                ss = CC.spectral_sequence(DCv; output=:full, first=:vertical)
+                tmid = ss.Tot.tmin + div(ss.Tot.tmax - ss.Tot.tmin, 2)
                 B = CC.filtration_basis(ss, ss.pmin, tmid)
                 size(B, 1) + size(B, 2)
             end; reps=reps))
 
             push!(rows, _bench("cc exact page_terms inf prebuilt", () -> begin
-                ssref.Einf_spaces.value = nothing
-                _digest_ss_terms(CC.page_terms(ssref, :inf))
+                olds = CC._spectral_exact_filtimg_summary_reuse[]
+                try
+                    CC._spectral_exact_filtimg_summary_reuse[] = true
+                    ssref.Einf_spaces.value = nothing
+                    _digest_ss_terms(CC.page_terms(ssref, :inf))
+                finally
+                    CC._spectral_exact_filtimg_summary_reuse[] = olds
+                end
+            end; reps=reps))
+
+            push!(rows, _bench("cc exact page_terms inf prebuilt no_summary_reuse", () -> begin
+                olds = CC._spectral_exact_filtimg_summary_reuse[]
+                try
+                    CC._spectral_exact_filtimg_summary_reuse[] = false
+                    ssref.Einf_spaces.value = nothing
+                    ssref.filt_img.value = nothing
+                    for lv in ssref.filt_img_cols
+                        lv.value = nothing
+                    end
+                    CC._ss_clear_filtimg_summary_cache!(ssref)
+                    _digest_ss_terms(CC.page_terms(ssref, :inf))
+                finally
+                    CC._spectral_exact_filtimg_summary_reuse[] = olds
+                end
             end; reps=reps))
 
             push!(rows, _bench("cc exact horizontal page_terms inf prebuilt", () -> begin
@@ -1022,37 +1022,31 @@ function main(; reps::Int=7,
                 end
             end; reps=reps))
 
-            push!(rows, _bench("cc exact horizontal build cache_off", () -> begin
-                oldmode = CC._spectral_exact_horizontal_filtimg_mode[]
+            push!(rows, _bench("cc exact vertical build cache_off", () -> begin
                 oldcache = CC._spectral_exact_filtimg_cache_mode[]
                 try
-                    CC._spectral_exact_horizontal_filtimg_mode[] = :legacy
                     CC._spectral_exact_filtimg_cache_mode[] = :off
-                    ss = CC.spectral_sequence(DCv; first=:horizontal)
+                    ss = CC.spectral_sequence(DCv; output=:full, first=:vertical)
                     _digest_ss_page(CC.page(ss, 1)) + _digest_ss_diff(CC.differential(ss, 1))
                 finally
-                    CC._spectral_exact_horizontal_filtimg_mode[] = oldmode
                     CC._spectral_exact_filtimg_cache_mode[] = oldcache
                 end
             end; reps=reps))
 
-            push!(rows, _bench("cc exact horizontal build cache_on", () -> begin
-                oldmode = CC._spectral_exact_horizontal_filtimg_mode[]
+            push!(rows, _bench("cc exact vertical build cache_on", () -> begin
                 oldcache = CC._spectral_exact_filtimg_cache_mode[]
                 try
-                    CC._spectral_exact_horizontal_filtimg_mode[] = :legacy
                     CC._spectral_exact_filtimg_cache_mode[] = :on
-                    ss = CC.spectral_sequence(DCv; first=:horizontal)
+                    ss = CC.spectral_sequence(DCv; output=:full, first=:vertical)
                     _digest_ss_page(CC.page(ss, 1)) + _digest_ss_diff(CC.differential(ss, 1))
                 finally
-                    CC._spectral_exact_horizontal_filtimg_mode[] = oldmode
                     CC._spectral_exact_filtimg_cache_mode[] = oldcache
                 end
             end; reps=reps))
         end
 
         push!(rows, _bench("cc spectral differential r2 materialize", () -> begin
-            ss = CC.spectral_sequence(DCv; first=:vertical)
+            ss = CC.spectral_sequence(DCv; output=:full, first=:vertical)
             _digest_ss_diff(CC.differential(ss, 2))
         end; reps=reps))
 
@@ -1070,12 +1064,12 @@ function main(; reps::Int=7,
         end; reps=reps, inner_reps=tiny_inner_reps))
 
         push!(rows, _bench("cc spectral page_terms inf materialize", () -> begin
-            ss = CC.spectral_sequence(DCv; first=:vertical)
+            ss = CC.spectral_sequence(DCv; output=:full, first=:vertical)
             _digest_ss_terms(CC.page_terms(ss, :inf))
         end; reps=reps))
 
         push!(rows, _bench("cc spectral split_total_cohomology", () -> begin
-            t = ssref.Tot.tmin + ((ssref.Tot.tmax - ssref.Tot.tmin) ÷ 2)
+            t = ssref.Tot.tmin + div(ssref.Tot.tmax - ssref.Tot.tmin, 2)
             S = CC.split_total_cohomology(ssref, t)
             size(S.B, 1) + size(S.B, 2) + size(S.Binv, 1) + size(S.Binv, 2) + length(S.ranges)
         end; reps=reps, inner_reps=tiny_inner_reps))
@@ -1100,7 +1094,7 @@ function main(; reps::Int=7,
             C2 = _random_cochain_complex(local_rng, field; tmin=0, dims=dims2, density=density)
             fmap2 = _identity_cochain_map(C2)
             tri2 = CC.mapping_cone_triangle(fmap2)
-            les2 = CC.long_exact_sequence(tri2)
+            les2 = CC.long_exact_sequence(tri2; output=:full)
             _digest_cc(C2) + _digest_les(les2)
         end; reps=reps))
     end

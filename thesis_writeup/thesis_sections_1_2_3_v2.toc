@@ -1,0 +1,15 @@
+\babel@toc {english}{}\relax 
+\contentsline {section}{\numberline {1}Introduction}{1}{section.1}%
+\contentsline {section}{\numberline {2}Mathematical Background}{2}{section.2}%
+\contentsline {subsection}{\numberline {2.1}Posets as categories, persistence modules as functors}{2}{subsection.2.1}%
+\contentsline {subsection}{\numberline {2.2}The one-parameter model case}{3}{subsection.2.2}%
+\contentsline {subsection}{\numberline {2.3}What replaces barcodes in several parameters}{4}{subsection.2.3}%
+\contentsline {subsection}{\numberline {2.4}Why multiparameter persistence is hard}{5}{subsection.2.4}%
+\contentsline {section}{\numberline {3}Finite encodings, tameness, and fringe presentations}{6}{section.3}%
+\contentsline {subsection}{\numberline {3.1}Conventions and notation}{6}{subsection.3.1}%
+\contentsline {section}{\numberline {4}Overview of \textsc {TAMER-OP}{} as an encoding-centered system}{7}{section.4}%
+\contentsline {subsection}{\numberline {4.1}The main pipeline}{7}{subsection.4.1}%
+\contentsline {subsection}{\numberline {4.2}Architectural layering}{8}{subsection.4.2}%
+\contentsline {subsection}{\numberline {4.3}Why the finite encoding step is the organizing principle}{9}{subsection.4.3}%
+\contentsline {subsection}{\numberline {4.4}Road map for the remainder of the thesis}{10}{subsection.4.4}%
+\contentsline {section}{\numberline {5}Bibliography}{10}{section.5}%

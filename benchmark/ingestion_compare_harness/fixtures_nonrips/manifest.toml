@@ -5,7 +5,7 @@ scale = 1.0
 
 [[cases]]
 id = "nonrips_alpha_n200_d2_md2_s11"
-regime = "alpha_function_delaunay"
+regime = "alpha_parity"
 dataset = "gaussian_shell"
 path = "nonrips_alpha_n200_d2_md2_s11.csv"
 n_points = 200
@@ -15,7 +15,7 @@ max_dim = 2
 
 [[cases]]
 id = "nonrips_alpha_n300_d2_md2_s17"
-regime = "alpha_function_delaunay"
+regime = "alpha_parity"
 dataset = "gaussian_shell"
 path = "nonrips_alpha_n300_d2_md2_s17.csv"
 n_points = 300

@@ -18,20 +18,20 @@ using Random
 using LinearAlgebra
 
 try
-    using PosetModules
+    using TamerOp
 catch
-    include(joinpath(@__DIR__, "..", "src", "PosetModules.jl"))
-    using .PosetModules
+    include(joinpath(@__DIR__, "..", "src", "TamerOp.jl"))
+    using .TamerOp
 end
 
-const PM = PosetModules.Advanced
-const CM = PM.CoreModules
-const OPT = PM.Options
-const DT = PM.DataTypes
-const EC = PM.EncodingCore
-const RES = PM.Results
-const FZ = PM.FlangeZn
-const ZE = PM.ZnEncoding
+const TO = TamerOp.Advanced
+const CM = TO.CoreModules
+const OPT = TO.Options
+const DT = TO.DataTypes
+const EC = TO.EncodingCore
+const RES = TO.Results
+const FZ = TO.FlangeZn
+const ZE = TO.ZnEncoding
 const _BASELINE_SESSION_LOCK = Base.ReentrantLock()
 
 mutable struct _BaselineZnCaches
@@ -276,7 +276,7 @@ function _fixture()
     ]
     phi = Matrix{K}(I, length(injectives), length(flats))
     FG = FZ.Flange{K}(2, flats, injectives, phi; field=field)
-    opts = PM.EncodingOptions(backend=:zn, max_regions=4096, field=field)
+    opts = TO.EncodingOptions(backend=:zn, max_regions=4096, field=field)
     P, pi = ZE.encode_poset_from_flanges((FG,), opts; poset_kind=:signature)
     return (FG=FG, P=P, pi=pi, opts=opts)
 end
@@ -294,7 +294,7 @@ function main(args=ARGS)
     field = opts.field
     sc = CM.SessionCache()
     zn_baseline = _BaselineZnCaches()
-    enc0 = PM.encode(FG, opts; cache=sc)
+    enc0 = TO.encode(FG, opts; cache=sc)
 
     fkey = ZE._flange_fingerprint(FG)
     ekey = pi.encoding_fingerprint

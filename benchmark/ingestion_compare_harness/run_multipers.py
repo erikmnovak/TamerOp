@@ -124,7 +124,7 @@ def _build_multipers_simplextree(mmp, mp, gd, mf, data: np.ndarray, case: dict[s
         st0 = gd.RipsComplex(points=points, max_edge_length=claim_radius).create_simplex_tree(max_dimension=max_dim)
         st = mp.simplex_tree_multi.SimplexTreeMulti(st0, num_parameters=1, safe_conversion=False)
         return st, {"builder": "gudhi_rips_radius", "radius": claim_radius, "max_dim": max_dim}
-    elif regime == "normalized_parity":
+    elif regime == "rips_parity":
         if "parity_radius" in case:
             parity_radius = float(case["parity_radius"])
             st0 = gd.RipsComplex(points=points, max_edge_length=parity_radius).create_simplex_tree(max_dimension=max_dim)
@@ -192,7 +192,7 @@ def _build_multipers_simplextree(mmp, mp, gd, mf, data: np.ndarray, case: dict[s
         fvals = np.asarray(points[:, 0], dtype=np.float64)
         st = mf.DelaunayLowerstar(points, fvals, verbose=False)
         return st, {"builder": "filtrations.DelaunayLowerstar", "function": "coord1", "max_dim": max_dim}
-    elif regime == "alpha_function_delaunay":
+    elif regime == "alpha_parity":
         # Alpha parity: multipers alpha-complex vs tamer alpha filtration.
         tries = [
             {

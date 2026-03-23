@@ -7,10 +7,10 @@ using Dates
 
 const _FALLBACK_SOURCE_MODE = let source_mode = false
     try
-        @eval using PosetModules
+        @eval using TamerOp
     catch
-        include(joinpath(@__DIR__, "..", "..", "src", "PosetModules.jl"))
-        @eval using .PosetModules
+        include(joinpath(@__DIR__, "..", "..", "src", "TamerOp.jl"))
+        @eval using .TamerOp
         source_mode = true
     end
     source_mode
@@ -84,7 +84,7 @@ function _load_point_cloud(path::String)
         Matrix{Float64}(raw)
     end
     pts = [Vector{Float64}(view(mat, i, :)) for i in 1:size(mat, 1)]
-    return PosetModules.PointCloud(pts)
+    return TamerOp.PointCloud(pts)
 end
 
 function _load_image(path::String)
@@ -96,7 +96,7 @@ function _load_image(path::String)
     else
         Matrix{Float64}(raw)
     end
-    return PosetModules.ImageNd(Matrix{Float64}(mat))
+    return TamerOp.ImageNd(Matrix{Float64}(mat))
 end
 
 function _load_case_data(case::AbstractDict{String,<:Any}, path::String)
@@ -116,26 +116,26 @@ function _spec_for_case(case::AbstractDict{String,<:Any}; prefer_nn::Bool=true)
         haskey(case, "claim_radius") || error("claim_matching case requires claim_radius in manifest.")
         claim_radius = Float64(case["claim_radius"])
         nn_backend = prefer_nn ? :nearestneighbors : :bruteforce
-        return PosetModules.FiltrationSpec(
+        return TamerOp.FiltrationSpec(
             kind=:rips,
             max_dim=max_dim,
             radius=claim_radius,
             nn_backend=nn_backend,
-            construction=PosetModules.ConstructionOptions(
+            construction=TamerOp.ConstructionOptions(
                 ;
                 sparsify=:radius,
                 collapse=:none,
                 output_stage=:simplex_tree,
             ),
         )
-    elseif regime == "normalized_parity"
+    elseif regime == "rips_parity"
         if haskey(case, "parity_radius")
             parity_radius = Float64(case["parity_radius"])
-            return PosetModules.FiltrationSpec(
+            return TamerOp.FiltrationSpec(
                 kind=:rips,
                 max_dim=max_dim,
                 radius=parity_radius,
-                construction=PosetModules.ConstructionOptions(
+                construction=TamerOp.ConstructionOptions(
                     ;
                     sparsify=:radius,
                     collapse=:none,
@@ -143,10 +143,10 @@ function _spec_for_case(case::AbstractDict{String,<:Any}; prefer_nn::Bool=true)
                 ),
             )
         end
-        return PosetModules.FiltrationSpec(
+        return TamerOp.FiltrationSpec(
             kind=:rips,
             max_dim=max_dim,
-            construction=PosetModules.ConstructionOptions(
+            construction=TamerOp.ConstructionOptions(
                 ;
                 sparsify=:none,
                 collapse=:none,
@@ -156,11 +156,11 @@ function _spec_for_case(case::AbstractDict{String,<:Any}; prefer_nn::Bool=true)
     elseif regime == "degree_rips_parity"
         haskey(case, "degree_radius") || error("degree_rips_parity case requires degree_radius in manifest.")
         degree_radius = Float64(case["degree_radius"])
-        return PosetModules.FiltrationSpec(
+        return TamerOp.FiltrationSpec(
             kind=:degree_rips,
             max_dim=max_dim,
             radius=degree_radius,
-            construction=PosetModules.ConstructionOptions(
+            construction=TamerOp.ConstructionOptions(
                 ;
                 sparsify=:radius,
                 collapse=:none,
@@ -170,13 +170,13 @@ function _spec_for_case(case::AbstractDict{String,<:Any}; prefer_nn::Bool=true)
     elseif regime == "rips_codensity_parity"
         haskey(case, "codensity_radius") || error("rips_codensity_parity case requires codensity_radius in manifest.")
         codensity_radius = Float64(case["codensity_radius"])
-        codensity_k = Int(get(case, "codensity_k", 16))
-        return PosetModules.FiltrationSpec(
-            kind=:rips_density,
+        codensity_dtm_mass = Float64(case["codensity_dtm_mass"])
+        return TamerOp.FiltrationSpec(
+            kind=:rips_codensity,
             max_dim=max_dim,
             radius=codensity_radius,
-            density_k=codensity_k,
-            construction=PosetModules.ConstructionOptions(
+            dtm_mass=codensity_dtm_mass,
+            construction=TamerOp.ConstructionOptions(
                 ;
                 sparsify=:radius,
                 collapse=:none,
@@ -186,13 +186,12 @@ function _spec_for_case(case::AbstractDict{String,<:Any}; prefer_nn::Bool=true)
     elseif regime == "rips_lowerstar_parity"
         haskey(case, "lowerstar_radius") || error("rips_lowerstar_parity case requires lowerstar_radius in manifest.")
         lowerstar_radius = Float64(case["lowerstar_radius"])
-        return PosetModules.FiltrationSpec(
-            kind=:function_rips,
+        return TamerOp.FiltrationSpec(
+            kind=:rips_lowerstar,
             max_dim=max_dim,
             radius=lowerstar_radius,
-            vertex_function=(p, _)->Float64(p[1]),
-            simplex_agg=:max,
-            construction=PosetModules.ConstructionOptions(
+            coord=1,
+            construction=TamerOp.ConstructionOptions(
                 ;
                 sparsify=:radius,
                 collapse=:none,
@@ -200,21 +199,21 @@ function _spec_for_case(case::AbstractDict{String,<:Any}; prefer_nn::Bool=true)
             ),
         )
     elseif regime == "delaunay_lowerstar_parity"
-        return PosetModules.FiltrationSpec(
+        return TamerOp.FiltrationSpec(
             kind=:function_delaunay,
             max_dim=max_dim,
             vertex_function=(p, _)->Float64(p[1]),
             simplex_agg=:max,
-            construction=PosetModules.ConstructionOptions(
+            construction=TamerOp.ConstructionOptions(
                 ;
                 output_stage=:simplex_tree,
             ),
         )
-    elseif regime == "alpha_function_delaunay"
-        return PosetModules.FiltrationSpec(
+    elseif regime == "alpha_parity"
+        return TamerOp.FiltrationSpec(
             kind=:alpha,
             max_dim=max_dim,
-            construction=PosetModules.ConstructionOptions(
+            construction=TamerOp.ConstructionOptions(
                 ;
                 output_stage=:simplex_tree,
             ),
@@ -225,29 +224,29 @@ function _spec_for_case(case::AbstractDict{String,<:Any}; prefer_nn::Bool=true)
         landmarks = Int[Int(v) for v in case["landmarks"]]
         length(landmarks) > 0 || error("landmark_parity landmarks cannot be empty.")
         landmark_radius = Float64(case["landmark_radius"])
-        return PosetModules.FiltrationSpec(
+        return TamerOp.FiltrationSpec(
             kind=:landmark_rips,
             max_dim=max_dim,
             landmarks=landmarks,
             radius=landmark_radius,
-            construction=PosetModules.ConstructionOptions(
+            construction=TamerOp.ConstructionOptions(
                 ;
                 output_stage=:simplex_tree,
             ),
         )
     elseif regime == "core_delaunay_parity"
-        return PosetModules.FiltrationSpec(
+        return TamerOp.FiltrationSpec(
             kind=:core_delaunay,
             max_dim=max_dim,
-            construction=PosetModules.ConstructionOptions(
+            construction=TamerOp.ConstructionOptions(
                 ;
                 output_stage=:simplex_tree,
             ),
         )
     elseif regime == "cubical_parity"
-        return PosetModules.FiltrationSpec(
+        return TamerOp.FiltrationSpec(
             kind=:cubical,
-            construction=PosetModules.ConstructionOptions(
+            construction=TamerOp.ConstructionOptions(
                 ;
                 output_stage=:graded_complex,
             ),
@@ -260,7 +259,7 @@ end
 @inline function _run_encode_uncached(data, spec)
     # Harness policy: measure algorithmic runtime, excluding startup/JIT and
     # excluding cross-call session caching.
-    return PosetModules.encode(data, spec; degree=0, cache=nothing)
+    return TamerOp.encode(data, spec; degree=0, cache=nothing)
 end
 
 function _timed_encode(data, spec)
@@ -364,14 +363,14 @@ function main()
 
         notes = ""
         spec = _spec_for_case(c; prefer_nn=true)
-        if regime == "alpha_function_delaunay"
+        if regime == "alpha_parity"
             notes = "alpha_vs_alpha"
         elseif regime == "degree_rips_parity"
             notes = "degree_rips_vs_degree_rips"
         elseif regime == "rips_codensity_parity"
-            notes = "rips_density_vs_rips_codensity_directional"
+            notes = "rips_codensity_vs_rips_codensity"
         elseif regime == "rips_lowerstar_parity"
-            notes = "function_rips_vs_rips_lowerstar"
+            notes = "rips_lowerstar_exact_parity"
         elseif regime == "delaunay_lowerstar_parity"
             notes = "function_delaunay_vs_delaunay_lowerstar"
         elseif regime == "landmark_parity"

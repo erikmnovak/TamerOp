@@ -34,15 +34,15 @@ println("Class counts: geometric=", count(==("geometric"), labels), ", sbm=", co
 stage("2) Compare lower-star and clique lifts on one representative graph")
 
 g0 = graphs[1]
-field = PM.CoreModules.F2()
-f_lower = PM.GraphCentralityFiltration(
+field = TO.CoreModules.F2()
+f_lower = TO.GraphCentralityFiltration(
     ;
     centrality=:degree,
     metric=:hop,
     lift=:lower_star,
     max_dim=2,
 )
-f_clique = PM.GraphCentralityFiltration(
+f_clique = TO.GraphCentralityFiltration(
     ;
     centrality=:degree,
     metric=:hop,
@@ -50,23 +50,23 @@ f_clique = PM.GraphCentralityFiltration(
     max_dim=2,
 )
 
-enc_lower = PM.encode(g0, f_lower; degree=0, field=field, cache=:auto)
-enc_clique = PM.encode(g0, f_clique; degree=0, field=field, cache=:auto)
+enc_lower = TO.encode(g0, f_lower; degree=0, field=field, cache=:auto)
+enc_clique = TO.encode(g0, f_clique; degree=0, field=field, cache=:auto)
 
-println("lower-star poset size: ", PM.nvertices(enc_lower.P))
-println("clique-lift poset size: ", PM.nvertices(enc_clique.P))
-println("lower-star Hilbert nnz: ", count(!iszero, PM.restricted_hilbert(enc_lower.M)))
-println("clique-lift Hilbert nnz: ", count(!iszero, PM.restricted_hilbert(enc_clique.M)))
+println("lower-star poset size: ", TO.nvertices(enc_lower.P))
+println("clique-lift poset size: ", TO.nvertices(enc_clique.P))
+println("lower-star Hilbert nnz: ", count(!iszero, TO.restricted_hilbert(enc_lower.M)))
+println("clique-lift Hilbert nnz: ", count(!iszero, TO.restricted_hilbert(enc_clique.M)))
 
 stage("3) Encode full dataset with lower-star lift")
 
-encodings = Vector{PM.EncodingResult}(undef, length(graphs))
+encodings = Vector{TO.EncodingResult}(undef, length(graphs))
 for i in eachindex(graphs)
-    encodings[i] = PM.encode(graphs[i], f_lower; degree=0, field=field, cache=:auto)
+    encodings[i] = TO.encode(graphs[i], f_lower; degree=0, field=field, cache=:auto)
 end
 samples = to_encoding_samples(encodings, labels; prefix="graph")
 
-opts = PM.InvariantOptions(
+opts = TO.InvariantOptions(
     ;
     axes_policy=:encoding,
     max_axis_len=64,
@@ -84,7 +84,7 @@ offs = [
     collect(range(-0.7, stop=0.7, length=5)),
 ]
 
-sbar_spec = PM.SlicedBarcodeSpec(
+sbar_spec = TO.SlicedBarcodeSpec(
     ;
     directions=dirs,
     offsets=offs,
@@ -94,7 +94,7 @@ sbar_spec = PM.SlicedBarcodeSpec(
     threads=true,
 )
 
-land_spec = PM.LandscapeSpec(
+land_spec = TO.LandscapeSpec(
     ;
     directions=dirs,
     offsets=offs,
@@ -105,21 +105,21 @@ land_spec = PM.LandscapeSpec(
     threads=true,
 )
 
-spec = PM.CompositeSpec((sbar_spec, land_spec))
+spec = TO.CompositeSpec((sbar_spec, land_spec))
 
-sc = PM.SessionCache()
-fs = PM.batch_transform(
+sc = TO.SessionCache()
+fs = TO.batch_transform(
     samples,
     spec;
     opts=opts,
     idfun=s -> s.id,
     labelfun=s -> s.label,
-    batch=PM.BatchOptions(threaded=true, backend=:threads, progress=false, deterministic=true),
+    batch=TO.BatchOptions(threaded=true, backend=:threads, progress=false, deterministic=true),
     cache=sc,
 )
 
 println("Feature matrix shape: ", size(fs.X))
-println("nfeatures(spec): ", PM.nfeatures(spec))
+println("nfeatures(spec): ", TO.nfeatures(spec))
 
 stage("5) Save outputs")
 

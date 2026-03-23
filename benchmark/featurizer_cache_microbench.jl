@@ -25,21 +25,21 @@
 using LinearAlgebra
 
 try
-    using PosetModules
+    using TamerOp
 catch
-    include(joinpath(@__DIR__, "..", "src", "PosetModules.jl"))
-    using .PosetModules
+    include(joinpath(@__DIR__, "..", "src", "TamerOp.jl"))
+    using .TamerOp
 end
 
-const PM = PosetModules.Advanced
-const CM = PM.CoreModules
-const OPT = PM.Options
-const DT = PM.DataTypes
-const EC = PM.EncodingCore
-const RES = PM.Results
-const FF = PM.FiniteFringe
-const IR = PM.IndicatorResolutions
-const PLB = PM.PLBackend
+const TO = TamerOp.Advanced
+const CM = TO.CoreModules
+const OPT = TO.Options
+const DT = TO.DataTypes
+const EC = TO.EncodingCore
+const RES = TO.Results
+const FF = TO.FiniteFringe
+const IR = TO.IndicatorResolutions
+const PLB = TO.PLBackend
 
 function _fixture()
     field = CM.QQField()
@@ -60,14 +60,14 @@ function _fixture()
     enc3 = RES.EncodingResult(P, M3, pi)
     opts_inv = OPT.InvariantOptions(box=([-1.0, -1.0], [2.0, 1.0]), strict=false)
 
-    lspec = PM.LandscapeSpec(
+    lspec = TO.LandscapeSpec(
         directions=[[1.0, 1.0]],
         offsets=[[0.0, 0.0]],
         tgrid=collect(0.0:0.5:3.0),
         kmax=2,
         strict=false,
     )
-    pispec = PM.PersistenceImageSpec(
+    pispec = TO.PersistenceImageSpec(
         directions=[[1.0, 1.0]],
         offsets=[[0.0, 0.0]],
         xgrid=collect(0.0:0.5:2.0),
@@ -75,9 +75,9 @@ function _fixture()
         sigma=0.35,
         strict=false,
     )
-    cspec = PM.CompositeSpec((lspec, pispec), namespacing=true)
+    cspec = TO.CompositeSpec((lspec, pispec), namespacing=true)
 
-    mlspec = PM.MPLandscapeSpec(
+    mlspec = TO.MPLandscapeSpec(
         directions=[[1.0, 1.0]],
         offsets=[[0.0, 0.0]],
         tgrid=collect(0.0:0.5:3.0),
@@ -85,7 +85,7 @@ function _fixture()
         strict=false,
         direction_weight=:uniform,
     )
-    mlspec2 = PM.MPLandscapeSpec(
+    mlspec2 = TO.MPLandscapeSpec(
         directions=[[1.0, 1.0]],
         offsets=[[0.0, 0.0]],
         tgrid=collect(0.0:0.5:3.0),
@@ -93,25 +93,25 @@ function _fixture()
         strict=false,
         direction_weight=:uniform,
     )
-    mlpair = PM.CompositeSpec((mlspec, mlspec2), namespacing=true)
+    mlpair = TO.CompositeSpec((mlspec, mlspec2), namespacing=true)
 
-    mppspec = PM.MPPImageSpec(
+    mppspec = TO.MPPImageSpec(
         resolution=6,
         sigma=0.15,
         N=8,
         q=1.0,
         segment_prune=true,
     )
-    mppspec2 = PM.MPPImageSpec(
+    mppspec2 = TO.MPPImageSpec(
         resolution=5,
         sigma=0.2,
         N=8,
         q=1.0,
         segment_prune=false,
     )
-    mpppair = PM.CompositeSpec((mppspec, mppspec2), namespacing=true)
+    mpppair = TO.CompositeSpec((mppspec, mppspec2), namespacing=true)
 
-    dspec = PM.ProjectedDistancesSpec(
+    dspec = TO.ProjectedDistancesSpec(
         [enc3];
         reference_names=[:M3],
         n_dirs=4,
@@ -153,27 +153,27 @@ end
 
 function main(; reps::Int=15)
     fx = _fixture()
-    bserial = PM.BatchOptions(threaded=false, backend=:serial, deterministic=true)
+    bserial = TO.BatchOptions(threaded=false, backend=:serial, deterministic=true)
 
-    raw_comp = () -> PM.transform(fx.cspec, fx.enc23; opts=fx.opts_inv, threaded=false)
-    comp_cache = PM.build_cache(fx.enc23, fx.cspec; opts=fx.opts_inv, threaded=false)
-    cached_comp = () -> PM.transform(fx.cspec, comp_cache; opts=fx.opts_inv, threaded=false)
+    raw_comp = () -> TO.transform(fx.cspec, fx.enc23; opts=fx.opts_inv, threaded=false)
+    comp_cache = TO.build_cache(fx.enc23, fx.cspec; opts=fx.opts_inv, threaded=false)
+    cached_comp = () -> TO.transform(fx.cspec, comp_cache; opts=fx.opts_inv, threaded=false)
 
-    raw_mlpair = () -> PM.transform(fx.mlpair, fx.enc23; opts=fx.opts_inv, threaded=false)
-    mlpair_cache = PM.build_cache(fx.enc23, fx.mlpair; opts=fx.opts_inv, threaded=false)
-    cached_mlpair = () -> PM.transform(fx.mlpair, mlpair_cache; opts=fx.opts_inv, threaded=false)
+    raw_mlpair = () -> TO.transform(fx.mlpair, fx.enc23; opts=fx.opts_inv, threaded=false)
+    mlpair_cache = TO.build_cache(fx.enc23, fx.mlpair; opts=fx.opts_inv, threaded=false)
+    cached_mlpair = () -> TO.transform(fx.mlpair, mlpair_cache; opts=fx.opts_inv, threaded=false)
 
-    raw_mpppair = () -> PM.transform(fx.mpppair, fx.enc23; opts=fx.opts_inv, threaded=false)
-    mpppair_cache = PM.build_cache(fx.enc23, fx.mpppair; opts=fx.opts_inv, threaded=false, level=:fibered)
-    cached_mpppair = () -> PM.transform(fx.mpppair, mpppair_cache; opts=fx.opts_inv, threaded=false)
+    raw_mpppair = () -> TO.transform(fx.mpppair, fx.enc23; opts=fx.opts_inv, threaded=false)
+    mpppair_cache = TO.build_cache(fx.enc23, fx.mpppair; opts=fx.opts_inv, threaded=false, level=:fibered)
+    cached_mpppair = () -> TO.transform(fx.mpppair, mpppair_cache; opts=fx.opts_inv, threaded=false)
 
-    raw_proj = () -> PM.transform(fx.dspec, fx.enc23; opts=fx.opts_inv, threaded=false)
-    proj_cache = PM.build_cache(fx.enc23, fx.dspec; opts=fx.opts_inv, threaded=false)
-    cached_proj = () -> PM.transform(fx.dspec, proj_cache; opts=fx.opts_inv, threaded=false)
+    raw_proj = () -> TO.transform(fx.dspec, fx.enc23; opts=fx.opts_inv, threaded=false)
+    proj_cache = TO.build_cache(fx.enc23, fx.dspec; opts=fx.opts_inv, threaded=false)
+    cached_proj = () -> TO.transform(fx.dspec, proj_cache; opts=fx.opts_inv, threaded=false)
 
     samples = Any[fx.enc23, fx.enc3, fx.enc23, fx.enc3]
-    raw_feat = () -> PM.featurize(samples, fx.cspec; opts=fx.opts_inv, batch=bserial, cache=nothing)
-    cached_feat = () -> PM.featurize(samples, fx.cspec; opts=fx.opts_inv, batch=bserial, cache=:auto)
+    raw_feat = () -> TO.featurize(samples, fx.cspec; opts=fx.opts_inv, batch=bserial, cache=nothing)
+    cached_feat = () -> TO.featurize(samples, fx.cspec; opts=fx.opts_inv, batch=bserial, cache=:auto)
 
     println("Featurizer cache micro-benchmark (reps=", reps, ")")
     println("Layout: mean time/alloc over repeated runs with warmup.\n")
@@ -186,8 +186,8 @@ function main(; reps::Int=15)
     cmpp = _bench("transform MPP composite (cache)", cached_mpppair; reps=reps)
     r2 = _bench("transform ProjectedDistancesSpec (raw)", raw_proj; reps=reps)
     c2 = _bench("transform ProjectedDistancesSpec (cache)", cached_proj; reps=reps)
-    r3 = _bench("featurize batch (cache=nothing)", raw_feat; reps=max(5, reps ÷ 2))
-    c3 = _bench("featurize batch (cache=:auto)", cached_feat; reps=max(5, reps ÷ 2))
+    r3 = _bench("featurize batch (cache=nothing)", raw_feat; reps=max(5, div(reps, 2)))
+    c3 = _bench("featurize batch (cache=:auto)", cached_feat; reps=max(5, div(reps, 2)))
 
     println("\nRelative speedups (raw/cache):")
     println("CompositeSpec transform:        ", round(r1.mean_ms / c1.mean_ms, digits=3), "x")

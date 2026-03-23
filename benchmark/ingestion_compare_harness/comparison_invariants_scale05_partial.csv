@@ -1,0 +1,4 @@
+case_id,regime,invariant_kind,degree,n_points,ambient_dim,max_dim,tamer_cold_ms,multipers_cold_ms,cold_slowdown_tamer_over_multipers,tamer_warm_median_ms,multipers_warm_median_ms,warm_slowdown_tamer_over_multipers,tamer_output_term_count,multipers_output_term_count,tamer_output_abs_mass,multipers_output_abs_mass
+inv_cubical_side24_s11,cubical_parity,euler_signed_measure,0,289,2,2,2.607472,8.169497001290438,0.319172,2.909539,8.0622655004845,0.360884,26,30,27,31.0
+inv_degree_rips_n1000_d2_s11,degree_rips_parity,euler_signed_measure,0,500,2,1,8836.202807,20.358714999019867,434.025566,6200.2893564999995,23.18299950002256,267.449834,1018,3840,1491,4313.0
+inv_degree_rips_n1000_d8_s11,degree_rips_parity,euler_signed_measure,0,500,8,1,22091.518381,42.79453900016961,516.222838,20656.501053,45.818916999451176,450.829099,1534,4262,1987,4715.0

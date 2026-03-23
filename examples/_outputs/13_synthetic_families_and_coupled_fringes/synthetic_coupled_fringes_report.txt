@@ -1,0 +1,16 @@
+example=13_synthetic_families_and_coupled_fringes
+chain_family_summary=(kind = :synthetic_family, generator = :coupled_chain_sweep, nitems = 3, item_kind = :fringe_module, parameter_keys = [:n, :bars], labels = ["n=7, bars=[(1, 4), (2, 5), (3, 6)]", "n=7, bars=[(1, 5), (3, 6), (4, 7)]", "n=7, bars=[(1, 6), (2, 6), (3, 7)]"])
+box_family_summary=(kind = :synthetic_family, generator = :staircase_box_sweep, nitems = 2, item_kind = :synthetic_box_fringe, parameter_keys = [:bars], labels = ["bars=[([0.0, 0.0], [1.5, 1.0]), ([0.75, 0.5], [2.25, 1.75]), ([1.5, 1.0], [3.0, 2.5])]", "bars=[([0.0, 0.0], [2.0, 1.25]), ([0.75, 0.5], [2.75, 2.25]), ([1.5, 1.0], [3.75, 3.25])]"])
+flange_family_summary=(kind = :synthetic_family, generator = :mixed_face_flange_sweep, nitems = 2, item_kind = :flange, parameter_keys = [:phi], labels = ["phi=[1 1 0; 1 0 1; 0 1 1]", "phi=[1 1 0; 0 1 1; 0 0 1]"])
+diagonal_box_summary=(kind = :synthetic_box_fringe, ambient_dim = 2, nupsets = 3, ndownsets = 3, matrix_size = (3, 3), field = Main.TamerOp.CoreModules.CoeffFields.QQField())
+coupled_box_summary=(kind = :synthetic_box_fringe, ambient_dim = 2, nupsets = 3, ndownsets = 3, matrix_size = (3, 3), field = Main.TamerOp.CoreModules.CoeffFields.QQField())
+diagonal_encoding_summary=(kind = :pl_backend_encoding_map, ambient_dim = 2, generator_counts = (upsets = 3, downsets = 3), nregions = 13, cell_shape = [7, 7], direct_lookup_enabled = true, axes_uniform = (false, false), all_axes_uniform = false, critical_coordinate_counts = (6, 6))
+coupled_encoding_summary=(kind = :pl_backend_encoding_map, ambient_dim = 2, generator_counts = (upsets = 3, downsets = 3), nregions = 16, cell_shape = [7, 7], direct_lookup_enabled = true, axes_uniform = (false, false), all_axes_uniform = false, critical_coordinate_counts = (6, 6))
+diagonal_rank_summary=(kind = :rank_invariant, nentries = 3, nnonzero = 3, store_zeros = false, nvertices = 13, poset_type = Main.TamerOp.ZnEncoding.SignaturePoset{1, 1})
+coupled_rank_summary=(kind = :rank_invariant, nentries = 15, nnonzero = 15, store_zeros = false, nvertices = 16, poset_type = Main.TamerOp.ZnEncoding.SignaturePoset{1, 1})
+diagonal_regions_visual=(path = "/home/eriknovak/Documents/duke_fall_2025/tamer-op/examples/_outputs/13_synthetic_families_and_coupled_fringes/diagonal_box_regions.html", format = :html)
+coupled_regions_visual=(path = "/home/eriknovak/Documents/duke_fall_2025/tamer-op/examples/_outputs/13_synthetic_families_and_coupled_fringes/coupled_box_regions.html", format = :html)
+diagonal_rank_visual=(path = "/home/eriknovak/Documents/duke_fall_2025/tamer-op/examples/_outputs/13_synthetic_families_and_coupled_fringes/diagonal_box_rank_heatmap.html", format = :html)
+coupled_rank_visual=(path = "/home/eriknovak/Documents/duke_fall_2025/tamer-op/examples/_outputs/13_synthetic_families_and_coupled_fringes/coupled_box_rank_heatmap.html", format = :html)
+diagonal_poset_vertices=13
+coupled_poset_vertices=16

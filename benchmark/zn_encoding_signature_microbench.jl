@@ -28,17 +28,18 @@
 using Random
 
 try
-    using PosetModules
+    using TamerOp
 catch
-    include(joinpath(@__DIR__, "..", "src", "PosetModules.jl"))
-    using .PosetModules
+    include(joinpath(@__DIR__, "..", "src", "TamerOp.jl"))
+    using .TamerOp
 end
 
-const PM = PosetModules.Advanced
-const ZE = PM.ZnEncoding
-const FZ = PM.FlangeZn
-const CM = PM.CoreModules
-const FF = PM.FiniteFringe
+const TO = TamerOp.Advanced
+const ZE = TO.ZnEncoding
+const FZ = TO.FlangeZn
+const CM = TO.CoreModules
+const FF = TO.FiniteFringe
+const FL = TamerOp.FieldLinAlg
 
 function _parse_arg(args, key::String, default::Int)
     for a in args
@@ -127,6 +128,24 @@ function _flange_fixture_adversarial(field::CM.AbstractCoeffField; ncuts::Int=8)
     return FG, (-2 * ncuts, -2 * ncuts), (2 * ncuts, 2 * ncuts)
 end
 
+function _flange_fixture_basis_change(field::CM.AbstractCoeffField)
+    n = 1
+    flats = [
+        FZ.IndFlat(FZ.face(n, [false]), (2,); id=:BF1),
+        FZ.IndFlat(FZ.face(n, [true]),  (2,); id=:BF2),
+        FZ.IndFlat(FZ.face(n, [false]), (3,); id=:BF3),
+    ]
+    injectives = [
+        FZ.IndInj(FZ.face(n, [false]), (10_000,); id=:BE1),
+        FZ.IndInj(FZ.face(n, [false]), (10_000,); id=:BE2),
+    ]
+    K = CM.coeff_type(field)
+    phi = K[1 0 1;
+            0 1 1]
+    FG = FZ.Flange{K}(n, flats, injectives, phi; field=field)
+    return FG, (2,), (3,)
+end
+
 function _naive_pmodule_on_box(FG::FZ.Flange{K}; a::NTuple{N,Int}, b::NTuple{N,Int}) where {K,N}
     Q, coords = ZE.grid_poset(a, b)
     r = length(FG.injectives)
@@ -155,7 +174,7 @@ function _naive_pmodule_on_box(FG::FZ.Flange{K}; a::NTuple{N,Int}, b::NTuple{N,I
             dims[i] = 0
         else
             Phi_g = Phi[rows, cols]
-            Bg = PM.FieldLinAlg.colspace(field, Phi_g)
+            Bg = FL.colspace(field, Phi_g)
             B[i] = Bg
             dims[i] = size(Bg, 2)
         end
@@ -184,11 +203,11 @@ function _naive_pmodule_on_box(FG::FZ.Flange{K}; a::NTuple{N,Int}, b::NTuple{N,I
             edge_maps[(u, v)] = zeros(K, dv, du)
         else
             Im = _gather_rows(B[u], active_rows[u], active_rows[v])
-            edge_maps[(u, v)] = PM.FieldLinAlg.solve_fullcolumn(field, B[v], Im)
+            edge_maps[(u, v)] = FL.solve_fullcolumn(field, B[v], Im)
         end
     end
 
-    return PM.Modules.PModule{K}(Q, Vector{Int}(dims), edge_maps; field=field)
+    return TO.Modules.PModule{K}(Q, Vector{Int}(dims), edge_maps; field=field)
 end
 
 function _pmodule_equal(M1, M2)
@@ -209,6 +228,13 @@ function _pmodule_fields(all_fields::Bool)
     return [("qq", CM.QQField()), ("f2", CM.F2())]
 end
 
+function _neighbor_boxes(a::NTuple{N,Int}, b::NTuple{N,Int}) where {N}
+    width1 = b[1] - a[1]
+    last_start = max(a[1], b[1] - 4)
+    return [(Base.setindex(a, x, 1), Base.setindex(b, x + width1, 1))
+            for x in a[1]:last_start]
+end
+
 function _run_pmodule_bench(; reps::Int=4, ncuts::Int=8, all_fields::Bool=false)
     println("\npmodule_on_box benchmark (incremental+cache vs naive full scan)")
     println("reps=$(reps), ncuts=$(ncuts), fields=$(all_fields ? "qq,f2,f3,fp5" : "qq,f2")\n")
@@ -221,11 +247,49 @@ function _run_pmodule_bench(; reps::Int=4, ncuts::Int=8, all_fields::Bool=false)
             Mold = _naive_pmodule_on_box(FG; a=a, b=b)
             _pmodule_equal(Mnew, Mold) || error("pmodule parity failed for field=$(fname), case=$(cname)")
 
+            bcache = ZE.compile_zn_box_cache(FG)
             bnew = _bench("pmodule new ($cname)", () -> ZE.pmodule_on_box(FG; a=a, b=b); reps=reps)
+            old_transition_mode = ZE._ZN_TRANSITION_SPARSE_OVERRIDE[]
+            bdenseforced = try
+                ZE._ZN_TRANSITION_SPARSE_OVERRIDE[] = :never
+                _bench("pmodule dense-forced ($cname)", () -> ZE.pmodule_on_box(FG; a=a, b=b); reps=reps)
+            finally
+                ZE._ZN_TRANSITION_SPARSE_OVERRIDE[] = old_transition_mode
+            end
+            bcached = _bench("pmodule cached ($cname)", () -> ZE.pmodule_on_box(FG; a=a, b=b, cache=bcache); reps=reps)
+            neighbors = _neighbor_boxes(a, b)
+            bneighbors_uncached = _bench("pmodule neighbor uncached ($cname)", () -> begin
+                for (aa, bb) in neighbors
+                    ZE.pmodule_on_box(FG; a=aa, b=bb)
+                end
+            end; reps=reps)
+            bneighbors = _bench("pmodule neighbor cached ($cname)", () -> begin
+                for (aa, bb) in neighbors
+                    ZE.pmodule_on_box(FG; a=aa, b=bb, cache=bcache)
+                end
+            end; reps=reps)
             bold = _bench("pmodule naive ($cname)", () -> _naive_pmodule_on_box(FG; a=a, b=b); reps=reps)
             println("  speedup naive/new: ", round(bold.ms / bnew.ms, digits=3), "x")
+            println("  speedup dense-forced/new: ", round(bdenseforced.ms / max(1e-9, bnew.ms), digits=3), "x")
+            println("  speedup naive/cached: ", round(bold.ms / bcached.ms, digits=3), "x")
+            println("  neighbor uncached/cached speedup: ", round(bneighbors_uncached.ms / max(1e-9, bneighbors.ms), digits=3), "x")
+            println("  neighbor uncached/cached alloc ratio: ", round(bneighbors_uncached.kib / max(1e-9, bneighbors.kib), digits=3), "x")
             println("  alloc ratio naive/new: ", round(bold.kib / max(1e-9, bnew.kib), digits=3), "x")
+            println("  alloc ratio naive/cached: ", round(bold.kib / max(1e-9, bcached.kib), digits=3), "x")
         end
+        FGbc, abc, bbc_box = _flange_fixture_basis_change(field)
+        bcache_bc = ZE.compile_zn_box_cache(FGbc)
+        bbcur = _bench("pmodule basis-change", () -> ZE.pmodule_on_box(FGbc; a=abc, b=bbc_box); reps=reps)
+        old_basis_change_mode = ZE._ZN_BASIS_CHANGE_FASTPATH[]
+        bbslow = try
+            ZE._ZN_BASIS_CHANGE_FASTPATH[] = false
+            _bench("pmodule basis-change off", () -> ZE.pmodule_on_box(FGbc; a=abc, b=bbc_box); reps=reps)
+        finally
+            ZE._ZN_BASIS_CHANGE_FASTPATH[] = old_basis_change_mode
+        end
+        bbcached = _bench("pmodule basis-change cached", () -> ZE.pmodule_on_box(FGbc; a=abc, b=bbc_box, cache=bcache_bc); reps=reps)
+        println("  basis-change off/current speedup: ", round(bbslow.ms / max(1e-9, bbcur.ms), digits=3), "x")
+        println("  basis-change cache speedup: ", round(bbcur.ms / max(1e-9, bbcached.ms), digits=3), "x")
         println()
     end
 end
@@ -236,7 +300,7 @@ end
     if isempty(rows) || isempty(cols)
         return 0
     end
-    return PM.FieldLinAlg.rank(FG.field, FG.phi[rows, cols])
+    return FL.rank(FG.field, FG.phi[rows, cols])
 end
 
 function _sample_box_points(a::NTuple{N,Int}, b::NTuple{N,Int}, nqueries::Int, rng::AbstractRNG) where {N}
@@ -375,7 +439,7 @@ function _fixture(; n::Int=3, nflats::Int=14, ninj::Int=14, reps_box::Int=4)
     end
     FG = FZ.Flange{K}(n, flats, injectives, phi)
 
-    enc = PM.encode(FG, PM.EncodingOptions(backend=:zn, max_regions=200_000, poset_kind=:signature, field=field))
+    enc = TO.encode(FG, TO.EncodingOptions(backend=:zn, max_regions=200_000, poset_kind=:signature, field=field))
     pi = enc.pi.pi
 
     # Tuple-key baseline map (old style).
@@ -437,6 +501,53 @@ function _edge_iterator_count(Q)
     return s
 end
 
+function _signature_cover_edges_uncached_old_count(P)
+    n = FF.nvertices(P)
+    n == 0 && return 0
+    ranks = Vector{Int}(undef, n)
+    maxrank = 0
+    @inbounds for i in 1:n
+        r = ZE._sig_popcount_words(P.sig_y.words, i, P.y_lastmask) +
+            ZE._sig_popcount_words(P.sig_z.words, i, P.z_lastmask)
+        ranks[i] = r
+        r > maxrank && (maxrank = r)
+    end
+    buckets = [Int[] for _ in 0:maxrank]
+    @inbounds for i in 1:n
+        push!(buckets[ranks[i] + 1], i)
+    end
+    mins = Int[]
+    nedges = 0
+    @inbounds for i in 1:n
+        empty!(mins)
+        ri = ranks[i]
+        for r in (ri + 1):maxrank
+            for j in buckets[r + 1]
+                ZE._sig_leq_pair(P, i, j) || continue
+                dominated = false
+                for k in mins
+                    if ZE._sig_leq_pair(P, k, j)
+                        dominated = true
+                        break
+                    end
+                end
+                dominated && continue
+                push!(mins, j)
+                nedges += 1
+            end
+        end
+    end
+    return nedges
+end
+
+function _signature_cover_edges_uncached_count(P)
+    s = 0
+    for _ in FF.cover_edges(P; cached=false)
+        s += 1
+    end
+    return s
+end
+
 function main(; reps::Int=10, nqueries::Int=20_000, grid::Int=18,
               flange_dimat::Bool=true, flange_dimat_reps::Int=8, flange_dimat_ncuts::Int=10,
               flange_degree_matrix::Bool=true, flange_degree_matrix_reps::Int=8,
@@ -452,7 +563,7 @@ function main(; reps::Int=10, nqueries::Int=20_000, grid::Int=18,
     packed_lookup = () -> begin
         s = 0
         @inbounds for g in queries
-            s += PM.locate(pi, g)
+            s += TO.locate(pi, g)
         end
         s
     end
@@ -492,11 +603,16 @@ function main(; reps::Int=10, nqueries::Int=20_000, grid::Int=18,
     b4 = _bench("build tuple-key map", tuple_build; reps=reps)
     b5 = _bench("cover-edge iterator count", () -> _edge_iterator_count(Q); reps=reps)
     b6 = _bench("dense scan C[u,v] baseline", () -> _dense_cover_scan_count(Q); reps=reps)
+    Qsig = ZE.SignaturePoset(pi.sig_y, pi.sig_z)
+    @assert _signature_cover_edges_uncached_count(Qsig) == _signature_cover_edges_uncached_old_count(Qsig)
+    b7 = _bench("signature uncached cover current", () -> _signature_cover_edges_uncached_count(Qsig); reps=reps)
+    b8 = _bench("signature uncached cover old", () -> _signature_cover_edges_uncached_old_count(Qsig); reps=reps)
 
     println("\nRelative speedups (baseline/new):")
     println("lookup tuple / packed: ", round(b2.ms / b1.ms, digits=3), "x")
     println("build tuple / packed:  ", round(b4.ms / b3.ms, digits=3), "x")
     println("dense scan / iterator: ", round(b6.ms / b5.ms, digits=3), "x")
+    println("signature cover old/current: ", round(b8.ms / b7.ms, digits=3), "x")
 
     if flange_dimat
         _run_flange_dimat_bench(; reps=flange_dimat_reps, nqueries=nqueries, ncuts=flange_dimat_ncuts)

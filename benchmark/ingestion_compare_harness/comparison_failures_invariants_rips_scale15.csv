@@ -1,0 +1,9 @@
+case_id,regime,invariant_kind,degree,failure_stage,failure_reason,tamer_status,multipers_status
+inv_rips_codensity_n750_d2_s11,rips_codensity_parity,all,0,tamer_runner,Allocations: 217130926 (Pool: 217128722; Big: 2204); GC: 33,failed,missing
+inv_rips_codensity_n750_d8_s11,rips_codensity_parity,all,0,tamer_runner,Allocations: 218167595 (Pool: 218165379; Big: 2216); GC: 32,failed,missing
+inv_rips_lowerstar_n1000_d2_s11,rips_lowerstar_parity,all,0,tamer_runner,Allocations: 215738275 (Pool: 215736091; Big: 2184); GC: 32,failed,missing
+inv_rips_lowerstar_n1000_d8_s11,rips_lowerstar_parity,all,0,tamer_runner,Invariants: all,failed,missing
+inv_rips_lowerstar_n1000_d8_s11,rips_lowerstar_parity,all,0,multipers_runner,RuntimeError: No invariant benchmark rows were produced.,missing,failed
+inv_rips_codensity_n750_d2_s11,rips_codensity_parity,euler_signed_measure,0,comparison,missing_tamer_result,missing,ok
+inv_rips_codensity_n750_d8_s11,rips_codensity_parity,euler_signed_measure,0,comparison,missing_tamer_result,missing,ok
+inv_rips_lowerstar_n1000_d2_s11,rips_lowerstar_parity,euler_signed_measure,0,comparison,missing_tamer_result,missing,ok

@@ -1,7 +1,0 @@
-case,family,stage,cache_mode,median_ms,p90_ms,median_alloc_kib
-h0_active_chain_incremental_probe_rips_d1,point,module,incremental_on,0.318393,0.351266,551.09375
-h0_active_chain_incremental_probe_rips_d1,point,module,incremental_off,0.294486,0.327526,653.46875
-h1_fastpath_probe_graded_d1,point,encoding_result,fast_on,255.591681,354.295272,189390.226562
-h1_fastpath_probe_graded_d1,point,encoding_result,fast_off,500.278917,785.208043,386988.554688
-t2_degree_local_probe_graded_fan,point,module,local_on,0.275693,0.320233,212.085938
-t2_degree_local_probe_graded_fan,point,module,local_off,4.640913,4.848957,1689.8125

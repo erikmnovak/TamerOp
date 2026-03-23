@@ -1,0 +1,1 @@
+failed inv_degree_rips_n1000_d8_s11 rc=-9

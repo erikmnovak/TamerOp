@@ -1,4 +1,4 @@
-This is pdfTeX, Version 3.141592653-2.6-1.40.22 (TeX Live 2022/dev/Debian) (preloaded format=pdflatex 2026.1.30)  24 FEB 2026 14:56
+This is pdfTeX, Version 3.141592653-2.6-1.40.22 (TeX Live 2022/dev/Debian) (preloaded format=pdflatex 2026.1.30)  9 MAR 2026 19:05
 entering extended mode
  restricted \write18 enabled.
  %&-line parsing enabled.
@@ -989,13 +989,13 @@ roups in-dexed by a (pos-si-bly multi-dimensional)
  []
 
 [3] [4] [5] [6]
-Overfull \hbox (5.48184pt too wide) in paragraph at lines 525--527
+Overfull \hbox (5.48184pt too wide) in paragraph at lines 526--528
 []\T1/cmr/m/n/10 making con-tact with ge-o-met-ric con-struc-tions of fil-tra-t
 ions (sub-level sets, dis-tance func-tions, Vietoris--
  []
 
 [7] [8]
-Overfull \hbox (24.58829pt too wide) in paragraph at lines 657--663
+Overfull \hbox (24.58829pt too wide) in paragraph at lines 658--664
 \T1/cmr/m/n/10 ta-tion of mul-ti-pa-ram-e-ter sum-maries and fea-ture maps (of-
 ten slice-based, rank-based, or image/landscape-
  []
@@ -1003,77 +1003,77 @@ ten slice-based, rank-based, or image/landscape-
 [9] [10] [11]
 
 LaTeX Warning: Reference `rem:tame-morphisms-practice' on page 12 undefined on 
-input line 951.
+input line 952.
 
 [12] [13] [14] [15] [16] [17]
 LaTeX Font Info:    Trying to load font information for T1+cmtt on input line 1
-404.
+405.
 
 (/usr/share/texlive/texmf-dist/tex/latex/base/t1cmtt.fd
 File: t1cmtt.fd 2019/12/16 v2.5j Standard LaTeX font definitions
 )
 
 LaTeX Warning: Reference `sec:derived-functors' on page 18 undefined on input l
-ine 1415.
+ine 1416.
 
 [18] [19]
 
 Package hyperref Warning: Token not allowed in a PDF string (Unicode):
-(hyperref)                removing `math shift' on input line 1521.
+(hyperref)                removing `math shift' on input line 1522.
 
 
 Package hyperref Warning: Token not allowed in a PDF string (Unicode):
-(hyperref)                removing `superscript' on input line 1521.
+(hyperref)                removing `superscript' on input line 1522.
 
 
 Package hyperref Warning: Token not allowed in a PDF string (Unicode):
-(hyperref)                removing `math shift' on input line 1521.
+(hyperref)                removing `math shift' on input line 1522.
 
 [20]
 
 Package hyperref Warning: Token not allowed in a PDF string (Unicode):
-(hyperref)                removing `math shift' on input line 1621.
+(hyperref)                removing `math shift' on input line 1622.
 
 
 Package hyperref Warning: Token not allowed in a PDF string (Unicode):
-(hyperref)                removing `superscript' on input line 1621.
+(hyperref)                removing `superscript' on input line 1622.
 
 
 Package hyperref Warning: Token not allowed in a PDF string (Unicode):
-(hyperref)                removing `math shift' on input line 1621.
+(hyperref)                removing `math shift' on input line 1622.
 
 [21] [22]
-Overfull \hbox (7.8259pt too wide) in paragraph at lines 1731--1732
+Overfull \hbox (7.8259pt too wide) in paragraph at lines 1732--1733
 \T1/cmr/m/n/10 ing finitely many re-gions when the in-put is PL or semi-al-ge-b
 raic. The poly-he-dral back-end (\T1/cmtt/m/n/10 PLPolyhedra.jl\T1/cmr/m/n/10 )
 
  []
 
 [23] [24] [25]
-Overfull \hbox (35.70583pt too wide) in paragraph at lines 1969--1974
+Overfull \hbox (35.70583pt too wide) in paragraph at lines 1970--1975
  []\T1/cmr/bx/n/10 Critical co-or-di-nates and a prod-uct cell com-plex.[] \T1/
 cmr/m/n/10 The en-cod-ing con-struc-tor \T1/cmtt/m/n/10 encode_poset_from_flang
 es
  []
 
 [26]
-Overfull \hbox (18.62419pt too wide) in paragraph at lines 2027--2029
+Overfull \hbox (18.62419pt too wide) in paragraph at lines 2028--2030
  []\T1/cmr/bx/n/10 Region rep-re-sen-ta-tion.[] \T1/cmr/m/n/10 In \T1/cmtt/m/n/
 10 PLBackend.jl\T1/cmr/m/n/10 , an up-set is rep-re-sented as a fi-nite set of 
 ``cor-ners'' $\OML/cmm/m/it/10 `[]; [] ; `[] \OMS/cmsy/m/n/10 2
  []
 
 [27]
-Overfull \hbox (16.07498pt too wide) in paragraph at lines 2065--2069
+Overfull \hbox (16.07498pt too wide) in paragraph at lines 2066--2070
 \T1/cmr/m/n/10 ex-am-ple, re-gions de-fined by non-axis-aligned lin-ear in-equa
 l-i-ties). The poly-he-dral back-end in \T1/cmtt/m/n/10 PLPolyhedra.jl
  []
 
 [28]
 LaTeX Font Info:    Font shape `T1/cmtt/bx/n' in size <10> not available
-(Font)              Font shape `T1/cmtt/m/n' tried instead on input line 2131.
+(Font)              Font shape `T1/cmtt/m/n' tried instead on input line 2132.
  [29]
-Overfull \hbox (77.43036pt too wide) in paragraph at lines 2257--2260
+Overfull \hbox (77.43036pt too wide) in paragraph at lines 2258--2261
 \T1/cmr/m/n/10 This strat-egy is im-ple-mented by func-tions such as \T1/cmtt/m
 /n/10 encode_from_flanges \T1/cmr/m/n/10 in \T1/cmtt/m/n/10 ZnEncoding.jl \T1/c
 mr/m/n/10 and \T1/cmtt/m/n/10 encode_from_PL_fringes
@@ -1082,36 +1082,36 @@ mr/m/n/10 and \T1/cmtt/m/n/10 encode_from_PL_fringes
 [30] [31] [32]
 
 Package hyperref Warning: Token not allowed in a PDF string (Unicode):
-(hyperref)                removing `math shift' on input line 2452.
+(hyperref)                removing `math shift' on input line 2453.
 
 
 Package hyperref Warning: Token not allowed in a PDF string (Unicode):
-(hyperref)                removing `superscript' on input line 2452.
+(hyperref)                removing `superscript' on input line 2453.
 
 
 Package hyperref Warning: Token not allowed in a PDF string (Unicode):
-(hyperref)                removing `math shift' on input line 2452.
+(hyperref)                removing `math shift' on input line 2453.
 
 
 Package hyperref Warning: Token not allowed in a PDF string (Unicode):
-(hyperref)                removing `math shift' on input line 2460.
+(hyperref)                removing `math shift' on input line 2461.
 
 
 Package hyperref Warning: Token not allowed in a PDF string (Unicode):
-(hyperref)                removing `math shift' on input line 2460.
+(hyperref)                removing `math shift' on input line 2461.
 
 [33] [34]
 Overfull \vbox (367.52267pt too high) has occurred while \output is active []
 
 
 [35]
-Underfull \hbox (badness 1281) in paragraph at lines 2548--2551
+Underfull \hbox (badness 1281) in paragraph at lines 2549--2552
 []\T1/cmr/m/n/10 L. Waas.  \T1/cmr/m/it/10 Notes on abelian-ity of cat-e-gories
  of finitely en-cod-able per-sis-tence mod-ules\T1/cmr/m/n/10 .
  []
 
 
-Underfull \hbox (badness 4132) in paragraph at lines 2602--2605
+Underfull \hbox (badness 4132) in paragraph at lines 2603--2606
 []\T1/cmr/m/n/10 M. Lesnick and M. Wright.  \T1/cmr/m/it/10 In-ter-ac-tive vi-s
 u-al-iza-tion of 2-D per-sis-tence mod-ules\T1/cmr/m/n/10 .
  []
@@ -1161,7 +1161,7 @@ ype1/public/cm-super/sfbx1440.pfb></usr/share/texmf/fonts/type1/public/cm-super
 share/texmf/fonts/type1/public/cm-super/sfrm1728.pfb></usr/share/texmf/fonts/ty
 pe1/public/cm-super/sfti1000.pfb></usr/share/texmf/fonts/type1/public/cm-super/
 sftt1000.pfb>
-Output written on thesis_writeup.pdf (36 pages, 550299 bytes).
+Output written on thesis_writeup.pdf (36 pages, 550582 bytes).
 PDF statistics:
  1171 PDF objects out of 1200 (max. 8388607)
  1069 compressed objects within 11 object streams

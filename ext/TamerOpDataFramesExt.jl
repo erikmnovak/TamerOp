@@ -2,17 +2,17 @@ module TamerOpDataFramesExt
 
 using DataFrames
 
-const PM = let pm = nothing
-    if isdefined(Main, :PosetModules)
-        pm = getfield(Main, :PosetModules)
+const TO = let pm = nothing
+    if isdefined(Main, :TamerOp)
+        pm = getfield(Main, :TamerOp)
     else
-        @eval import PosetModules
-        pm = PosetModules
+        @eval import TamerOp
+        pm = TamerOp
     end
     pm
 end
 
-const FEA = PM.Featurizers
+const FEA = TO.Featurizers
 
 """
     DataFrame(fs::FeatureSet; format=:wide, copycols=true)

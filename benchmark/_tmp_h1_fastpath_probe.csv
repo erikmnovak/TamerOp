@@ -1,3 +1,0 @@
-case,family,stage,cache_mode,median_ms,p90_ms,median_alloc_kib
-h1_fastpath_probe_graded_d1,point,encoding_result,fast_on,331.560268,512.383941,189391.867188
-h1_fastpath_probe_graded_d1,point,encoding_result,fast_off,673.614159,938.190052,386953.132812

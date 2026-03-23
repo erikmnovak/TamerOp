@@ -1,3 +1,0 @@
-tool,case_id,regime,n_points,ambient_dim,max_dim,cold_ms,cold_alloc_kib,warm_median_ms,warm_p90_ms,warm_alloc_median_kib,simplex_count,edge_count,max_simplex_dim,notes,timestamp_utc
-tamer_op,cubical_side32_s11,cubical_parity,1024,2,2,5340.241925,207972.6875,0.628922,1.026945,1086.046875,3969,1984,2,cubical_vs_cubical,2026-02-24T05:55:42.344
-tamer_op,cubical_side40_s17,cubical_parity,1600,2,2,0.788623,1576.0546875,0.902769,1.081174,1576.0859375,6241,3120,2,cubical_vs_cubical,2026-02-24T05:55:50.776

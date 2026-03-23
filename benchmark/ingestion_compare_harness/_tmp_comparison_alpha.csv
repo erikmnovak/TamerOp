@@ -1,3 +1,0 @@
-case_id,regime,n_points,ambient_dim,max_dim,tamer_cold_ms,multipers_cold_ms,cold_slowdown_tamer_over_multipers,tamer_warm_median_ms,multipers_warm_median_ms,warm_slowdown_tamer_over_multipers,tamer_simplex_count,multipers_simplex_count
-alpha_n200_d2_md2_s11,alpha_function_delaunay,200,2,2,17890.260986,4.934274998959154,3625.712185,0.306089,3.800550475716591,0.080538,1151,1141
-alpha_n300_d2_md2_s17,alpha_function_delaunay,300,2,2,8.822005,5.430140998214483,1.624636,0.379572,4.698873002780601,0.080779,1759,1749

@@ -270,10 +270,10 @@ end
 @inline function active_words_hash(row_words::Vector{UInt64}, col_words::Vector{UInt64})
     h = UInt64(0x243f6a8885a308d3)
     @inbounds for w in row_words
-        h ⊻= w + UInt64(0x9e3779b97f4a7c15) + (h << 6) + (h >>> 2)
+        h = xor(h, w + UInt64(0x9e3779b97f4a7c15) + (h << 6) + (h >>> 2))
     end
     @inbounds for w in col_words
-        h ⊻= w + UInt64(0x9e3779b97f4a7c15) + (h << 6) + (h >>> 2)
+        h = xor(h, w + UInt64(0x9e3779b97f4a7c15) + (h << 6) + (h >>> 2))
     end
     return h
 end

@@ -1,0 +1,5 @@
+[profile] desktop (reps=4, trim_between_reps=True, trim_between_cases=True)
+Invariants: all
+[KeOps] Warning : CUDA libraries not found or could not be loaded; Switching to CPU only.
+inv_rips_n1000_d8_s11            inv=euler_signed_measure cold_ms=314.984 warm_med_ms=325.771 terms=64065
+Wrote multipers invariant results: benchmark/ingestion_compare_harness/_run_invariant_supervisor_rips_scale5/cases/multipers/inv_rips_n1000_d8_s11.csv

@@ -47,10 +47,10 @@ grades = [
     [0.6, 0.4],
     [1.2, 0.8],
 ]
-data = PM.GradedComplex(cells_by_dim, [B1], grades)
-filtration = PM.GradedFiltration()
+data = TO.GradedComplex(cells_by_dim, [B1], grades)
+filtration = TO.GradedFiltration()
 
-opts = PM.InvariantOptions(
+opts = TO.InvariantOptions(
     ;
     axes=(collect(range(0.0, stop=1.6, length=5)), collect(range(0.0, stop=1.2, length=4))),
     axes_policy=:as_given,
@@ -62,32 +62,32 @@ opts = PM.InvariantOptions(
 
 stage("2) Baseline encode + featurize")
 
-enc_ref = PM.encode(data, filtration; degree=0, field=PM.CoreModules.F2(), cache=:auto)
-spec = PM.EulerSurfaceSpec(axes=opts.axes, axes_policy=:as_given, threads=false)
+enc_ref = TO.encode(data, filtration; degree=0, field=TO.CoreModules.F2(), cache=:auto)
+spec = TO.EulerSurfaceSpec(axes=opts.axes, axes_policy=:as_given, threads=false)
 
-vec_ref = PM.transform(spec, enc_ref; opts=opts, threaded=false)
-fs_ref = PM.FeatureSet(
+vec_ref = TO.transform(spec, enc_ref; opts=opts, threaded=false)
+fs_ref = TO.FeatureSet(
     reshape(vec_ref, 1, :),
-    PM.feature_names(spec),
+    TO.feature_names(spec),
     ["repro_001"],
     (label=["graded"], source="baseline"),
 )
 
 println("Baseline feature shape: ", size(fs_ref.X))
-println("Baseline nfeatures(spec): ", PM.nfeatures(spec))
+println("Baseline nfeatures(spec): ", TO.nfeatures(spec))
 
 stage("3) Save reproducibility artifacts")
 
 dataset_path = joinpath(outdir, "dataset.json")
 pipeline_path = joinpath(outdir, "pipeline.json")
 
-PM.save_dataset_json(dataset_path, data)
-PM.save_pipeline_json(
+TO.save_dataset_json(dataset_path, data)
+TO.save_pipeline_json(
     pipeline_path,
     data,
     filtration;
     degree=0,
-    pipeline_opts=PM.PipelineOptions(
+    pipeline_opts=TO.PipelineOptions(
         orientation=(1, 1),
         axes_policy=:as_given,
         axis_kind=:explicit,
@@ -107,29 +107,29 @@ println("Native optional outputs: ", paths.native)
 
 stage("4) Reload artifacts and rerun")
 
-data_reloaded = PM.load_dataset_json(dataset_path)
-data_from_pipe, spec_from_pipe, degree_from_pipe, popts_from_pipe = PM.load_pipeline_json(pipeline_path)
-filtration_reloaded = PM.to_filtration(spec_from_pipe)
+data_reloaded = TO.load_dataset_json(dataset_path)
+data_from_pipe, spec_from_pipe, degree_from_pipe, popts_from_pipe = TO.load_pipeline_json(pipeline_path)
+filtration_reloaded = TO.to_filtration(spec_from_pipe)
 
 println("Loaded degree: ", degree_from_pipe)
 println("Loaded pipeline options axes_policy: ", popts_from_pipe.axes_policy)
 println("Loaded pipeline options field: ", popts_from_pipe.field)
 
 field_reloaded = if popts_from_pipe.field === nothing || popts_from_pipe.field === :F2
-    PM.CoreModules.F2()
+    TO.CoreModules.F2()
 elseif popts_from_pipe.field === :F3
-    PM.CoreModules.F3()
+    TO.CoreModules.F3()
 elseif popts_from_pipe.field === :QQ
-    PM.CoreModules.QQ
+    TO.CoreModules.QQ
 else
     throw(ArgumentError("Unsupported pipeline field in this example: $(popts_from_pipe.field)"))
 end
 
-enc_reloaded = PM.encode(data_reloaded, filtration_reloaded; degree=Int(degree_from_pipe), field=field_reloaded, cache=:auto)
-vec_reloaded = PM.transform(spec, enc_reloaded; opts=opts, threaded=false)
-fs_reloaded = PM.FeatureSet(
+enc_reloaded = TO.encode(data_reloaded, filtration_reloaded; degree=Int(degree_from_pipe), field=field_reloaded, cache=:auto)
+vec_reloaded = TO.transform(spec, enc_reloaded; opts=opts, threaded=false)
+fs_reloaded = TO.FeatureSet(
     reshape(vec_reloaded, 1, :),
-    PM.feature_names(spec),
+    TO.feature_names(spec),
     ["repro_001"],
     (label=["graded"], source="reloaded"),
 )
@@ -151,11 +151,11 @@ println("Max |baseline - reloaded|: ", maxabs)
 
 # Optional extension-backed load check if a native feature file exists.
 if haskey(paths.native, :npz)
-    fs_npz = PM.load_features(paths.native[:npz]; format=:npz)
+    fs_npz = TO.load_features(paths.native[:npz]; format=:npz)
     maxabs_npz = assert_feature_sets_match(fs_ref, fs_npz; atol=1e-10, rtol=1e-8)
     println("NPZ round-trip reproducibility check passed (maxabs=$(maxabs_npz)).")
 elseif haskey(paths.native, :csv_wide)
-    fs_csv = PM.load_features(paths.native[:csv_wide]; format=:csv, mode=:wide)
+    fs_csv = TO.load_features(paths.native[:csv_wide]; format=:csv, mode=:wide)
     maxabs_csv = assert_feature_sets_match(fs_ref, fs_csv; atol=1e-10, rtol=1e-8)
     println("CSV round-trip reproducibility check passed (maxabs=$(maxabs_csv)).")
 else

@@ -36,14 +36,14 @@ using SparseArrays
 using LinearAlgebra
 
 try
-    using PosetModules
+    using TamerOp
 catch
-    include(joinpath(@__DIR__, "..", "src", "PosetModules.jl"))
-    using .PosetModules
+    include(joinpath(@__DIR__, "..", "src", "TamerOp.jl"))
+    using .TamerOp
 end
 
-const CM = PosetModules.CoreModules
-const FL = PosetModules.FieldLinAlg
+const CM = TamerOp.CoreModules
+const FL = TamerOp.FieldLinAlg
 
 @inline function _parse_int_arg(args, key::String, default::Int)
     for a in args
@@ -409,11 +409,11 @@ function main(args=ARGS)
                 sparse_case = dens < 0.999
                 m_rank = n
                 n_rank = n
-                m_null = max(8, n ÷ 2)
+                m_null = max(8, div(n, 2))
                 n_null = n
-                m_solv = n + max(4, n ÷ 3)
+                m_solv = n + max(4, div(n, 3))
                 n_solv = n
-                rhs = min(8, max(2, n ÷ 16))
+                rhs = min(8, max(2, div(n, 16)))
                 println("  n=$(n) density=$(dens) sparse=$(sparse_case)")
 
                 if :rank in ops

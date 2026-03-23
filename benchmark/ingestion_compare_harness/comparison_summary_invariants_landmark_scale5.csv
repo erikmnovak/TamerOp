@@ -1,0 +1,2 @@
+regime,invariant_kind,degree,n_cases,warm_geomean_slowdown_tamer_over_multipers,cold_geomean_slowdown_tamer_over_multipers
+landmark_parity,euler_signed_measure,0,2,0.162361,0.177109

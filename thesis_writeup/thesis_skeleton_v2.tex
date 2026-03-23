@@ -1,0 +1,705 @@
+\documentclass[11pt]{article}
+
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage[english]{babel}
+\usepackage{amsmath,amssymb,amsthm,mathtools}
+\usepackage[a4paper,margin=1in]{geometry}
+\usepackage{enumitem}
+\usepackage{xcolor}
+\usepackage{hyperref}
+\hypersetup{colorlinks=true,linkcolor=blue,citecolor=blue,urlcolor=blue}
+
+\newcommand{\R}{\mathbb{R}}
+\newcommand{\Z}{\mathbb{Z}}
+\newcommand{\kk}{\Bbbk}
+\newcommand{\TAMER}{\textsc{TAMER-OP}}
+\newcommand{\multipers}{\textsc{multipers}}
+
+\newenvironment{plan}{\begin{itemize}[leftmargin=1.6em,itemsep=0.35em,topsep=0.25em]}{\end{itemize}}
+\newcommand{\target}[1]{\item \textbf{Target length.} #1}
+\newcommand{\purpose}[1]{\item \textbf{Purpose.} #1}
+\newcommand{\includeitems}[1]{\item \textbf{Include.} #1}
+\newcommand{\keepbrief}[1]{\item \textbf{Keep brief.} #1}
+\newcommand{\deliverable}[1]{\item \textbf{Deliverable.} #1}
+\newcommand{\evidence}[1]{\item \textbf{Evidence / examples.} #1}
+\newcommand{\figures}[1]{\item \textbf{Possible figures/tables.} #1}
+\newcommand{\compare}[1]{\item \textbf{Comparison point.} #1}
+
+\title{Working Thesis Skeleton for \TAMER\\
+\large Encoding-Centered Multiparameter Persistence via Finite Poset Models}
+\author{Erik Mendes Novak}
+\date{\today}
+
+\begin{document}
+\maketitle
+\tableofcontents
+
+\section*{Working brief}
+
+This skeleton is organized around the claim that \emph{encoding is the central computational move} in \TAMER: one begins with pre-encoding objects (finite fringes, flanges over $\Z^n$, PL fringes or box presentations over $\R^n$, and raw data), performs a finite encoding step, and then works entirely in the finite-poset world where homological algebra, categorical constructions, invariants, serialization, featurization, and visualization become uniform and programmable. The mathematical framework should be tied explicitly to Miller's theory of modules over posets and finite encodings \cite{Mil20}, while the implementation chapters should track the actual architecture of the current code base and its workflow/API layers.
+
+\begin{plan}
+    \target{Roughly 30--40 pages total. A plausible distribution is: Introduction (1--2), Background (3--5), system overview (2), pre-encoding (4), encoding proper (8--10), post-encoding algebra (5--6), invariants (3--4), serialization/featurization/visualization (4--5), benchmarks (5--6), conclusion (1--2).}
+    \purpose{Make the document implementation-facing: every section should be something that can be drafted independently from the code and stitched together later.}
+    \keepbrief{Do \emph{not} spend many pages re-teaching standard homological algebra, category theory, or classical persistent homology. Spend those pages instead on the library's distinctive contribution: the finite encoding layer and everything it unlocks.}
+    \deliverable{A thesis that reads as both a mathematical narrative and a systems paper: it should explain \emph{what} is represented, \emph{how} it is encoded, \emph{what computations become possible afterward}, and \emph{why this architecture matters in practice}.}
+\end{plan}
+
+\section{Introduction}\label{sec:introduction}
+
+\begin{plan}
+    \target{1--2 pages.}
+    \purpose{State the problem, the main thesis, and the core contributions without front-loading too much theory. This should be substantially shorter than the current draft's long opening arc.}
+    \includeitems{A short motivation from multiparameter persistence: 1-parameter persistence enjoys a strong structure theory, but in multiple parameters one must choose what algebraic structure to preserve and what computational compromises to make \cite{CZ09,Les15,CDSGO16}.}
+    \includeitems{A crisp statement of the library's design thesis: \TAMER{} is organized around finite encoding, meaning that infinite or geometric parameter spaces are first compressed into finite posets, after which the library performs exact algebraic and homological computations there.}
+    \includeitems{A one-paragraph contributions list. Suggested bullets: (i) unified front-end formats and data ingestion; (ii) explicit finite encoding constructors over $\Z^n$ and $\R^n$; (iii) post-encoding module/category/homological algebra; (iv) invariant, serialization, featurization, and visualization layers; (v) benchmark evidence for tractability and competitiveness.}
+    \includeitems{A short roadmap paragraph telling the reader what each major section does.}
+    \keepbrief{Do not prove anything here. Do not give a long survey of the literature. Do not yet explain all implemented invariants or all derived functors.}
+    \figures{One architecture figure can already appear here if desired: \emph{data/presentation} $\to$ \emph{encoding} $\to$ \emph{finite-poset computations}, with serialization, featurization, and visualization drawn as cross-cutting layers.}
+\end{plan}
+
+\subsection{Possible opening paragraph}
+
+\begin{plan}
+    \includeitems{Start from the tension between generality and computability in multiparameter persistence. Emphasize that many libraries stop at barcodes, ranks, or machine-learning summaries, whereas \TAMER{} aims to preserve enough algebraic structure to support exact categorical and homological computations after a finite encoding step.}
+    \compare{Contrast carefully with tools such as RIVET and \multipers: those systems are important comparison points, but the thesis should frame the distinction as one of \emph{architecture and computational scope}, not as a dismissive software ranking \cite{LW15,RIVET,LS24}.}
+\end{plan}
+
+\subsection{Proposed contribution list}
+
+\begin{plan}
+    \includeitems{\textbf{Mathematical contribution of the implementation:} explicit finite encoding serves as a uniform gateway between tame modules over large parameter spaces and finite-poset module computations in the sense of Miller's framework \cite{Mil20}.}
+    \includeitems{\textbf{Systems contribution:} the library integrates pre-encoding representations, encoding algorithms, categorical/homological post-processing, invariant computation, serialization, and experiment-ready featurization into one workflow surface.}
+    \includeitems{\textbf{Practical contribution:} the same encoded object can be used for algebraic analysis, statistical summaries, feature extraction, and exploratory visualization without rebuilding separate computational pipelines.}
+\end{plan}
+
+\section{Background}\label{sec:background}
+
+\begin{plan}
+    \target{3--5 pages total. This section should be drastically shorter than the current write-up's long background chapter.}
+    \purpose{Provide only the mathematical language needed for the rest of the thesis. The reader should leave this section knowing what a poset module is, what ``tame'' and ``finitely encoded'' mean at a high level, and why this matters computationally.}
+    \keepbrief{Treat this as compressed prerequisite material. Whenever a concept is standard and not central to the implementation, define it, cite it, and move on.}
+\end{plan}
+
+\subsection{Posets, functors, and persistence modules}
+
+\begin{plan}
+    \purpose{Introduce modules over posets in the categorical language used throughout the library.}
+    \includeitems{Posets as thin categories; persistence modules as functors $Q \to \mathbf{Vect}_{\kk}$; morphisms as natural transformations; objectwise kernels/cokernels in the functor category.}
+    \includeitems{A short explanation of why this categorical viewpoint matters computationally: once the index category is finite, many constructions reduce to matrix algebra over fibers and structure maps.}
+    \keepbrief{No long proofs. Cite standard references such as Mac Lane and Weibel where appropriate \cite{Mac98,Wei94}.}
+    \figures{A commuting-square diagram for a module morphism; a small finite poset with attached vector spaces and maps.}
+\end{plan}
+
+\subsection{Tame modules, finite encodings, and fringe presentations}
+
+\begin{plan}
+    \purpose{Compress the Miller background to the exact ideas the thesis uses later.}
+    \includeitems{A high-level description of constant subdivisions, finite encodings, fringe presentations, and indicator resolutions, framed as equivalent ``tameness'' viewpoints in the underlying theory \cite{Mil20}.}
+    \includeitems{Explain the computational moral: finite encoding is not merely a theoretical convenience but the step that turns large geometric modules into finite combinatorial objects amenable to exact linear algebra and homological algebra.}
+    \keepbrief{Do not restate the full Miller development. One paragraph on each of finite encoding, fringe/flange presentation, and syzygy-theorem-style equivalence is enough.}
+    \figures{A schematic implication diagram: finite encoding $\Longleftrightarrow$ fringe presentation $\Longleftrightarrow$ indicator resolutions, with a note that the implementation exploits these equivalences.}
+\end{plan}
+
+\subsection{Why multiparameter persistence is hard}
+
+\begin{plan}
+    \purpose{Motivate the architectural choice to encode, rather than attempt to work directly with geometric parameter spaces at every stage.}
+    \includeitems{Very brief discussion of the failure of a barcode-style classification in the multiparameter setting, the explosion of comparable parameter pairs, and the tension between exact structure and practical computation \cite{CZ09,Les15,CDSGO16}.}
+    \includeitems{Mention that many useful invariants and summaries exist, but they often interact weakly with category-theoretic and homological constructions unless one preserves a richer internal algebraic model.}
+    \keepbrief{This is motivation, not a survey chapter.}
+\end{plan}
+
+\subsection{Minimal software landscape}
+
+\begin{plan}
+    \purpose{Prepare the later benchmark and comparison sections.}
+    \includeitems{A short paragraph each on RIVET and \multipers as comparison points. RIVET should appear as a visualization- and rank-oriented reference for low-dimensional exploration, while \multipers should appear as a modern multiparameter pipeline for invariants and machine-learning workflows \cite{LW15,RIVET,LS24}.}
+    \includeitems{State that the thesis is not claiming to replace these tools in every regime; rather, it is presenting a different architecture whose strength is the explicit finite encoding step and the algebraic computations that follow from it.}
+\end{plan}
+
+\subsection{Conventions and notational setup}
+
+\begin{plan}
+    \purpose{Pin down notation once so later implementation chapters read cleanly.}
+    \includeitems{Notation for $Q$ and $P$ as posets, $M,N$ for modules, $\pi$ for encoding maps/classifiers, $\kk$ for the coefficient field, and the distinction between the ambient parameter domain and the finite encoding poset.}
+    \includeitems{A sentence that exact arithmetic over $\mathbb{Q}$ will play an important implementation role, even when real or prime-field backends are also supported.}
+    \deliverable{End the section with a transition sentence: from here onward, the thesis focuses on \emph{how} \TAMER{} turns these abstract objects into a unified computational system.}
+\end{plan}
+
+\section{Overview of \TAMER{} as an encoding-centered system}\label{sec:system-overview}
+
+\begin{plan}
+    \target{About 2 pages.}
+    \purpose{Give the reader a map of the library before diving into the details. This chapter should bridge the mathematics of the background section to the concrete code architecture.}
+\end{plan}
+
+\subsection{The main pipeline}
+
+\begin{plan}
+    \includeitems{Organize the entire thesis around the three-stage story: \textbf{pre-encoding} (finite fringes, flanges, PL fringes, data), \textbf{encoding} (construction of a finite poset and classifier), and \textbf{post-encoding} (module operations, derived functors, invariants, transport, comparisons).}
+    \includeitems{Explain that serialization, featurization, and visualization are not auxiliary afterthoughts but parallel layers that interact with every stage of the pipeline.}
+    \figures{A full-page diagram mapping user-facing workflow calls to internal layers: \texttt{DataFileIO/DataIngestion} $\to$ \texttt{Workflow.encode} $\to$ \texttt{Results} $\to$ \texttt{Invariants/DerivedFunctors/Featurizers/Serialization/Viz}.}
+\end{plan}
+
+\subsection{Architectural layering}
+
+\begin{plan}
+    \includeitems{Briefly name the main module families: core runtime and caches; finite-poset and representation layers; encoding layers over $\Z^n$ and $\R^n$; module/category/homological algebra layers; invariants; ingestion; workflow; serialization; featurization; visualization.}
+    \includeitems{Make explicit that the thesis is not a file-by-file code tour. Instead, module names should be used only to anchor the mathematical and algorithmic narrative.}
+    \deliverable{A short paragraph that says later chapters will follow the same order as the pipeline itself.}
+\end{plan}
+
+\subsection{Why the finite encoding step is the organizing principle}
+
+\begin{plan}
+    \includeitems{State the central argument of the thesis in one place: once an object is encoded into a finite poset, the entire rest of the library --- exact linear algebra, categorical constructions, resolutions, derived functors, invariants, featurizers, transport, and visualization --- can be implemented against a single finite working model.}
+    \includeitems{This is the conceptual through-line that should tie the whole thesis together. Return to it explicitly at the start and end of later sections.}
+\end{plan}
+
+\section{Pre-encoding objects and data interfaces}\label{sec:pre-encoding}
+
+\begin{plan}
+    \target{About 4 pages.}
+    \purpose{Describe the front-end mathematical objects the library accepts before any finite encoding is built. This section should make clear that the system is intentionally multi-front-end but single-back-end.}
+\end{plan}
+
+\subsection{Finite-poset presentations: finite fringes and indicator data}
+
+\begin{plan}
+    \includeitems{Introduce finite posets, upsets, downsets, and finite fringe modules as the most direct interface when a finite combinatorial model is already known.}
+    \includeitems{Explain why this layer matters even in a thesis centered on encoding: it provides the basic correctness model and the simplest test bed for categorical and homological algorithms.}
+    \evidence{One small illustrative finite-poset example showing an upset/downset presentation and the resulting module.}
+\end{plan}
+
+\subsection{$\mathbb{Z}^n$ front-end: flanges and finitely determined data}
+
+\begin{plan}
+    \includeitems{Describe flange presentations as the $\mathbb{Z}^n$-specific analogue of fringe presentations in Miller's theory, and explain why they are a natural interface for finitely determined multiparameter modules \cite{Mil20}.}
+    \includeitems{Emphasize that these objects already carry enough structure to support a direct encoding into a finite signature/region poset, making them the cleanest discrete front-end.}
+    \figures{A picture of a few flats/injectives in $\mathbb{Z}^2$ and their overlap pattern.}
+\end{plan}
+
+\subsection{$\mathbb{R}^n$ front-end: PL fringes and box presentations}
+
+\begin{plan}
+    \includeitems{Describe the real-parameter front-end in two layers: general PL or polyhedral objects, and the important axis-aligned box specialization.}
+    \includeitems{Explain why the box-specialized backend is important computationally: it captures a large practical class while enabling faster region construction and point location than full general polyhedral machinery.}
+    \includeitems{Tie this directly to Miller's geometric perspective on real-parameter modules and finite encodings \cite{Mil20,Mil23,KS18}.}
+\end{plan}
+
+\subsection{Raw data, filtrations, and graded complexes}
+
+\begin{plan}
+    \includeitems{Introduce the data ingestion side as a major addition relative to the earlier thesis draft: point clouds, graphs, images, embedded planar graphs, graded complexes, and simplex-tree-style multicritical data are all first-class front-end objects.}
+    \includeitems{Explain that the ingestion layer supports named filtration families, typed filtration specifications, construction budgets, and multiple output stages before encoding.}
+    \includeitems{Make clear that this is one of the library's most important practical contributions: it closes the gap between raw topological data analysis inputs and the encoded algebraic world.}
+    \figures{A pipeline figure from point cloud / graph / image to graded complex to encoded module.}
+\end{plan}
+
+\subsection{File-oriented ingestion and reproducible front ends}
+
+\begin{plan}
+    \includeitems{Briefly explain the role of file adapters and typed options: front-end objects can come from JSON artifacts, delimited tables, Ripser-style formats, and other serialized sources, all normalized into typed ingestion objects before entering the workflow.}
+    \includeitems{This subsection can be short, but it should set up the later serialization and experiment sections by emphasizing that reproducible front ends are part of the system design from the start.}
+\end{plan}
+
+\subsection{What this chapter should accomplish}
+
+\begin{plan}
+    \deliverable{By the end of the chapter, the reader should understand that \TAMER{} accepts many mathematically equivalent or practically useful entry formats, but all of them are funneled toward one central step: building a finite encoding.}
+\end{plan}
+
+\section{The encoding step}\label{sec:encoding}
+
+\begin{plan}
+    \target{8--10 pages. This is the core chapter of the thesis and should be the single longest section.}
+    \purpose{Explain, in implementation detail, how the library turns pre-encoding objects into finite-poset models. This is the main differentiator of the project and should carry the strongest mathematical and computational narrative.}
+\end{plan}
+
+\subsection{Statement of the encoding problem}
+
+\begin{plan}
+    \includeitems{Formulate the encoding problem precisely: given a module or presentation over a large or geometric parameter domain, construct a finite poset $P$, an encoded module over $P$, and a classifier or encoding map $\pi$ from the ambient domain into the regions of $P$.}
+    \includeitems{State the practical requirement that the encoded object retain enough information to support evaluation, comparison, invariant computation, and subsequent algebraic manipulations.}
+\end{plan}
+
+\subsection{Region signatures and the finite-poset idea}
+
+\begin{plan}
+    \includeitems{Explain the region/signature philosophy: points in the ambient domain are grouped by their membership signatures with respect to the front-end generators, and these signatures determine the regions of the finite encoding.}
+    \includeitems{Describe how the resulting finite poset structure is obtained from inclusion relations on signatures, producing uptight/signature-like posets in the sense suggested by the theory \cite{Mil20}.}
+    \figures{A signature-region diagram in $\mathbb{Z}^2$ or $\mathbb{R}^2$.}
+\end{plan}
+
+\subsection{Encoding finite fringe data}
+
+\begin{plan}
+    \includeitems{Explain the finite fringe case first because it is conceptually simplest: the input already lives over a finite poset, so the problem becomes one of standardization, caching, and producing a workflow-friendly result object.}
+    \includeitems{Use this subsection to introduce the idea that all later encoding functions should ultimately return the same type of workflow payload: a finite poset, an encoded module, and a compiled classifier map.}
+\end{plan}
+
+\subsection{Encoding $\mathbb{Z}^n$ flanges}
+
+\begin{plan}
+    \includeitems{This subsection should be detailed. Describe the discrete encoding path from flange presentations to finite region/signature posets, the classifier map on lattice points, and the construction of pushed-forward fringe or module data.}
+    \includeitems{Explain why this is a mathematically natural computational realization of Miller's reduction from finitely determined $\mathbb{Z}^n$-modules to finite encodings and back \cite{Mil20}.}
+    \includeitems{Discuss compiled encoding caches, encoding fingerprints, pushforward plans, and the idea that expensive geometry/combinatorics should be reusable across repeated workflow queries.}
+    \figures{An end-to-end example: flange $\to$ region signatures $\to$ finite poset $P$ $\to$ encoded module.}
+\end{plan}
+
+\subsection{Encoding $\mathbb{R}^n$ PL and box presentations}
+
+\begin{plan}
+    \includeitems{Describe the two-backend story over $\R^n$: a box-specialized backend for axis-aligned finite-boundary data and a more general PL/polyhedral backend for broader geometric inputs.}
+    \includeitems{Explain backend routing: when box structure is available, one can exploit coordinate grids and signature tables; when not, one falls back to a more general PL/polyhedral encoding path.}
+    \includeitems{Explain point location, region representatives, boundary ambiguity handling, and the distinction between fast and verified modes where appropriate.}
+    \compare{This is a good place to emphasize that the library is not restricted to one ambient parameter class: the same post-encoding computations can start from either $\Z^n$ or $\R^n$ inputs once the finite encoding is built.}
+\end{plan}
+
+\subsection{Data-to-encoding via the ingestion layer}
+
+\begin{plan}
+    \includeitems{Describe how raw data is turned into graded complexes or filtration-derived objects, then resolved into one of the representation formats above, and then encoded into a finite poset.}
+    \includeitems{This subsection should make explicit that the new data-ingestion chapter is a major advance over the earlier thesis attempt: the library no longer presupposes that users arrive with already-packaged algebraic objects.}
+    \includeitems{Name representative filtration families only briefly. The point is not to catalogue every filtration, but to show that the library now controls the entire route from data to encoded algebra.}
+    \figures{A boxed workflow diagram from point cloud / graph / image to encoded module.}
+\end{plan}
+
+\subsection{Common encodings for multiple modules}
+
+\begin{plan}
+    \includeitems{Explain the need for common encodings when two objects are to be compared, transported, or used as inputs to bifunctorial constructions.}
+    \includeitems{Discuss the workflow-level support for encoding multiple inputs into a shared finite poset model and why that matters for Hom, Ext, comparisons, and benchmarks.}
+\end{plan}
+
+\subsection{Compiled encodings, point location, and evaluation}
+
+\begin{plan}
+    \includeitems{Describe compiled encodings as a bridge between mathematical correctness and practical performance: users need a classifier map that can be applied repeatedly to ambient points without rebuilding geometry or searching naively.}
+    \includeitems{Discuss point location for lattice and real inputs, region representative data, and why compiled evaluation is essential for invariants, featurizers, and visualization.}
+\end{plan}
+
+
+
+\subsection{Geometry attached to an encoding map}
+
+\begin{plan}
+    \includeitems{Explain that the output of the encoding step is not only a finite poset and a classifier, but also a geometric decomposition of the ambient parameter space into constant regions. Once an encoding map is available, one can ask geometric questions about those regions: their representatives, bounding boxes, volumes or weighted sizes inside a chosen window, adjacency relations, boundary size, and related shape descriptors.}
+    \includeitems{Make clear that this geometric layer is backend-sensitive: over $\Z^n$ and box-based real encodings, much of the relevant geometry can be computed directly from coordinate thresholds and region signatures, while more general PL backends require a richer geometric interface.}
+    \includeitems{State explicitly that this information is not a separate pre-encoding input type. It is produced by the encoding and then consumed later by invariant, featurization, and visualization layers.}
+    \includeitems{Suggested mathematical emphasis: the encoding map turns ambient parameter space into a finite stratified object, and region geometry records quantitative information about the strata rather than about the original presentation generators.}
+    \figures{A small example showing an encoding in $\R^2$ together with one or two labeled regions, their representatives, and a simple adjacency graph.}
+\end{plan}
+
+\subsection{Correctness, diagnostics, and failure modes}
+
+\begin{plan}
+    \includeitems{List the kinds of guarantees the encoding layer should provide: well-defined region posets, validated dimensions, monomiality or support constraints where appropriate, and reproducible classifier behavior.}
+    \includeitems{Discuss practical failure modes: region explosion, degenerate geometric boundaries, budget overflows in ingestion, and backend-incompatibility cases.}
+    \includeitems{Explain why this explicit diagnostic surface is part of the library's value.}
+\end{plan}
+
+\subsection{Complexity and why this chapter is the thesis core}
+
+\begin{plan}
+    \includeitems{Provide a narrative complexity discussion rather than a fully formal theorem-by-theorem analysis. Break cost into: front-end normalization, region construction, poset construction, pushforward/build of encoded modules, compiled point-location support, and cache reuse.}
+    \includeitems{State clearly that this chapter is the main differentiator: once encoding is available, the library can support an unusually broad collection of exact algebraic computations that are difficult to expose in systems built only around barcode-level summaries.}
+    \deliverable{This section should end with a transition sentence of the form: from this point onward, the thesis works almost entirely inside the category of modules over a finite encoding poset.}
+\end{plan}
+
+\section{Post-encoding algebra on finite posets}\label{sec:post-encoding-algebra}
+
+\begin{plan}
+    \target{5--6 pages.}
+    \purpose{Show what becomes possible once modules live over finite encoding posets. The emphasis here is not on re-proving classical category theory, but on explaining the computational opportunities that finite encoding opens.}
+\end{plan}
+
+\subsection{Encoded modules and morphisms as the internal working language}
+
+\begin{plan}
+    \includeitems{Introduce $P$-modules and morphisms over a finite poset $P$ as the system's internal algebraic model.}
+    \includeitems{Explain the role of cover-edge map stores, map-composition queries, cached evaluation along comparable pairs, and why finite posets make these operations practical.}
+\end{plan}
+
+\subsection{Abelian-category constructions in code}
+
+\begin{plan}
+    \includeitems{Briefly explain that kernels, images, cokernels, coimages, pushouts, pullbacks, short exact sequences, equalizers, and related constructions are implemented concretely in the finite-poset module category.}
+    \includeitems{Do not spend pages re-deriving abelian-category theory. Instead, explain why having these operations as first-class computational objects matters for persistence-style workflows.}
+\end{plan}
+
+\subsection{Indicator resolutions, projective covers, and injective hulls}
+
+\begin{plan}
+    \includeitems{Describe the role of indicator modules and their resolutions: once a module is encoded, projective and injective constructions can be built from upsets and downsets in the finite poset.}
+    \includeitems{Connect this explicitly back to Miller's equivalence of tameness viewpoints and the importance of indicator resolutions in the theory \cite{Mil20}.}
+\end{plan}
+
+\subsection{Derived functors and complex-level structure}
+
+\begin{plan}
+    \includeitems{Introduce, at a very high level, the implemented derived-functor layer: Hom, Ext, Tor, RHom, derived tensor, hyper-Ext, hyper-Tor, spectral sequences, and related complex-level constructions.}
+    \keepbrief{Do not define all of these in full. The target audience already knows what derived functors are. The thesis should instead explain \emph{why a finite encoded module category makes these computations accessible}.}
+    \includeitems{Suggested narrative: unlike software pipelines that discard structure after producing ranks or barcodes, \TAMER{} retains an honest algebraic object on a finite poset, so one can ask richer homological questions directly.}
+\end{plan}
+
+\subsection{Change of posets, transport, and comparison}
+
+\begin{plan}
+    \includeitems{Explain that once encodings are explicit, one can pull back, push forward, compare modules across related posets, and build common refinement posets or product posets when necessary.}
+    \includeitems{This should serve as a bridge between the algebra chapter and the later benchmark/comparison sections.}
+\end{plan}
+
+\subsection{What computational opportunities this opens}
+
+\begin{plan}
+    \includeitems{This is the argumentative subsection. Explain, in prose, what kinds of new workflows become available because of the explicit encoding architecture: naturality tests, derived comparisons, exact resolution-based invariants, transport along encoding maps, module-level experiment objects, and more.}
+    \compare{Frame the contrast with barcode- or rank-only systems carefully: the issue is not merely that \TAMER{} has more functions in an API, but that its core representation after encoding is algebraically expressive enough to support them.}
+\end{plan}
+
+\section{Invariants and summaries after encoding}\label{sec:invariants}
+
+\begin{plan}
+    \target{3--4 pages.}
+    \purpose{Briefly introduce the invariant layer, organized by the principle that invariants factor through the finite encoding. The aim is breadth of orientation, not exhaustive theory.}
+\end{plan}
+
+\subsection{Restricted Hilbert and rank-type invariants}
+
+\begin{plan}
+    \includeitems{Describe the restricted Hilbert function, the rank invariant, and the fact that these become straightforward to evaluate once point location and map evaluation on the encoding are available.}
+    \includeitems{Use this subsection to emphasize that encoded modules support both direct queries at the finite-poset level and classifier-mediated queries back in the ambient parameter space.}
+\end{plan}
+
+\subsection{Slice-based invariants and distances}
+
+\begin{plan}
+    \includeitems{Briefly introduce slice barcodes, matching-distance-style constructions, projected distances, and the fibered viewpoint.}
+    \includeitems{The main point should be that the encoding supplies a common finite substrate on which these slice and comparison procedures can be built and cached.}
+\end{plan}
+
+
+
+\subsection{Geometry of encoding regions and weighted summaries}
+
+\begin{plan}
+    \includeitems{Explain that many post-encoding summaries are not purely algebraic counts on the finite poset. They are algebraic quantities weighted by geometric information attached to the encoded regions. This is where region size, adjacency, boundary measure, aspect ratio, diameter, and related data enter the story.}
+    \includeitems{Describe the basic role of region weights: they allow one to integrate finite-poset information back over the ambient parameter domain. Examples include weighted Hilbert summaries, support measures for loci where Betti or Bass data are nonzero, and aggregate statistics of regions carrying a prescribed algebraic value.}
+    \includeitems{Clarify that ``Euler-style'' summaries mean constructions obtained from an Euler characteristic surface or from Mobius inversion of encoded rank or Hilbert data, producing signed point or rectangle measures. The thesis should define this carefully rather than using the term as shorthand.}
+    \includeitems{Note that some geometric summaries are exact, while others may use sampled or approximate backends; this is the natural place to mention lightweight statistical uncertainty quantification, such as confidence intervals for sample-based support estimates.}
+    \includeitems{This subsection should connect directly to the thesis-wide theme: encoding does not recreate a one-parameter barcode, but it does make it possible to combine exact algebraic information with computable region geometry in a controlled finite framework.}
+    \figures{A compact table pairing algebraic quantities with the geometric data they use: support measure with region weights, interface summaries with adjacency, shape summaries with aspect ratio/diameter, and signed measures with Euler or rank surfaces.}
+\end{plan}
+
+\subsection{Mobius inversions, signed measures, and Euler-type summaries}
+
+\begin{plan}
+    \includeitems{Describe rectangle signed barcodes, point signed measures, and Euler signed measures as examples of invariants built from encoded rank or Euler surfaces.}
+    \includeitems{Keep the discussion conceptual: these are examples of how encoded finite data can be transformed into compact, transportable summaries for analysis and learning.}
+\end{plan}
+
+\subsection{Multiparameter persistence images and higher summaries}
+
+\begin{plan}
+    \includeitems{Briefly introduce the Carri\`ere-style MPPI constructions and associated decomposition objects implemented in the invariant/featurizer layers.}
+    \includeitems{Emphasize that these are not ad hoc extras: they are examples of a design where sophisticated summaries are layered on top of the encoded module object rather than replacing it \cite{LS24}.}
+\end{plan}
+
+\subsection{How much theory to include here}
+
+\begin{plan}
+    \keepbrief{Do not turn this into a catalogue chapter. Give one paragraph per invariant family, one or two compact examples, and a short table summarizing input type, output type, and intended use. Save detailed formulas for the most relevant invariants only.}
+    \figures{A compact summary table is likely better than many separate subsections.}
+\end{plan}
+
+\section{Serialization, featurization, and visualization}\label{sec:cross-cutting-layers}
+
+\begin{plan}
+    \target{4--5 pages.}
+    \purpose{Explain the cross-cutting infrastructure that makes the library usable as a research platform rather than only as a collection of algebra routines.}
+\end{plan}
+
+\subsection{Serialization and reproducibility}
+
+\begin{plan}
+    \includeitems{Explain the importance of stable JSON-facing schemas for datasets, pipelines, encodings, flanges, PL fringes, and expensive derived artifacts.}
+    \includeitems{Argue that serialization is mathematically important because encoded modules, resolution outputs, and feature artifacts should be inspectable, reproducible, and transportable between runs, machines, or downstream analysis stages.}
+    \includeitems{A short schematic of what gets serialized at which pipeline stage would be useful.}
+\end{plan}
+
+\subsection{Featurization as an experiment layer}
+
+\begin{plan}
+    \includeitems{Describe the featurizer-spec architecture: encoded modules, invariants, signed measures, projected distances, MPPI summaries, and resolution-based tables can all be transformed into feature vectors under one experiment runner.}
+    \includeitems{Explain why this matters: a multiparameter persistence library should not force users to rebuild machine-learning and benchmarking infrastructure outside the algebra system.}
+    \includeitems{Briefly mention batch execution, cache reuse, metadata sidecars, and experiment manifests as reproducibility features.}
+\end{plan}
+
+
+
+\subsection{From geometric summaries to features and visualization}
+
+\begin{plan}
+    \includeitems{Add a short bridge subsection explaining that region-geometry data and geometry-aware invariant summaries naturally feed two downstream layers: feature construction and visualization. Weighted Hilbert summaries, support measures, signed measures, and region-shape statistics become inputs to featurizers, while the same encoded geometry also provides the substrate for visual exploration of regions, interfaces, and invariant surfaces.}
+    \includeitems{This subsection should explicitly connect the previous chapter to the present one: the geometric information attached to an encoding is first used to build mathematically meaningful summaries, and then reused to make those summaries exportable, comparable, and visible.}
+    \includeitems{Keep this short. Its job is to make the transition from post-encoding mathematics to experiment infrastructure and visualization feel conceptually natural.}
+\end{plan}
+
+\subsection{Why these layers matter scientifically}
+
+\begin{plan}
+    \includeitems{Make the case that serialization and featurization are part of the mathematical-computational story, not merely software engineering garnish. They enable controlled experiments, benchmark reproducibility, downstream statistical analysis, and transparent artifact exchange.}
+    \compare{This is another place to explain how \TAMER{} differs from workflows that produce an invariant and then leave the rest of the analysis stack to the user.}
+\end{plan}
+
+\subsection{Visualization engine}
+
+\begin{plan}
+    \includeitems{Treat the visualization engine as part of the intended thesis scope. Present it as a natural extension of the encoding-centered architecture: once one has encoded regions, modules, and invariant summaries, one can visualize them coherently from the same internal objects.}
+    \includeitems{Suggested topics: region plots for $\mathbb{Z}^2$ and $\mathbb{R}^2$ encodings, finite-poset visualizations, slice and matching-distance diagnostics, signed-measure and MPPI visualizations, and benchmark/exploration dashboards.}
+    \includeitems{If the full engine is not complete at drafting time, anchor the section by referencing the existing 2D visualization seed and then describe the generalized engine as the intended integrated layer.}
+    \figures{This chapter should probably include the richest visual material in the thesis. Plan at least three figures here.}
+\end{plan}
+
+\section{Performance engineering and benchmarks}\label{sec:benchmarks}
+
+\begin{plan}
+    \target{5--6 pages.}
+    \purpose{Demonstrate that the library is computationally tractable on realistic inputs and that the encoding-centered architecture pays off in practice. This chapter should combine implementation-aware performance explanation with careful empirical evaluation.}
+\end{plan}
+
+\subsection{Benchmark philosophy and fairness}
+
+\begin{plan}
+    \includeitems{State benchmark principles explicitly: fixed hardware/software environment, exact versioning, repeated runs, warmup handling, fair parameter choices, and clear separation between microbenchmarks and end-to-end benchmarks.}
+    \includeitems{Say how comparisons to \multipers{} will be framed: choose common tasks where both systems are genuinely solving comparable problems, then explain where the task scope diverges because \TAMER{} retains a richer encoded object.}
+\end{plan}
+
+\subsection{Where time is spent internally}
+
+\begin{plan}
+    \includeitems{Explain the internal performance story: exact field linear algebra, sparse versus dense kernels, backend routing, Nemo versus Julia paths, modular shortcuts, autotuned thresholds, caching, and threading.}
+    \includeitems{This subsection should interpret performance in architectural terms so that later benchmark plots have context.}
+\end{plan}
+
+\subsection{Microbenchmarks}
+
+\begin{plan}
+    \includeitems{Plan a suite of small isolated benchmarks for the main internal stages. Suggested categories:
+    \begin{enumerate}[label=(\alph*)]
+        \item data ingestion and graded-complex construction,
+        \item encoding construction over $\Z^n$ and $\R^n$,
+        \item point location / compiled encoding evaluation,
+        \item map-composition and common-poset transport,
+        \item projective/injective resolution steps,
+        \item selected invariants,
+        \item serialization and featurization overhead.
+    \end{enumerate}}
+    \figures{A benchmark matrix or table with rows = tasks and columns = time / memory / notes.}
+\end{plan}
+
+\subsection{End-to-end workflow benchmarks}
+
+\begin{plan}
+    \includeitems{Benchmark complete workflows from raw input to encoded module and onward to invariants or features. Suggested pipelines: point cloud $\to$ ingestion $\to$ encoding $\to$ rank/slice features; graph/image $\to$ ingestion $\to$ encoding $\to$ Euler/feature summaries; $\mathbb{Z}^n$ flange $\to$ encoding $\to$ Ext/Tor or resolution-based outputs.}
+    \includeitems{This subsection is important because it shows that the system is not merely a collection of isolated kernels.}
+\end{plan}
+
+\subsection{Comparison with \multipers{}}
+
+\begin{plan}
+    \includeitems{Design a fair comparison around overlapping capabilities: data-to-invariant workflows, slice-based summaries, matching-distance-style computations, or other common tasks.}
+    \includeitems{State explicitly where \TAMER{} is faster and where its architectural choice of explicit encoding changes the nature of the workflow being benchmarked.}
+    \includeitems{Do not overstate. If some tasks are not apples-to-apples, say so and explain why.}
+    \compare{A useful framing sentence: \TAMER{} pays an up-front encoding cost in order to unlock a larger post-encoding algebraic toolkit; the benchmark chapter should measure both that cost and those downstream benefits.}
+\end{plan}
+
+\subsection{Discussion of tractability}
+
+\begin{plan}
+    \includeitems{End the chapter by interpreting the results: what dataset sizes are currently comfortable, where region explosion is the main bottleneck, when the box-specialized backend helps, when exact arithmetic is affordable, and what the benchmarks imply for realistic use.}
+    \deliverable{This subsection should answer the practical question: \emph{when should a user reasonably expect this encoding-centered architecture to be worth it?}}
+\end{plan}
+
+\section{Conclusion and future work}\label{sec:conclusion}
+
+\begin{plan}
+    \target{1--2 pages.}
+    \purpose{Close the loop on the main thesis claim.}
+    \includeitems{Summarize the central argument: explicit finite encoding is the step that makes a unified algebraic multiparameter pipeline possible.}
+    \includeitems{Reiterate the major implementation consequences: unified front-end formats, exact finite-poset computations, richer homological algebra, reusable invariants, reproducible experiment layers, and a coherent visualization story.}
+    \includeitems{List immediate future work succinctly: completion and expansion of the visualization engine, broader benchmark coverage, richer geometric backends, stronger interoperability, and potentially more advanced algebraic constructions.}
+\end{plan}
+
+\appendix
+
+\section{Section-to-codebase map}\label{app:code-map}
+
+\begin{plan}
+    \purpose{This appendix exists purely to make drafting easier. When writing a section later, consult the corresponding module families first.}
+    \includeitems{\textbf{Pre-encoding representations:} \texttt{FiniteFringe.jl}, \texttt{FlangeZn.jl}, \texttt{PLPolyhedra.jl}, \texttt{PLBackend.jl}, \texttt{DataTypes.jl}.}
+    \includeitems{\textbf{Data ingestion:} \texttt{DataFileIO.jl}, \texttt{DataIngestion.jl}, \texttt{Options.jl}.}
+    \includeitems{\textbf{Encoding workflow:} \texttt{ZnEncoding.jl}, \texttt{EncodingCore.jl}, \texttt{Workflow.jl}, \texttt{Results.jl}.}
+    \includeitems{\textbf{Geometry attached to encodings:} \texttt{RegionGeometry.jl}, with backend implementations spread across \texttt{PLBackend.jl}, \texttt{PLPolyhedra.jl}, and encoding-map-specific methods inside the invariant layer.}
+    \includeitems{\textbf{Finite-poset module layer:} \texttt{Modules.jl}, \texttt{AbelianCategories.jl}, \texttt{ChangeOfPosets.jl}.}
+    \includeitems{\textbf{Resolutions and derived functors:} \texttt{IndicatorResolutions.jl}, \texttt{DerivedFunctors.jl}, \texttt{ModuleComplexes.jl}, \texttt{ChainComplexes.jl}.}
+    \includeitems{\textbf{Invariants:} \texttt{Invariants.jl}, together with \texttt{RegionGeometry.jl} for region-level geometric data and \texttt{Stats.jl} for lightweight uncertainty summaries used by sampled geometric estimates.}
+    \includeitems{\textbf{Serialization and experiment infrastructure:} \texttt{Serialization.jl}, \texttt{Featurizers.jl}, \texttt{APISurface.jl}, \texttt{TamerOp.jl}.}
+    \includeitems{\textbf{Visualization:} \texttt{Viz2D.jl} as the present seed, together with the forthcoming generalized visualization engine to be documented in the main text.}
+    \includeitems{\textbf{Performance internals:} \texttt{FieldLinAlg.jl}, \texttt{public\_api.jl}, \texttt{backend\_routing.jl}, \texttt{qq\_engine.jl}, \texttt{sparse\_rref.jl}, \texttt{nonqq\_engines.jl}, \texttt{autotune.jl}, \texttt{thresholds.jl}, and \texttt{linalg\_thresholds.toml}.}
+\end{plan}
+
+\section{Planned figures and tables}\label{app:figures}
+
+\begin{plan}
+    \includeitems{\textbf{Figure 1:} Global architecture figure from raw data / presentations to encoded module to post-encoding layers.}
+    \includeitems{\textbf{Figure 2:} A toy $\mathbb{Z}^2$ flange and its finite encoding.}
+    \includeitems{\textbf{Figure 3:} A box/PL encoding example over $\R^2$.}
+    \includeitems{\textbf{Figure 4:} Data-ingestion pipeline for one or two representative data types.}
+    \includeitems{\textbf{Figure 5:} Post-encoding algebraic workflow (kernels/images/resolutions/Ext).}
+    \includeitems{\textbf{Figure 6:} Invariant and region-geometry summary panel (rank surface, weighted support summary, signed measure, MPPI).}
+    \includeitems{\textbf{Figure 7:} Visualization engine showcase panel.}
+    \includeitems{\textbf{Table 1:} Front-end formats versus ambient domain versus encoded output.}
+    \includeitems{\textbf{Table 2:} Implemented post-encoding algebraic operations.}
+    \includeitems{\textbf{Table 3:} Implemented invariant families and intended use.}
+    \includeitems{\textbf{Table 4:} Benchmark task matrix.}
+\end{plan}
+
+\section{Benchmark checklist}\label{app:benchmark-checklist}
+
+\begin{plan}
+    \includeitems{Record hardware, Julia version, thread count, BLAS thread count, and package versions.}
+    \includeitems{Fix coefficient field and exactness mode for each benchmark.}
+    \includeitems{Separate wall-clock time, memory, and one-time compilation effects.}
+    \includeitems{Use the same datasets and same output target whenever comparing against \multipers{}.}
+    \includeitems{Retain raw benchmark logs and serialized artifacts for reproducibility.}
+    \includeitems{Include at least one benchmark each for: ingestion, encoding, post-encoding algebra, invariant computation, featurization, and end-to-end workflow.}
+\end{plan}
+
+\section{Bibliography notes}\label{app:bibliography-notes}
+
+\begin{plan}
+    \purpose{The bibliography below is already a superset of the one in the earlier thesis draft. Before final submission, extend it further with any additional references used in the visualization chapter, MPPI discussion, and software comparison section.}
+    \includeitems{In particular, add any final citations for the visualization engine once its scope is settled, and any additional benchmark-comparison references that become necessary during drafting.}
+\end{plan}
+
+\begin{thebibliography}{99}
+
+\bibitem[Mil20]{Mil20}
+E.~Miller.
+\newblock \emph{Homological algebra of modules over posets}.
+\newblock \href{https://arxiv.org/abs/2008.00063}{arXiv:2008.00063}, 2020.
+
+\bibitem[Waa24]{Waa24}
+L.~Waas.
+\newblock \emph{Notes on abelianity of categories of finitely encodable persistence modules}.
+\newblock \href{https://arxiv.org/abs/2407.08666}{arXiv:2407.08666}, 2024.
+
+\bibitem[Mil23]{Mil23}
+E.~Miller.
+\newblock \emph{Stratifications of real vector spaces from constructible sheaves with conical microsupport}.
+\newblock \emph{Journal of Applied and Computational Topology}, 7(3):473--489, 2023.
+\newblock \href{https://doi.org/10.1007/s41468-023-00112-1}{doi:10.1007/s41468-023-00112-1}.
+
+\bibitem[KS18]{KS18}
+M.~Kashiwara and P.~Schapira.
+\newblock \emph{Persistent homology and microlocal sheaf theory}.
+\newblock \emph{Journal of Applied and Computational Topology}, 2(1--2):83--113, 2018.
+\newblock \href{https://arxiv.org/abs/1705.00955}{arXiv:1705.00955}.
+
+\bibitem[CB15]{CB15}
+W.~Crawley-Boevey.
+\newblock \emph{Decomposition of pointwise finite-dimensional persistence modules}.
+\newblock \emph{Journal of Algebra and Its Applications}, 14(5):1550066, 2015.
+\newblock \href{https://doi.org/10.1142/S0219498815500668}{doi:10.1142/S0219498815500668}.
+
+\bibitem[ZC05]{ZC05}
+A.~Zomorodian and G.~Carlsson.
+\newblock \emph{Computing persistent homology}.
+\newblock \emph{Discrete \& Computational Geometry}, 33:249--274, 2005.
+\newblock \href{https://doi.org/10.1007/s00454-004-1146-y}{doi:10.1007/s00454-004-1146-y}.
+
+\bibitem[CZ09]{CZ09}
+G.~Carlsson and A.~Zomorodian.
+\newblock \emph{The theory of multidimensional persistence}.
+\newblock \emph{Discrete \& Computational Geometry}, 42:71--93, 2009.
+\newblock \href{https://doi.org/10.1007/s00454-009-9176-0}{doi:10.1007/s00454-009-9176-0}.
+
+\bibitem[CEH07]{CEH07}
+D.~Cohen-Steiner, H.~Edelsbrunner, and J.~Harer.
+\newblock \emph{Stability of persistence diagrams}.
+\newblock \emph{Discrete \& Computational Geometry}, 37(1):103--120, 2007.
+\newblock \href{https://doi.org/10.1007/s00454-006-1276-5}{doi:10.1007/s00454-006-1276-5}.
+
+\bibitem[ELZ02]{ELZ02}
+H.~Edelsbrunner, D.~Letscher, and A.~Zomorodian.
+\newblock \emph{Topological persistence and simplification}.
+\newblock \emph{Discrete \& Computational Geometry}, 28:511--533, 2002.
+\newblock \href{https://doi.org/10.1007/s00454-002-2885-2}{doi:10.1007/s00454-002-2885-2}.
+
+\bibitem[Les15]{Les15}
+M.~Lesnick.
+\newblock \emph{The theory of the interleaving distance on multidimensional persistence modules}.
+\newblock \emph{Foundations of Computational Mathematics}, 15(3):613--650, 2015.
+\newblock \href{https://doi.org/10.1007/s10208-015-9255-y}{doi:10.1007/s10208-015-9255-y}.
+
+\bibitem[LW15]{LW15}
+M.~Lesnick and M.~Wright.
+\newblock \emph{Interactive visualization of 2-D persistence modules}.
+\newblock \href{https://arxiv.org/abs/1512.00180}{arXiv:1512.00180}, 2015.
+
+\bibitem[RIVET]{RIVET}
+M.~Lesnick and M.~Wright.
+\newblock \emph{RIVET: The rank invariant visualization and exploration tool} (software).
+\newblock \url{https://github.com/rivetTDA/rivet}.
+
+\bibitem[LS24]{LS24}
+D.~Loiseaux and H.~Schreiber.
+\newblock \emph{multipers: Multiparameter persistence for machine learning}.
+\newblock \emph{Journal of Open Source Software}, 9(103):6773, 2024.
+\newblock \href{https://doi.org/10.21105/joss.06773}{doi:10.21105/joss.06773}.
+
+\bibitem[CDSGO16]{CDSGO16}
+F.~Chazal, V.~de~Silva, M.~Glisse, and S.~Y. Oudot.
+\newblock \emph{The Structure and Stability of Persistence Modules}.
+\newblock SpringerBriefs in Mathematics. Springer, 2016.
+\newblock \href{https://doi.org/10.1007/978-3-319-42545-0}{doi:10.1007/978-3-319-42545-0}.
+
+\bibitem[Oud15]{Oud15}
+S.~Y. Oudot.
+\newblock \emph{Persistence Theory: From Quiver Representations to Data Analysis}.
+\newblock Mathematical Surveys and Monographs, Vol.~209. American Mathematical Society, 2015.
+
+\bibitem[EH10]{EH10}
+H.~Edelsbrunner and J.~L. Harer.
+\newblock \emph{Computational Topology: An Introduction}.
+\newblock American Mathematical Society, 2010.
+
+\bibitem[Mac98]{Mac98}
+S.~Mac~Lane.
+\newblock \emph{Categories for the Working Mathematician}.
+\newblock Graduate Texts in Mathematics, Vol.~5. Springer, 2nd edition, 1998.
+\newblock \href{https://doi.org/10.1007/978-1-4757-4721-8}{doi:10.1007/978-1-4757-4721-8}.
+
+\bibitem[Wei94]{Wei94}
+C.~A. Weibel.
+\newblock \emph{An Introduction to Homological Algebra}.
+\newblock Cambridge Studies in Advanced Mathematics, Vol.~38. Cambridge University Press, 1994.
+
+\bibitem[Eis95]{Eis95}
+D.~Eisenbud.
+\newblock \emph{Commutative Algebra with a View Toward Algebraic Geometry}.
+\newblock Graduate Texts in Mathematics, Vol.~150. Springer, 1995.
+\newblock \href{https://doi.org/10.1007/978-1-4612-5350-1}{doi:10.1007/978-1-4612-5350-1}.
+
+\bibitem[MS05]{MS05}
+E.~Miller and B.~Sturmfels.
+\newblock \emph{Combinatorial Commutative Algebra}.
+\newblock Graduate Texts in Mathematics, Vol.~227. Springer, 2005.
+\newblock \href{https://doi.org/10.1007/b138602}{doi:10.1007/b138602}.
+
+\end{thebibliography}
+
+\end{document}

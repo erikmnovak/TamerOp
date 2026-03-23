@@ -1,9 +1,0 @@
-probe,median_ms,median_kib
-ir pmodule_from_fringe,12.644024,10750.25
-ir projective_cover,1.456358,746.421875
-ir injective_hull,1.9789370000000002,1257.5390625
-ir upset_resolution pmodule,14.841138,7465.5234375
-ir downset_resolution pmodule,12.526146,7784.0859375
-ir indicator_resolutions uncached,140.68186999999998,91280.921875
-ir indicator_resolutions cache_miss,149.90296899999998,91281.5625
-ir indicator_resolutions cache_hit,0.024579999999999998,0.046875

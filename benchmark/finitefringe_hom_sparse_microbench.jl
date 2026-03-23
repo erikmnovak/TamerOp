@@ -4,15 +4,15 @@ using Random
 using SparseArrays
 
 try
-    using PosetModules
+    using TamerOp
 catch
-    include(joinpath(@__DIR__, "..", "src", "PosetModules.jl"))
-    using .PosetModules
+    include(joinpath(@__DIR__, "..", "src", "TamerOp.jl"))
+    using .TamerOp
 end
 
-const FF = PosetModules.FiniteFringe
-const CM = PosetModules.CoreModules
-const FL = PosetModules.FieldLinAlg
+const FF = TamerOp.FiniteFringe
+const CM = TamerOp.CoreModules
+const FL = TamerOp.FieldLinAlg
 
 function _bench(name::AbstractString, f::Function; reps::Int=7)
     GC.gc()

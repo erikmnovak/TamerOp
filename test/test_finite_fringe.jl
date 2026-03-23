@@ -298,6 +298,87 @@ K = CM.coeff_type(field)
         @test FF.fiber_dimension(Hf2, 1) == 0
     end
 
+    @testset "FiniteFringe UX surface" begin
+        Pux = chain_poset(3)
+        Uux = FF.principal_upset(Pux, 2)
+        Dux = FF.principal_downset(Pux, 2)
+        phiux = spzeros(K, 1, 1)
+        phiux[1, 1] = c(1)
+        Mux = FF.FringeModule{K}(Pux, [Uux], [Dux], phiux; field=field)
+
+        @test TO.describe(Pux).kind == :finite_poset
+        @test TO.describe(Uux).kind == :upset
+        @test TO.describe(Dux).kind == :downset
+        @test TO.describe(Mux).kind == :fringe_module
+        @test TO.describe(Mux).ngenerators == 1
+        @test TO.describe(Mux).nrelations == 1
+        @test FF.fringe_summary(Pux).kind == :finite_poset
+        @test FF.fringe_summary(Uux).support == [2, 3]
+        @test FF.fringe_summary(Dux).support == [1, 2]
+        @test FF.fringe_summary(Mux).matrix_size == (1, 1)
+
+        @test FF.check_poset(Pux).valid
+        @test FF.check_upset(Uux).valid
+        @test FF.check_downset(Dux).valid
+        @test FF.check_fringe_module(Mux).valid
+        @test FF.check_fringe_data(Pux, [Uux], [Dux], phiux; field=field).valid
+        @test FF.finite_fringe_validation_summary(FF.check_fringe_module(Mux)).report.valid
+
+        Ubad = FF.Upset(Pux, BitVector([false, true, false]))
+        Dbad = FF.Downset(Pux, BitVector([false, true, false]))
+        @test !FF.check_upset(Ubad).valid
+        @test !FF.check_downset(Dbad).valid
+        @test_throws ArgumentError FF.check_upset(Ubad; throw=true)
+        @test_throws ArgumentError FF.check_downset(Dbad; throw=true)
+
+        U3 = FF.principal_upset(Pux, 3)
+        D1 = FF.principal_downset(Pux, 1)
+        phibad = spzeros(K, 1, 1)
+        phibad[1, 1] = c(1)
+        @test !FF.check_fringe_data(Pux, [U3], [D1], phibad; field=field).valid
+
+        @test FF.base_poset(Uux) === Pux
+        @test FF.base_poset(Dux) === Pux
+        @test FF.base_poset(Mux) === Pux
+        @test FF.ambient_poset(Pux) === Pux
+        @test FF.ambient_poset(Uux) === Pux
+        @test FF.ambient_poset(Dux) === Pux
+        @test FF.ambient_poset(Mux) === Pux
+        @test FF.field(Mux) === field
+        @test FF.support(Uux) == [2, 3]
+        @test FF.support(Dux) == [1, 2]
+        @test FF.contains(Uux, 2)
+        @test !FF.contains(Uux, 1)
+        @test FF.contains(Dux, 1)
+        @test !FF.contains(Dux, 3)
+        @test FF.birth_upsets(Mux) === Mux.U
+        @test FF.death_downsets(Mux) === Mux.D
+        @test FF.fringe_coefficients(Mux) === Mux.phi
+        @test FF.ngenerators(Mux) == 1
+        @test FF.nrelations(Mux) == 1
+        @test TO.dimensions(Mux).fibers == [0, 1, 0]
+        @test TO.dimensions(Mux).total == 1
+        @test TO.dimensions(Mux, 2).fiber == 1
+
+        @test TOA.base_poset(Mux) === Pux
+        @test TOA.ambient_poset(Mux) === Pux
+        @test TOA.field(Mux) === field
+        @test TOA.ngenerators(Mux) == 1
+        @test TOA.nrelations(Mux) == 1
+        @test TOA.check_fringe_module(Mux).valid
+        @test TOA.fringe_summary(Mux).kind == :fringe_module
+
+        @test occursin("FinitePoset", sprint(show, Pux))
+        @test occursin("Upset", sprint(show, Uux))
+        @test occursin("Downset", sprint(show, Dux))
+        @test occursin("FringeModule", sprint(show, Mux))
+        @test occursin("nvertices", sprint(show, MIME("text/plain"), Pux))
+        @test occursin("support", sprint(show, MIME("text/plain"), Uux))
+        @test occursin("matrix_size", sprint(show, MIME("text/plain"), Mux))
+        @test occursin("FiniteFringeValidationSummary", sprint(show, FF.finite_fringe_validation_summary(FF.check_fringe_module(Mux))))
+        @test occursin("issues", sprint(show, MIME("text/plain"), FF.finite_fringe_validation_summary(FF.check_fringe_module(Mux))))
+    end
+
     @testset "FiniteFringe threaded cache/query parity under contention" begin
         if !(field isa CM.QQField) || Threads.nthreads() <= 1
             @test true
@@ -525,19 +606,19 @@ if field isa CM.QQField
         @test auto_ns <= 1.85 * best_ns + 320_000.0
     end
 
-    # 4) strict dense-path guard: auto should stay close to best internal dense path.
-    P_d = chain_poset(32)
+    # 4) tiny dense-ish fixtures may still use the dense-index path.
+    P_d = chain_poset(12)
     rng_d = MersenneTwister(0xD3E511)
-    nu_d, nd_d = 18, 18
+    nu_d, nd_d = 2, 2
     U_d = [FF.principal_upset(P_d, rand(rng_d, 1:P_d.n)) for _ in 1:nu_d]
     D_d = [FF.principal_downset(P_d, rand(rng_d, 1:P_d.n)) for _ in 1:nd_d]
     phi_dM = Matrix{K}(undef, nd_d, nu_d)
     phi_dN = Matrix{K}(undef, nd_d, nu_d)
     @inbounds for j in 1:nd_d, i in 1:nu_d
-        if FF.intersects(U_d[i], D_d[j]) && rand(rng_d) < 0.20
-            v = rand(rng_d, -2:2)
+        if FF.intersects(U_d[i], D_d[j]) && rand(rng_d) < 0.75
+            v = rand(rng_d, 1:3)
             phi_dM[j, i] = c(v)
-            phi_dN[j, i] = c(v == 0 ? 1 : v)
+            phi_dN[j, i] = c(v + 1)
         else
             phi_dM[j, i] = zero(K)
             phi_dN[j, i] = zero(K)
@@ -546,24 +627,26 @@ if field isa CM.QQField
     M_d = FF.FringeModule{K}(P_d, U_d, D_d, phi_dM; field=field)
     N_d = FF.FringeModule{K}(P_d, U_d, D_d, phi_dN; field=field)
 
-    h_dense_path = FF._hom_dimension_with_path(M_d, N_d, :dense_path)
     h_dense_idx = FF._hom_dimension_with_path(M_d, N_d, :dense_idx_internal)
+    h_sparse_path = FF._hom_dimension_with_path(M_d, N_d, :sparse_path)
     h_dense_auto = FF.hom_dimension(M_d, N_d)
-    @test h_dense_auto == h_dense_path == h_dense_idx
+    @test h_dense_auto == h_dense_idx == h_sparse_path
+    @test FF._select_hom_internal_path!(M_d, N_d) == :dense_idx_internal
 
     # Warm one-shot selector before timing (we budget steady-state runtime).
     _ = FF.hom_dimension(M_d, N_d)
-    t_dense_path = _median_elapsed(reps=reps) do
-        FF._hom_dimension_with_path(M_d, N_d, :dense_path)
-    end
     t_dense_idx = _median_elapsed(reps=reps) do
         FF._hom_dimension_with_path(M_d, N_d, :dense_idx_internal)
+    end
+    t_sparse_path = _median_elapsed(reps=reps) do
+        FF._hom_dimension_with_path(M_d, N_d, :sparse_path)
     end
     t_dense_auto = _median_elapsed(reps=reps) do
         FF.hom_dimension(M_d, N_d)
     end
 
-    best_dense_ns = min(_ns_per_item(t_dense_path, 1), _ns_per_item(t_dense_idx, 1))
+    best_dense_ns = min(_ns_per_item(t_dense_idx, 1),
+                        _ns_per_item(t_sparse_path, 1))
     auto_dense_ns = _ns_per_item(t_dense_auto, 1)
     if strict_ci
         @test auto_dense_ns <= 1.25 * best_dense_ns + 120_000.0
@@ -930,16 +1013,13 @@ end
     @test ref_sparse == ref_dense
     @test FF.hom_dimension(M, N) == ref_sparse
     @test FF._hom_dimension_with_path(M, N, :sparse_path) == ref_sparse
-    @test FF._hom_dimension_with_path(M, N, :dense_path) == ref_sparse
     @test FF._hom_dimension_with_path(M, N, :dense_idx_internal) == ref_sparse
     @test FF.hom_dimension(M_dense, N_dense) == ref_dense
     @test FF._hom_dimension_with_path(M_dense, N_dense, :sparse_path) == ref_dense
-    @test FF._hom_dimension_with_path(M_dense, N_dense, :dense_path) == ref_dense
     @test FF._hom_dimension_with_path(M_dense, N_dense, :dense_idx_internal) == ref_dense
     @test FF.hom_dimension(M, N) == FF.hom_dimension(M_dense, N_dense)
     @test_throws MethodError FF.hom_dimension(M, N; mode=:unsupported)
     @test_throws MethodError FF.hom_dimension(M, N; mode=:sparse_path)
-    @test_throws MethodError FF.hom_dimension(M, N; mode=:dense_path)
     @test_throws MethodError FF.hom_dimension(M, N; mode=:dense_idx_internal)
 
     @test M.hom_cache[].adj !== nothing
@@ -953,7 +1033,7 @@ end
     entry_sparse = FF._lookup_pair_cache(M.hom_cache[], N)
     @test entry_sparse !== nothing
     chosen_sparse = entry_sparse.route_choice
-    @test chosen_sparse in (:sparse_path, :dense_idx_internal, :dense_path)
+    @test chosen_sparse in (:sparse_path, :dense_idx_internal)
     fp_sparse = FF._hom_route_fingerprint(M, N, :internal_choice)
     @test FF._route_fingerprint_choice_get(M.hom_cache[], fp_sparse) == chosen_sparse
     @test haskey(M.P.cache.hom_route_choice, fp_sparse)
@@ -1003,13 +1083,13 @@ end
     # Sparse low-work fixtures should also route without timing fallback.
     M_small = random_module(8, 8; density=0.18)
     N_small = random_module(8, 8; density=0.16)
-    @test FF._resolve_hom_dimension_path(M_small, N_small) == :dense_idx_internal
-    @test FF._heuristic_hom_internal_choice(M_small, N_small) == :dense_idx_internal
+    @test FF._resolve_hom_dimension_path(M_small, N_small) == :sparse_path
+    @test FF._heuristic_hom_internal_choice(M_small, N_small) == :sparse_path
     FF._clear_hom_route_choice!(M_small)
     ref_small = hom_dimension_reference_old(M_small, N_small)
     @test FF.hom_dimension(M_small, N_small) == ref_small
     @test M_small.hom_cache[].route_timing_fallbacks == 0
-    @test FF._lookup_pair_cache(M_small.hom_cache[], N_small).route_choice == :dense_idx_internal
+    @test FF._lookup_pair_cache(M_small.hom_cache[], N_small).route_choice == :sparse_path
 
     # Force one-shot timed fallback directly and verify parity.
     FF._clear_hom_route_choice!(M_small)
@@ -1017,7 +1097,7 @@ end
     entry_small = FF._ensure_pair_cache!(hc_small, N_small)
     fkey_small = FF._hom_route_fingerprint(M_small, N_small, :internal_choice)
     path_small = FF._select_hom_internal_path_timed!(M_small, N_small, hc_small, entry_small, fkey_small)
-    @test path_small in (:sparse_path, :dense_path, :dense_idx_internal)
+    @test path_small in (:sparse_path, :dense_idx_internal)
     @test FF._hom_dimension_with_path(M_small, N_small, path_small) == ref_small
     @test hc_small.route_timing_fallbacks >= 1
 end
@@ -1067,6 +1147,12 @@ end
     @test sparse_plan.s_nzptr !== nothing
     @test sparse_plan.t_nzptr_max >= 0
     @test sparse_plan.s_nzptr_max >= 0
+    @test length(sparse_plan.t_rows.ptr) == size(sparse_plan.T, 1) + 1
+    @test length(sparse_plan.s_rows.ptr) == size(sparse_plan.S, 1) + 1
+    @test length(sparse_plan.t_rows.row_nnz) == size(sparse_plan.T, 1)
+    @test length(sparse_plan.s_rows.row_nnz) == size(sparse_plan.S, 1)
+    @test sparse_plan.t_rows.max_row_nnz >= 0
+    @test sparse_plan.s_rows.max_row_nnz >= 0
     @test size(sparse_plan.hcat_buf, 2) == size(sparse_plan.T, 2) + size(sparse_plan.S, 2)
     @test size(sparse_plan.hcat_buf_rev, 2) == size(sparse_plan.T, 2) + size(sparse_plan.S, 2)
     if sparse_plan.t_nzptr !== nothing
@@ -1097,6 +1183,13 @@ end
     if rT_pref >= 0
         @test rT_pref == FF.FieldLinAlg.rank(field, sparse_plan.T)
     end
+    r_union_onepass, rT_onepass, rS_onepass = FF._rank_hcat_signed_sparse_rowplans_with_side_rank!(
+        sparse_plan.union_red, sparse_plan.s_red, sparse_plan.union_row, sparse_plan.side_row,
+        sparse_plan.T, sparse_plan.t_rows, sparse_plan.S, sparse_plan.s_rows, size(sparse_plan.T, 2)
+    )
+    @test r_union_onepass == r_union_ref
+    @test rT_onepass == FF.FieldLinAlg.rank(field, sparse_plan.T)
+    @test rS_onepass == FF.FieldLinAlg.rank(field, sparse_plan.S)
     r_union_ws_rev = FF._rank_hcat_signed_sparse_workspace!(field, sparse_plan.hcat_buf_rev,
                                                              sparse_plan.S, sparse_plan.T,
                                                              sparse_plan.nnzS)
@@ -1108,6 +1201,13 @@ end
     if rS_pref >= 0
         @test rS_pref == FF.FieldLinAlg.rank(field, sparse_plan.S)
     end
+    r_union_onepass_rev, rS_onepass_rev, rT_onepass_rev = FF._rank_hcat_signed_sparse_rowplans_with_side_rank!(
+        sparse_plan.union_red, sparse_plan.t_red, sparse_plan.union_row, sparse_plan.side_row,
+        sparse_plan.S, sparse_plan.s_rows, sparse_plan.T, sparse_plan.t_rows, size(sparse_plan.S, 2)
+    )
+    @test r_union_onepass_rev == r_union_ref
+    @test rS_onepass_rev == FF.FieldLinAlg.rank(field, sparse_plan.S)
+    @test rT_onepass_rev == FF.FieldLinAlg.rank(field, sparse_plan.T)
     if !isempty(sparse_plan.w_data)
         w0 = sparse_plan.w_data[1]
         @test length(w0.u_ptr) >= 2
@@ -1116,6 +1216,15 @@ end
     h_sparse2 = FF._hom_dimension_with_path(M, N, :sparse_path)
     @test h_sparse2 == h_sparse
     @test FF._lookup_pair_cache(M.hom_cache[], N).sparse_plan === sparse_plan
+    if size(sparse_plan.S, 2) <= size(sparse_plan.T, 2)
+        @test sparse_plan.cached_S_valid
+        @test !sparse_plan.cached_T_valid
+        @test sparse_plan.cached_rS == FF.FieldLinAlg.rank(field, sparse_plan.S)
+    else
+        @test sparse_plan.cached_T_valid
+        @test !sparse_plan.cached_S_valid
+        @test sparse_plan.cached_rT == FF.FieldLinAlg.rank(field, sparse_plan.T)
+    end
 
     h_dense_idx = FF._hom_dimension_with_path(M, N, :dense_idx_internal)
     @test h_sparse == h_dense_idx
@@ -1125,6 +1234,33 @@ end
     alloc_first = @allocated FF._hom_dimension_with_path(M2, N2, :sparse_path)
     alloc_second = @allocated FF._hom_dimension_with_path(M2, N2, :sparse_path)
     @test alloc_second < alloc_first
+
+    M3 = random_module(12, 11; density=0.16)
+    N3 = random_module(11, 12; density=0.15)
+    h3 = FF._hom_dimension_with_path(M3, N3, :sparse_path)
+    plan3 = FF._lookup_pair_cache(M3.hom_cache[], N3).sparse_plan
+    @test plan3 !== nothing
+    if size(plan3.S, 2) <= size(plan3.T, 2)
+        @test plan3.cached_S_valid
+        p = findfirst(v -> !iszero(v), M3.phi.nzval)
+        @test p !== nothing
+        old = M3.phi.nzval[p]
+        M3.phi.nzval[p] = old + c(1)
+        h3_mut = FF._hom_dimension_with_path(M3, N3, :sparse_path)
+        @test h3_mut == FF._hom_dimension_with_path(M3, N3, :dense_idx_internal)
+        @test plan3.cached_S_valid
+        @test plan3.cached_rS == FF.FieldLinAlg.rank(field, plan3.S)
+    else
+        @test plan3.cached_T_valid
+        p = findfirst(v -> !iszero(v), N3.phi.nzval)
+        @test p !== nothing
+        old = N3.phi.nzval[p]
+        N3.phi.nzval[p] = old + c(1)
+        h3_mut = FF._hom_dimension_with_path(M3, N3, :sparse_path)
+        @test h3_mut == FF._hom_dimension_with_path(M3, N3, :dense_idx_internal)
+        @test plan3.cached_T_valid
+        @test plan3.cached_rT == FF.FieldLinAlg.rank(field, plan3.T)
+    end
 end
 
 @testset "fiber_dimension cached query index parity" begin
@@ -1170,6 +1306,42 @@ end
         q = rand(rng, 1:P.n)
         @test FF.fiber_dimension(M, q) == expected[q]
     end
+
+    P_big = chain_poset(128)
+    U_big = [FF.principal_upset(P_big, rand(rng, 1:P_big.n)) for _ in 1:300]
+    D_big = [FF.principal_downset(P_big, rand(rng, 1:P_big.n)) for _ in 1:300]
+    phi_big = spzeros(K, length(D_big), length(U_big))
+    @inbounds for j in 1:length(D_big), i in 1:length(U_big)
+        FF.intersects(U_big[i], D_big[j]) || continue
+        rand(rng) < 0.04 || continue
+        v = rand(rng, -1:1)
+        v == 0 && continue
+        phi_big[j, i] = c(v)
+    end
+    M_big = FF.FringeModule{K}(P_big, U_big, D_big, phi_big; field=field)
+    @test M_big.fiber_index[] === nothing
+    q_big = rand(rng, 1:P_big.n)
+    expected_big = fiber_dimension_scan_reference(M_big, q_big)
+    rows_big, cols_big = FF._build_fiber_query_slice(M_big.U, M_big.D, q_big)
+    roww_big, colw_big, nr_big, nc_big = FF._build_fiber_query_slice_words(M_big.U, M_big.D, q_big)
+    @test nr_big == length(rows_big)
+    @test nc_big == length(cols_big)
+    @test FF.FieldLinAlg.rank_restricted_words(M_big.field, M_big.phi, roww_big, colw_big, nr_big, nc_big;
+                                               nrows=size(M_big.phi, 1), ncols=size(M_big.phi, 2)) ==
+          FF.FieldLinAlg.rank_restricted(M_big.field, M_big.phi, rows_big, cols_big)
+    @test FF.fiber_dimension(M_big, q_big) == expected_big
+    @test M_big.fiber_index[] === nothing
+
+    seen = Set([q_big])
+    target_queries = FF._fiber_lazy_full_index_after(M_big)
+    @test target_queries > 1
+    while length(seen) < target_queries
+        q = rand(rng, 1:P_big.n)
+        q in seen && continue
+        push!(seen, q)
+        @test FF.fiber_dimension(M_big, q) == fiber_dimension_scan_reference(M_big, q)
+    end
+    @test M_big.fiber_index[] !== nothing
 end
 
 @testset "one_by_one_fringe accepts Bool masks" begin
@@ -1179,24 +1351,24 @@ end
     U_mask = BitVector([i >= 3 for i in 1:P.n])
     D_mask = BitVector([i <= 3 for i in 1:P.n])
 
-    H_mask  = PM.one_by_one_fringe(P, U_mask, D_mask, c(1); field=field)
-    H_typed = PM.one_by_one_fringe(P, FF.Upset(P, U_mask), FF.Downset(P, D_mask), c(1); field=field)
+    H_mask  = TO.one_by_one_fringe(P, U_mask, D_mask, c(1); field=field)
+    H_typed = TO.one_by_one_fringe(P, FF.Upset(P, U_mask), FF.Downset(P, D_mask), c(1); field=field)
 
     for q in 1:P.n
         @test FF.fiber_dimension(H_mask, q) == FF.fiber_dimension(H_typed, q)
     end
 
     # Also accept plain Vector{Bool} (not just BitVector).
-    H_vec = PM.one_by_one_fringe(P, collect(U_mask), collect(D_mask), c(1); field=field)
+    H_vec = TO.one_by_one_fringe(P, collect(U_mask), collect(D_mask), c(1); field=field)
     for q in 1:P.n
         @test FF.fiber_dimension(H_vec, q) == FF.fiber_dimension(H_typed, q)
     end
 
     # Strict contract: scalar argument is required (typed upset/downset and mask forms).
-    @test_throws MethodError PM.one_by_one_fringe(P, FF.Upset(P, U_mask), FF.Downset(P, D_mask))
-    @test_throws MethodError PM.one_by_one_fringe(P, FF.Upset(P, U_mask), FF.Downset(P, D_mask); scalar=c(1), field=field)
-    @test_throws MethodError PM.one_by_one_fringe(P, U_mask, D_mask)
-    @test_throws MethodError PM.one_by_one_fringe(P, U_mask, D_mask; scalar=c(1), field=field)
+    @test_throws MethodError TO.one_by_one_fringe(P, FF.Upset(P, U_mask), FF.Downset(P, D_mask))
+    @test_throws MethodError TO.one_by_one_fringe(P, FF.Upset(P, U_mask), FF.Downset(P, D_mask); scalar=c(1), field=field)
+    @test_throws MethodError TO.one_by_one_fringe(P, U_mask, D_mask)
+    @test_throws MethodError TO.one_by_one_fringe(P, U_mask, D_mask; scalar=c(1), field=field)
 end
 
 end # with_fields

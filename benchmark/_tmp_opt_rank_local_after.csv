@@ -1,5 +1,0 @@
-case,family,stage,cache_mode,median_ms,p90_ms,median_alloc_kib
-monotone_rank_probe_graded_t1,point,cohomology_dims,monotone_on,0.943188,1.170478,1245.835938
-monotone_rank_probe_graded_t1,point,cohomology_dims,monotone_off,28.265118,31.908755,34184.851562
-degree_local_all_t_probe_graded_t1,point,encoding_result,all_t_on,2450.682238,2645.689737,1.923220242188e6
-degree_local_all_t_probe_graded_t1,point,encoding_result,all_t_off,2082.033616,2503.569975,1.71701671875e6

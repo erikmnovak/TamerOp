@@ -4,17 +4,17 @@ using Logging
 using ProgressLogging
 using UUIDs: uuid4, UUID
 
-const PM = let pm = nothing
-    if isdefined(Main, :PosetModules)
-        pm = getfield(Main, :PosetModules)
+const TO = let pm = nothing
+    if isdefined(Main, :TamerOp)
+        pm = getfield(Main, :TamerOp)
     else
-        @eval import PosetModules
-        pm = PosetModules
+        @eval import TamerOp
+        pm = TamerOp
     end
     pm
 end
 
-const FEA = PM.Featurizers
+const FEA = TO.Featurizers
 
 mutable struct _ProgressState
     total::Int

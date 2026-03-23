@@ -1,2 +1,0 @@
-tool,case_id,regime,n_points,ambient_dim,max_dim,cold_ms,cold_alloc_kib,warm_median_ms,warm_p90_ms,warm_alloc_median_kib,simplex_count,edge_count,max_simplex_dim,notes,timestamp_utc
-multipers,cubical_side32_s11,cubical_parity,1024,2,2,3.496943973004818,,3.602054959628731,3.602054959628731,,,,2,"kwargs={'builder': 'filtrations.Cubical', 'image_shape': (32, 32)};cold_mode=warm_uncached",2026-02-24T20:06:57.793177+00:00

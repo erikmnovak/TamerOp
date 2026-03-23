@@ -1,2 +1,0 @@
-tool,case_id,regime,n_points,ambient_dim,max_dim,cold_ms,cold_alloc_kib,warm_median_ms,warm_p90_ms,warm_alloc_median_kib,simplex_count,edge_count,max_simplex_dim,notes,timestamp_utc
-tamer_op,parity_n5000_d2_s11,normalized_parity,500,2,1,4499.082074,286816.328125,43.966938999999996,197.895993,101696.671875,125250,124750,1,,2026-02-22T18:32:00.964

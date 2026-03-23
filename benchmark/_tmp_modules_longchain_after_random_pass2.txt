@@ -1,7 +1,0 @@
-PASS=1
-route(random_long)=plan_build
-map_leq old long-chain (>=3 hops)            median_time=165.204 ms  median_alloc=163482.5 KiB
-map_leq new long-chain cold                  median_time=208.211 ms  median_alloc=176456.1 KiB
-map_leq batch long-chain cold                median_time=94.806 ms  median_alloc=97968.9 KiB
-speedup(new/old) long-chain: 0.79x
-speedup(batch/old) long-chain: 1.74x

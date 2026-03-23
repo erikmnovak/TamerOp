@@ -1,0 +1,5 @@
+[profile] desktop (reps=4, trim_between_reps=true, trim_between_cases=true)
+NearestNeighbors package loaded: true
+Invariants: all
+inv_landmark_n5000_d2_md1_s11    inv=euler_signed_measure cold_ms=1.01 warm_med_ms=0.907 terms=1168
+Wrote tamer invariant results: benchmark/ingestion_compare_harness/_run_invariant_supervisor_landmark_scale5/cases/tamer/inv_landmark_n5000_d2_md1_s11.csv

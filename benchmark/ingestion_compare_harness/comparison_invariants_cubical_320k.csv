@@ -1,0 +1,2 @@
+case_id,regime,invariant_kind,degree,n_points,ambient_dim,max_dim,tamer_cold_ms,multipers_cold_ms,cold_slowdown_tamer_over_multipers,tamer_warm_median_ms,multipers_warm_median_ms,warm_slowdown_tamer_over_multipers,tamer_output_term_count,multipers_output_term_count,tamer_output_abs_mass,multipers_output_abs_mass,parity_status,parity_reason,summary_included
+inv_cubical_side253_s11,cubical_parity,euler_signed_measure,0,320356,2,2,589.765344,13953.409060999547,0.042267,533.6967975,18420.486032999634,0.028973,184999,184999,197361.0,197361.0,matched,matched,yes

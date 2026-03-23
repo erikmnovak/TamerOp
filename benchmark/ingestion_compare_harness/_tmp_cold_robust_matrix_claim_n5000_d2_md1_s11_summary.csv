@@ -1,4 +1,0 @@
-case_id,regime,n_points,ambient_dim,max_dim,tamer_cold_median_ms,multipers_cold_median_ms,cold_slowdown_tamer_over_multipers,n_cases,restarts,robust_cold_geomean_slowdown_tamer_over_multipers,robust_cold_geomean_speedup_tamer_over_multipers,timestamp_utc
-matrix_claim_n5000_d2_md1_s11,claim_matching,5000,2,1,6596.857274000001,73.45991401234642,89.80213716138118,,,,,
-,,,,,,,,,,,,
-,all,,,,,,,1,3,89.80213716138118,0.011135592443673417,2026-02-23T06:32:43.509240+00:00

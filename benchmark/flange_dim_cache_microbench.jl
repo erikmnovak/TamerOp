@@ -2,20 +2,20 @@
 
 using Random
 
-if isdefined(Main, :PosetModules)
-    const PosetModules = getfield(Main, :PosetModules)
+if isdefined(Main, :TamerOp)
+    const TamerOp = getfield(Main, :TamerOp)
 else
     try
-        using PosetModules
+        using TamerOp
     catch
-        include(joinpath(@__DIR__, "..", "src", "PosetModules.jl"))
-        using .PosetModules
+        include(joinpath(@__DIR__, "..", "src", "TamerOp.jl"))
+        using .TamerOp
     end
 end
 
-const PM = PosetModules.Advanced
-const CM = PM.CoreModules
-const FZ = PM.FlangeZn
+const TO = TamerOp.Advanced
+const CM = TO.CoreModules
+const FZ = TO.FlangeZn
 
 function _parse_arg(args, key::String, default::Int)
     for a in args

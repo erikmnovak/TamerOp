@@ -1,7 +1,0 @@
-case,family,stage,cache_mode,median_ms,p90_ms,median_alloc_kib
-degree_local_all_t_probe_graded_t1,graded,module,all_t_on,228.873527,520.781914,370898.015625
-degree_local_all_t_probe_graded_t1,graded,module,all_t_off,224.064886,532.01751,339873.015625
-encoding_result_lazy_probe_graded_t1,graded,encoding_result,lazy_on_encode,0.022862,0.132792,13.28125
-encoding_result_lazy_probe_graded_t1,graded,encoding_result,lazy_off_encode,4.750465,5.093138,7244.304688
-encoding_result_lazy_probe_graded_t1,graded,encoding_result,lazy_on_plus_pmodule,4.454893,5.126446,7244.554688
-encoding_result_lazy_probe_graded_t1,graded,encoding_result,lazy_off_plus_pmodule,4.6976,5.536885,7244.398438

@@ -1,7 +1,0 @@
-probe,median_ms,median_bytes
-facets_all_new,104.395012,96635160
-facets_all_old_emulated,107.717027,100963176
-classify_all_new,23.528516,245808
-classify_all_old_emulated,25.380146999999997,688176
-adj_reduce_new,0.11639000000000001,246632
-adj_reduce_old_emulated,0.17871700000000001,388912

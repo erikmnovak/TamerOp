@@ -1,5 +1,0 @@
-case,family,stage,cache_mode,median_ms,p90_ms,median_alloc_kib
-lowdim_h0_probe_rips_d1,point,module,fastpath,53.100726,243.012808,73479.664062
-lowdim_h0_probe_rips_d1,point,module,generic,50.636892,62.080487,74527.109375
-lazy_diff_thread_probe_rips_d2,point,cochain,serial,4.569896,5.786104,7560.820312
-lazy_diff_thread_probe_rips_d2,point,cochain,threaded,3.675499,4.124486,7560.757812

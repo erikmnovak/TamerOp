@@ -1,3 +1,0 @@
-case,family,stage,cache_mode,median_ms,p90_ms,median_alloc_kib
-packed_edgelist_probe_graph_clique,graph,graded_complex,packed_on,3.266195,5.289864,1231.867188
-packed_edgelist_probe_graph_clique,graph,graded_complex,packed_off,3.273738,4.27049,1327.101562

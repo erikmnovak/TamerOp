@@ -1,0 +1,35 @@
+=== inv_degree_rips_n1000_d2_s11 (1/9) ===
+[profile] desktop (reps=4, trim_between_reps=true, trim_between_cases=true)
+NearestNeighbors package loaded: true
+Invariants: [:euler_signed_measure]
+inv_degree_rips_n1000_d2_s11     inv=euler_signed_measure cold_ms=8836.203 warm_med_ms=6200.289 terms=1018
+Wrote tamer invariant results: benchmark/ingestion_compare_harness/results_tamer_invariants_scale05_cases/inv_degree_rips_n1000_d2_s11.csv
+[rc] inv_degree_rips_n1000_d2_s11 -> 0
+=== inv_degree_rips_n1000_d8_s11 (2/9) ===
+[profile] desktop (reps=4, trim_between_reps=true, trim_between_cases=true)
+NearestNeighbors package loaded: true
+Invariants: [:euler_signed_measure]
+inv_degree_rips_n1000_d8_s11     inv=euler_signed_measure cold_ms=22091.518 warm_med_ms=20656.501 terms=1534
+Wrote tamer invariant results: benchmark/ingestion_compare_harness/results_tamer_invariants_scale05_cases/inv_degree_rips_n1000_d8_s11.csv
+[rc] inv_degree_rips_n1000_d8_s11 -> 0
+=== inv_rips_codensity_n750_d2_s11 (3/9) ===
+ERROR: LoadError: No cases selected. manifest=benchmark/ingestion_compare_harness/fixtures_invariants_scale05/manifest.toml, regime=all, case=inv_rips_codensity_n750_d2_s11
+Stacktrace:
+ [1] error(s::String)
+   @ Base ./error.jl:44
+ [2] main()
+   @ Main ~/Documents/duke_fall_2025/tamer-op/benchmark/ingestion_compare_harness/run_tamer_invariants.jl:393
+ [3] top-level scope
+   @ ~/Documents/duke_fall_2025/tamer-op/benchmark/ingestion_compare_harness/run_tamer_invariants.jl:398
+ [4] include(mod::Module, _path::String)
+   @ Base ./Base.jl:306
+ [5] exec_options(opts::Base.JLOptions)
+   @ Base ./client.jl:317
+ [6] _start()
+   @ Base ./client.jl:550
+in expression starting at /home/eriknovak/Documents/duke_fall_2025/tamer-op/benchmark/ingestion_compare_harness/run_tamer_invariants.jl:398
+[profile] desktop (reps=4, trim_between_reps=true, trim_between_cases=true)
+NearestNeighbors package loaded: true
+Invariants: [:euler_signed_measure]
+[skip] inv_rips_codensity_n750_d2_s11 euler_signed_measure: OutOfMemoryError()
+[rc] inv_rips_codensity_n750_d2_s11 -> 1

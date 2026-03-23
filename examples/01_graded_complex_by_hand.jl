@@ -51,7 +51,7 @@ grades = [
     [1.2, 0.8],
 ]
 
-G = PM.GradedComplex(cells_by_dim, [B1], grades)
+G = TO.GradedComplex(cells_by_dim, [B1], grades)
 
 # -----------------------------------------------------------------------------
 # 2) Encode with explicit axes
@@ -64,7 +64,7 @@ axes = (
     collect(range(0.0, stop=1.2, length=4)),
 )
 
-spec = PM.FiltrationSpec(
+spec = TO.FiltrationSpec(
     ;
     # `:graded` means "ingest this object as an already graded complex".
     kind=:graded,
@@ -75,17 +75,17 @@ println("spec type: ", typeof(spec))
 # Same degree convention as quickstart:
 # degree=t asks ingestion to return the module H^t.
 # We choose F2 for fast, deterministic linear algebra in this tutorial.
-enc = PM.encode(G, spec; degree=0, field=PM.CoreModules.F2(), cache=:auto)
+enc = TO.encode(G, spec; degree=0, field=TO.CoreModules.F2(), cache=:auto)
 println("enc type: ", typeof(enc))
 println("enc.M type (module): ", typeof(enc.M))
 println("enc.pi type (classifier): ", typeof(enc.pi))
-println("Encoded poset vertices: ", PM.nvertices(enc.P))
+println("Encoded poset vertices: ", TO.nvertices(enc.P))
 
 # -----------------------------------------------------------------------------
 # 3) Invariant sanity checks
 # -----------------------------------------------------------------------------
 
-opts = PM.InvariantOptions(
+opts = TO.InvariantOptions(
     ;
     # Keep axes fixed exactly as provided above (no auto-derived axis changes).
     axes=axes,
@@ -96,8 +96,8 @@ opts = PM.InvariantOptions(
     pl_mode=:fast,
 )
 
-rh = PM.restricted_hilbert(enc.M)
-rank_tbl = PM.rank_invariant(enc; opts=opts, store_zeros=true)
+rh = TO.restricted_hilbert(enc.M)
+rank_tbl = TO.rank_invariant(enc; opts=opts, store_zeros=true)
 
 println("restricted_hilbert length: ", length(rh))
 println("rank table entries: ", length(rank_tbl))
@@ -108,19 +108,19 @@ println("rank table entries: ", length(rank_tbl))
 
 # Use rank grid here so output dimension is explicit and easy to explain.
 # For n vertices, RankGridSpec produces n^2 coordinates in deterministic order.
-rank_spec = PM.RankGridSpec(nvertices=PM.nvertices(enc.P), store_zeros=true, threads=false)
+rank_spec = TO.RankGridSpec(nvertices=TO.nvertices(enc.P), store_zeros=true, threads=false)
 
 # `batch_transform` is used even for one sample so this file mirrors dataset workflows.
-fs = PM.batch_transform(
+fs = TO.batch_transform(
     [enc],
     rank_spec;
     opts=opts,
-    batch=PM.BatchOptions(threaded=false, backend=:threads, progress=false),
+    batch=TO.BatchOptions(threaded=false, backend=:threads, progress=false),
     cache=:auto,
     idfun=_ -> "graded_hand_001",
 )
 
-println("nfeatures(rank_spec): ", PM.nfeatures(rank_spec))
+println("nfeatures(rank_spec): ", TO.nfeatures(rank_spec))
 println("feature matrix shape: ", size(fs.X))
 
 # -----------------------------------------------------------------------------
@@ -133,7 +133,7 @@ println("CSV long: ", paths.csv_long)
 println("Native optional outputs: ", paths.native)
 
 g_path = joinpath(outdir, "graded_complex.json")
-PM.save_dataset_json(g_path, G)
+TO.save_dataset_json(g_path, G)
 println("Saved graded complex JSON: ", g_path)
 
 println("\nDone. Output directory: ", outdir)

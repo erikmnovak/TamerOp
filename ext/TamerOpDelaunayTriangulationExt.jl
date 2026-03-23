@@ -2,17 +2,17 @@ module TamerOpDelaunayTriangulationExt
 
 import DelaunayTriangulation as DT
 
-const PM = let pm = nothing
-    if isdefined(Main, :PosetModules)
-        pm = getfield(Main, :PosetModules)
+const TO = let pm = nothing
+    if isdefined(Main, :TamerOp)
+        pm = getfield(Main, :TamerOp)
     else
-        @eval import PosetModules
-        pm = PosetModules
+        @eval import TamerOp
+        pm = TamerOp
     end
     pm
 end
 
-const DI = PM.DataIngestion
+const DI = TO.DataIngestion
 
 @inline function _points2d(points)
     n = length(points)

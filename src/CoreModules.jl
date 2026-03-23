@@ -424,8 +424,27 @@ struct ResolutionKey3
     maxlen::Int
 end
 
+struct ResolutionKey4
+    a::UInt
+    b::UInt
+    maxlen::Int
+    tag::UInt8
+end
+
+struct ResolutionKey5
+    a::UInt
+    b::UInt
+    len1::Int
+    len2::Int
+    tag::UInt8
+end
+
 @inline _resolution_key2(a, maxlen::Integer) = ResolutionKey2(UInt(objectid(a)), Int(maxlen))
 @inline _resolution_key3(a, b, maxlen::Integer) = ResolutionKey3(UInt(objectid(a)), UInt(objectid(b)), Int(maxlen))
+@inline _resolution_key4(a, b, maxlen::Integer, tag::Integer) =
+    ResolutionKey4(UInt(objectid(a)), UInt(objectid(b)), Int(maxlen), UInt8(tag))
+@inline _resolution_key5(a, b, len1::Integer, len2::Integer, tag::Integer=0) =
+    ResolutionKey5(UInt(objectid(a)), UInt(objectid(b)), Int(len1), Int(len2), UInt8(tag))
 
 abstract type AbstractCachePayload end
 
@@ -438,6 +457,42 @@ struct InjectiveResolutionPayload{R} <: AbstractCachePayload
 end
 
 struct IndicatorResolutionPayload{R} <: AbstractCachePayload
+    value::R
+end
+
+struct ExtProjectivePayload{R} <: AbstractCachePayload
+    value::R
+end
+
+struct ExtInjectivePayload{R} <: AbstractCachePayload
+    value::R
+end
+
+struct ExtUnifiedPayload{R} <: AbstractCachePayload
+    value::R
+end
+
+struct TorFirstPayload{R} <: AbstractCachePayload
+    value::R
+end
+
+struct TorSecondPayload{R} <: AbstractCachePayload
+    value::R
+end
+
+struct HomBicomplexPayload{R} <: AbstractCachePayload
+    value::R
+end
+
+struct ExtDoubleComplexPayload{R} <: AbstractCachePayload
+    value::R
+end
+
+struct TorDoubleComplexPlanPayload{R} <: AbstractCachePayload
+    value::R
+end
+
+struct TorDoubleComplexPayload{R} <: AbstractCachePayload
     value::R
 end
 
@@ -488,6 +543,15 @@ mutable struct ResolutionCache
     projective::Dict{ResolutionKey2,ProjectiveResolutionPayload}
     injective::Dict{ResolutionKey2,InjectiveResolutionPayload}
     indicator::Dict{ResolutionKey3,IndicatorResolutionPayload}
+    ext_projective::Dict{ResolutionKey3,ExtProjectivePayload}
+    ext_injective::Dict{ResolutionKey3,ExtInjectivePayload}
+    ext_unified::Dict{ResolutionKey4,ExtUnifiedPayload}
+    tor_first::Dict{ResolutionKey3,TorFirstPayload}
+    tor_second::Dict{ResolutionKey3,TorSecondPayload}
+    hom_bicomplex::Dict{ResolutionKey5,HomBicomplexPayload}
+    ext_doublecomplex::Dict{ResolutionKey3,ExtDoubleComplexPayload}
+    tor_doublecomplex_plan::Dict{ResolutionKey5,TorDoubleComplexPlanPayload}
+    tor_doublecomplex::Dict{ResolutionKey5,TorDoubleComplexPayload}
     projective_promotion_type::Union{Nothing,DataType}
     projective_promotion_hits::Int
     injective_promotion_type::Union{Nothing,DataType}
@@ -514,6 +578,15 @@ function ResolutionCache()
         Dict{ResolutionKey2,ProjectiveResolutionPayload}(),
         Dict{ResolutionKey2,InjectiveResolutionPayload}(),
         Dict{ResolutionKey3,IndicatorResolutionPayload}(),
+        Dict{ResolutionKey3,ExtProjectivePayload}(),
+        Dict{ResolutionKey3,ExtInjectivePayload}(),
+        Dict{ResolutionKey4,ExtUnifiedPayload}(),
+        Dict{ResolutionKey3,TorFirstPayload}(),
+        Dict{ResolutionKey3,TorSecondPayload}(),
+        Dict{ResolutionKey5,HomBicomplexPayload}(),
+        Dict{ResolutionKey3,ExtDoubleComplexPayload}(),
+        Dict{ResolutionKey5,TorDoubleComplexPlanPayload}(),
+        Dict{ResolutionKey5,TorDoubleComplexPayload}(),
         nothing,
         0,
         nothing,
@@ -538,6 +611,15 @@ function _clear_resolution_cache!(cache::ResolutionCache)
     empty!(cache.projective)
     empty!(cache.injective)
     empty!(cache.indicator)
+    empty!(cache.ext_projective)
+    empty!(cache.ext_injective)
+    empty!(cache.ext_unified)
+    empty!(cache.tor_first)
+    empty!(cache.tor_second)
+    empty!(cache.hom_bicomplex)
+    empty!(cache.ext_doublecomplex)
+    empty!(cache.tor_doublecomplex_plan)
+    empty!(cache.tor_doublecomplex)
     cache.projective_promotion_type = nothing
     cache.projective_promotion_hits = 0
     cache.injective_promotion_type = nothing
@@ -583,9 +665,9 @@ const _ENCODING_GEOMETRY_KEY = Tuple
 struct _SessionProductKey
     a::UInt
     b::UInt
+    @inline _SessionProductKey(a::UInt, b::UInt) = new(a, b)
+    @inline _SessionProductKey(a, b) = new(UInt(objectid(a)), UInt(objectid(b)))
 end
-
-@inline _SessionProductKey(a, b) = _SessionProductKey(UInt(objectid(a)), UInt(objectid(b)))
 
 const _SESSION_PRODUCT_KEY = _SessionProductKey
 const _SESSION_ZN_ENCODING_KEY = Tuple{UInt64,Symbol,Int}
@@ -662,6 +744,20 @@ abstract type AbstractSlicePlanCache end
 
 Cross-query cache root with explicit lifetime controlled by the caller.
 
+`SessionCache` is the canonical reusable cache object for high-level workflow
+entrypoints that accept `cache=...`.
+
+Best practices:
+- simple users should usually pass `cache=:auto` and let the workflow create a
+  short-lived cache automatically,
+- advanced users should construct one `SessionCache()` and reuse it across
+  related calls when they want warm-path speedups,
+- pass `cache=nothing` to disable cross-call reuse explicitly.
+
+`SessionCache` is a workflow-level cache root, not a mathematical object. Users
+should treat it as an opaque performance tool rather than inspecting internal
+storage fields directly.
+
 Hierarchy:
 - SessionCache (long-lived, workflow-level)
   - EncodingCache buckets keyed by poset identity
@@ -721,6 +817,50 @@ function SessionCache()
                               Dict{_SESSION_PRODUCT_KEY,ProductPosetCacheEntry{Any,Any,Any,Any,Any}}())
 end
 
+@inline function _session_cache_summary_counts(session::SessionCache)
+    return (
+        encoding_buckets=_session_encoding_bucket_count(session),
+        module_buckets=_session_module_bucket_count(session),
+        zn_encoding_artifacts=_session_zn_encoding_artifact_count(session),
+        zn_pushforward_plans=_session_zn_pushforward_plan_count(session),
+        zn_pushforward_fringes=_session_zn_pushforward_fringe_count(session),
+        zn_pushforward_modules=_session_zn_pushforward_module_count(session),
+        product_dense=length(session.product_dense),
+        product_object=length(session.product_obj),
+        has_hom_system=session.hom_system !== nothing,
+        has_slice_plan=session.slice_plan !== nothing,
+    )
+end
+
+function Base.show(io::IO, session::SessionCache)
+    counts = _session_cache_summary_counts(session)
+    print(io,
+          "SessionCache(",
+          "encoding=", counts.encoding_buckets,
+          ", modules=", counts.module_buckets,
+          ", zn=", counts.zn_encoding_artifacts + counts.zn_pushforward_plans +
+                   counts.zn_pushforward_fringes + counts.zn_pushforward_modules,
+          ")")
+end
+
+function Base.show(io::IO, ::MIME"text/plain", session::SessionCache)
+    counts = _session_cache_summary_counts(session)
+    print(io,
+          "SessionCache\n",
+          "  encoding buckets: ", counts.encoding_buckets, "\n",
+          "  module buckets: ", counts.module_buckets, "\n",
+          "  zn encoding artifacts: ", counts.zn_encoding_artifacts, "\n",
+          "  zn pushforward plans: ", counts.zn_pushforward_plans, "\n",
+          "  zn pushforward fringes: ", counts.zn_pushforward_fringes, "\n",
+          "  zn pushforward modules: ", counts.zn_pushforward_modules, "\n",
+          "  product caches: dense=", counts.product_dense,
+          ", object=", counts.product_object, "\n",
+          "  cached heavy helpers: hom_system=", counts.has_hom_system,
+          ", slice_plan=", counts.has_slice_plan, "\n",
+          "  shard layout: core=", length(session.encoding),
+          ", zn=", length(session.zn_encoding_artifacts))
+end
+
 const _FIELD_CACHE_SEED = UInt(0x9E37_79B9_7F4A_7C15)
 
 @inline _field_cache_key(::QQField)::UInt = UInt(0x514F_514F_514F_514F)
@@ -739,7 +879,6 @@ end
 
 @inline _session_shard_index(key::UInt, nshards::Int) = Int((key % UInt(nshards)) + 1)
 @inline _session_shard_index(key::Tuple{UInt,UInt}, nshards::Int) = Int((key[1] % UInt(nshards)) + 1)
-@inline _session_shard_index(key::Tuple{UInt64,UInt64}, nshards::Int) = Int((key[1] % UInt64(nshards)) + 1)
 @inline _session_shard_index(key::Tuple{UInt64,Symbol,Int}, nshards::Int) = Int((key[1] % UInt64(nshards)) + 1)
 @inline _session_shard_index(key::Tuple{UInt64,Symbol,UInt64,UInt}, nshards::Int) = Int((key[1] % UInt64(nshards)) + 1)
 
@@ -1117,6 +1256,16 @@ end
 
 const _WORKFLOW_ENCODING_CACHE_KEY = typemax(UInt)
 
+@inline function _workflow_cache_argument_error(cache)
+    got = cache === nothing ? "nothing" : repr(cache)
+    return ArgumentError(
+        "cache must be one of :auto, nothing, or SessionCache(). " *
+        "Use cache=:auto for per-call automatic reuse, cache=SessionCache() " *
+        "to reuse work across calls, or cache=nothing to disable caching. " *
+        "Got $(got)."
+    )
+end
+
 @inline function _resolve_workflow_session_cache(cache)
     if cache === :auto
         return SessionCache()
@@ -1125,7 +1274,7 @@ const _WORKFLOW_ENCODING_CACHE_KEY = typemax(UInt)
     elseif cache isa SessionCache
         return cache
     end
-    throw(ArgumentError("cache must be :auto, nothing, or SessionCache"))
+    throw(_workflow_cache_argument_error(cache))
 end
 
 @inline function _resolve_workflow_specialized_cache(cache, ::Type{T}) where {T}

@@ -30,24 +30,24 @@ outdir = example_outdir("05_fibered_slices")
 stage("1) Prepare encoded samples")
 
 clouds, labels = make_pointcloud_dataset(n_per_class=6, n_points=60, seed=5005)
-filtration = PM.RipsDensityFiltration(
+filtration = TO.RipsDensityFiltration(
     ;
     max_dim=1,
     knn=9,
     density_k=9,
     nn_backend=:auto,
-    construction=PM.ConstructionOptions(
+    construction=TO.ConstructionOptions(
         ;
         sparsify=:knn,
         budget=(max_simplices=120_000, max_edges=80_000, memory_budget_bytes=900_000_000),
     ),
 )
-field = PM.CoreModules.F2()
+field = TO.CoreModules.F2()
 
-encodings = [PM.encode(clouds[i], filtration; degree=0, field=field, cache=:auto) for i in eachindex(clouds)]
+encodings = [TO.encode(clouds[i], filtration; degree=0, field=field, cache=:auto) for i in eachindex(clouds)]
 samples = to_encoding_samples(encodings, labels; prefix="fiber")
 
-opts = PM.InvariantOptions(
+opts = TO.InvariantOptions(
     ;
     axes_policy=:encoding,
     max_axis_len=64,
@@ -66,14 +66,14 @@ offs = [
     collect(range(-0.7, stop=0.7, length=5)),
 ]
 
-plan = PM.Invariants.compile_slices(encodings[1].pi, opts; directions=dirs, offsets=offs, threads=true)
-slice0 = PM.slice_barcodes(encodings[1].M, plan, opts; packed=true, threaded=true)
+plan = TO.Invariants.compile_slices(encodings[1].pi, opts; directions=dirs, offsets=offs, threads=true)
+slice0 = TO.slice_barcodes(encodings[1].M, plan, opts; packed=true, threaded=true)
 println("Compiled plan type: ", typeof(plan))
 println("slice_barcodes(plan) keys: ", collect(keys(slice0)))
 
 stage("3) Build featurizers (landscapes + projected distances)")
 
-land_spec = PM.LandscapeSpec(
+land_spec = TO.LandscapeSpec(
     ;
     directions=dirs,
     offsets=offs,
@@ -86,7 +86,7 @@ land_spec = PM.LandscapeSpec(
 
 # References can be any samples carrying (M, pi).
 refs = samples[1:3]
-proj_spec = PM.ProjectedDistancesSpec(
+proj_spec = TO.ProjectedDistancesSpec(
     refs;
     reference_names=[:ref_circle_1, :ref_circle_2, :ref_figure8_1],
     dist=:bottleneck,
@@ -95,27 +95,27 @@ proj_spec = PM.ProjectedDistancesSpec(
     threads=true,
 )
 
-spec = PM.CompositeSpec((land_spec, proj_spec))
+spec = TO.CompositeSpec((land_spec, proj_spec))
 
 stage("4) Batch transform with a shared SessionCache")
 
-sc = PM.SessionCache()
-fs = PM.batch_transform(
+sc = TO.SessionCache()
+fs = TO.batch_transform(
     samples,
     spec;
     opts=opts,
     idfun=s -> s.id,
     labelfun=s -> s.label,
-    batch=PM.BatchOptions(threaded=true, backend=:threads, progress=false, deterministic=true),
+    batch=TO.BatchOptions(threaded=true, backend=:threads, progress=false, deterministic=true),
     cache=sc,
 )
 
 println("Feature matrix shape: ", size(fs.X))
-println("nfeatures(spec): ", PM.nfeatures(spec))
+println("nfeatures(spec): ", TO.nfeatures(spec))
 
 # Inspect cache footprint for one representative sample/spec.
-cache_obj = PM.build_cache(samples[1], spec; opts=opts, threaded=true)
-println("Cache stats (single-sample cache object): ", PM.cache_stats(cache_obj))
+cache_obj = TO.build_cache(samples[1], spec; opts=opts, threaded=true)
+println("Cache stats (single-sample cache object): ", TO.cache_stats(cache_obj))
 
 stage("5) Save outputs")
 

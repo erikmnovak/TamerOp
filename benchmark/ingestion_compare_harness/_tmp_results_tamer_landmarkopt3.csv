@@ -1,4 +1,0 @@
-tool,case_id,regime,n_points,ambient_dim,max_dim,cold_ms,cold_alloc_kib,warm_median_ms,warm_p90_ms,warm_alloc_median_kib,simplex_count,edge_count,max_simplex_dim,notes,timestamp_utc
-tamer_op,landmark_n50000_d2_s11,landmark_parity,50000,2,1,8859.373271,280412.3125,0.935157,1.875373,464.84375,1976,1752,1,landmark_subset_radius_parity,2026-02-24T04:48:24.433
-tamer_op,landmark_n50000_d2_s17,landmark_parity,50000,2,1,0.906021,565.578125,1.0727600000000002,1.363283,565.5625,2084,1860,1,landmark_subset_radius_parity,2026-02-24T04:48:33.215
-tamer_op,landmark_n50000_d8_s11,landmark_parity,50000,8,1,1.0192,463.53125,0.9910410000000001,1.1682350000000001,463.53125,1968,1744,1,landmark_subset_radius_parity,2026-02-24T04:48:42.320

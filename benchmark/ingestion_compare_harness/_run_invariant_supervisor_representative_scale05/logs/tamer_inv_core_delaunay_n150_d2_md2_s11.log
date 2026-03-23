@@ -1,0 +1,5 @@
+[profile] desktop (reps=4, trim_between_reps=true, trim_between_cases=true)
+NearestNeighbors package loaded: true
+Invariants: [:euler_signed_measure]
+inv_core_delaunay_n150_d2_md2_s11 inv=euler_signed_measure cold_ms=232.426 warm_med_ms=212.943 terms=340
+Wrote tamer invariant results: benchmark/ingestion_compare_harness/_run_invariant_supervisor_representative_scale05/cases/tamer/inv_core_delaunay_n150_d2_md2_s11.csv

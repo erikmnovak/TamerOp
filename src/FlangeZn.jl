@@ -5,6 +5,8 @@ using ..CoreModules: QQ, AbstractCoeffField, coeff_type, field_from_eltype, QQFi
 using ..CoreModules.CoeffFields: zeros
 import ..FieldLinAlg
 import ..CoreModules: change_field
+import ..DataTypes: ambient_dim
+import ..FiniteFringe: field
 
 # ---------------------------------------------------------------------------
 # Face
@@ -34,6 +36,26 @@ struct Face
     n::Int
     coords::BitVector
 end
+
+"""
+    free_coordinates(tau::Face) -> Vector{Int}
+
+Return the coordinates of `Z^n` that are free on the orthant face `tau`.
+
+If `i in free_coordinates(tau)`, then the `i`th coordinate is unconstrained for
+the corresponding flange generators. This accessor is the semantic alternative
+to inspecting `tau.coords` directly.
+"""
+function free_coordinates(tau::Face)::Vector{Int}
+    out = Int[]
+    sizehint!(out, count(tau.coords))
+    @inbounds for i in eachindex(tau.coords)
+        tau.coords[i] && push!(out, i)
+    end
+    return out
+end
+
+@inline ambient_dim(tau::Face) = tau.n
 
 # Convert a list of indices in 1:n to a BitVector mask.
 function _indices_to_bitvector(n::Int, idxs::Vector{Int})::BitVector
@@ -147,6 +169,26 @@ function IndFlat(tau::Face, b::AbstractVector{<:Integer}; id::Symbol = :F)
 end
 
 """
+    translation(F::IndFlat) -> NTuple
+
+Return the translation vector of the indexed flat `F`.
+
+This is the semantic accessor for the lattice offset that determines the
+inequality thresholds of `F`.
+"""
+@inline translation(F::IndFlat) = F.b
+
+"""
+    face(F::IndFlat) -> Face
+
+Return the orthant face that determines which coordinates of the indexed flat
+`F` are free.
+"""
+@inline face(F::IndFlat) = F.tau
+
+@inline ambient_dim(::IndFlat{N}) where {N} = N
+
+"""
     IndInj(tau, b; id=:E)
 
 An indexed injective in Z^n (the down-set analogue of `IndFlat`).
@@ -172,6 +214,26 @@ end
 function IndInj(tau::Face, b::AbstractVector{<:Integer}; id::Symbol = :E)
     return IndInj{length(b)}(tau, ntuple(i -> Int(b[i]), length(b)), id)
 end
+
+"""
+    translation(E::IndInj) -> NTuple
+
+Return the translation vector of the indexed injective `E`.
+
+This is the semantic accessor for the lattice offset that determines the
+inequality thresholds of `E`.
+"""
+@inline translation(E::IndInj) = E.b
+
+"""
+    face(E::IndInj) -> Face
+
+Return the orthant face that determines which coordinates of the indexed
+injective `E` are free.
+"""
+@inline face(E::IndInj) = E.tau
+
+@inline ambient_dim(::IndInj{N}) where {N} = N
 
 
 # Internal predicate: do b and g agree on the fixed coordinates of tau?
@@ -454,6 +516,483 @@ function change_field(FG::Flange{K,F,N}, field::AbstractCoeffField) where {K,F,N
     return Flange{K2, typeof(field), N}(field, FG.n, FG.flats, FG.injectives, Phi)
 end
 
+"""
+    field(FG::Flange) -> AbstractCoeffField
+    field(cache::FlangeDimCache) -> AbstractCoeffField
+
+Return the coefficient field used by a flange or by a flange-dimension cache.
+
+Use this semantic accessor instead of direct field inspection in notebook and
+workflow code.
+"""
+@inline field(FG::Flange) = FG.field
+
+"""
+    flats(FG::Flange) -> Vector{IndFlat}
+
+Return the indexed flats that present the flange `FG`.
+"""
+@inline flats(FG::Flange) = FG.flats
+
+"""
+    injectives(FG::Flange) -> Vector{IndInj}
+
+Return the indexed injectives that present the flange `FG`.
+"""
+@inline injectives(FG::Flange) = FG.injectives
+
+"""
+    coefficient_matrix(FG::Flange) -> Matrix
+
+Return the coefficient matrix whose active row and column restrictions determine
+the fiberwise dimensions of `FG`.
+"""
+@inline coefficient_matrix(FG::Flange) = FG.phi
+
+"""
+    nflats(FG::Flange) -> Int
+
+Return the number of indexed flats in the flange `FG`.
+"""
+@inline nflats(FG::Flange) = length(FG.flats)
+
+"""
+    ninjectives(FG::Flange) -> Int
+
+Return the number of indexed injectives in the flange `FG`.
+"""
+@inline ninjectives(FG::Flange) = length(FG.injectives)
+
+@inline ambient_dim(FG::Flange) = FG.n
+
+"""
+    matrix_size(FG::Flange) -> Tuple{Int,Int}
+
+Return the size of the global coefficient matrix of `FG` as
+`(ninjectives(FG), nflats(FG))`.
+
+This is a cheap scalar helper for inspection and summary code. It does not
+materialize any local matrices or perform linear algebra.
+"""
+@inline matrix_size(FG::Flange) = size(coefficient_matrix(FG))
+
+"""
+    generator_counts(FG::Flange) -> NamedTuple
+
+Return the number of indexed flats and indexed injectives of `FG` as
+`(; flats=..., injectives=...)`.
+
+This is the preferred cheap count accessor when you want presentation sizes
+without unpacking the full flange summary.
+"""
+@inline generator_counts(FG::Flange) = (; flats=nflats(FG), injectives=ninjectives(FG))
+
+"""
+    FlangeValidationSummary
+
+Pretty printable wrapper for reports returned by the `FlangeZn` validation
+helpers.
+
+Use [`flange_validation_summary`](@ref) to turn a raw report from
+[`check_face`](@ref), [`check_indflat`](@ref), [`check_indinj`](@ref), or
+[`check_flange`](@ref) into a notebook/REPL-friendly summary object.
+"""
+struct FlangeValidationSummary{R}
+    report::R
+end
+
+"""
+    flange_validation_summary(report) -> FlangeValidationSummary
+
+Wrap a raw `FlangeZn` validation report in a display-oriented summary object.
+
+Best practice:
+- call the appropriate `check_*` helper first,
+- wrap the returned report for notebook or REPL display,
+- keep the raw report when you need programmatic access to the `issues` vector.
+"""
+@inline flange_validation_summary(report::NamedTuple) = FlangeValidationSummary(report)
+
+@inline function _flange_issue_report(kind::Symbol, valid::Bool; kwargs...)
+    return (; kind, valid, kwargs...)
+end
+
+@inline function _throw_invalid_flange(fn::Symbol, issues::Vector{String})
+    throw(ArgumentError(string(fn) * ": " * join(issues, " ")))
+end
+
+@inline _integer_point_length(g::AbstractVector) = length(g)
+@inline _integer_point_length(g::Tuple) = length(g)
+@inline _integer_point_length(::Any) = nothing
+
+@inline _is_integer_point(g::AbstractVector) = all(x -> x isa Integer, g)
+@inline _is_integer_point(g::Tuple) = all(x -> x isa Integer, g)
+@inline _is_integer_point(::Any) = false
+
+function _append_flange_point_issues!(issues::Vector{String}, FG::Flange, g; label::AbstractString="point")
+    if !(g isa AbstractVector || g isa Tuple)
+        push!(issues, "$label must be an integer lattice point given as an AbstractVector or tuple.")
+        return nothing
+    end
+    _is_integer_point(g) || push!(issues, "$label must contain only integers.")
+    glen = _integer_point_length(g)
+    glen == ambient_dim(FG) || push!(issues, "$label has length $glen, expected ambient dimension $(ambient_dim(FG)).")
+    return nothing
+end
+
+"""
+    check_face(tau; throw=false) -> NamedTuple
+
+Validate a hand-built orthant face.
+
+This helper checks:
+- `tau.n >= 0`,
+- the stored mask has length exactly `tau.n`.
+
+Wrap the returned report with [`flange_validation_summary`](@ref) when you want
+a readable notebook or REPL summary.
+"""
+function check_face(tau::Face; throw::Bool=false)
+    issues = String[]
+    tau.n >= 0 || push!(issues, "face ambient dimension must be nonnegative.")
+    length(tau.coords) == tau.n || push!(issues,
+        "face mask has length $(length(tau.coords)), expected $(tau.n).")
+    valid = isempty(issues)
+    throw && !valid && _throw_invalid_flange(:check_face, issues)
+    return _flange_issue_report(:face, valid;
+                                ambient_dim=tau.n,
+                                free_coordinates=free_coordinates(tau),
+                                issues=issues)
+end
+
+"""
+    check_indflat(F; throw=false) -> NamedTuple
+
+Validate a hand-built indexed flat.
+
+This helper checks:
+- the underlying face passes [`check_face`](@ref),
+- the face dimension agrees with the translation length.
+
+Wrap the returned report with [`flange_validation_summary`](@ref) when you want
+a readable notebook or REPL summary.
+"""
+function check_indflat(F::IndFlat; throw::Bool=false)
+    issues = String[]
+    face_report = check_face(face(F))
+    append!(issues, face_report.issues)
+    ambient_dim(F) == ambient_dim(face(F)) || push!(issues,
+        "flat translation length $(ambient_dim(F)) does not match face dimension $(ambient_dim(face(F))).")
+    valid = isempty(issues)
+    throw && !valid && _throw_invalid_flange(:check_indflat, issues)
+    return _flange_issue_report(:flat, valid;
+                                id=F.id,
+                                ambient_dim=ambient_dim(F),
+                                translation=translation(F),
+                                free_coordinates=free_coordinates(face(F)),
+                                issues=issues)
+end
+
+"""
+    check_indinj(E; throw=false) -> NamedTuple
+
+Validate a hand-built indexed injective.
+
+This helper checks:
+- the underlying face passes [`check_face`](@ref),
+- the face dimension agrees with the translation length.
+
+Wrap the returned report with [`flange_validation_summary`](@ref) when you want
+a readable notebook or REPL summary.
+"""
+function check_indinj(E::IndInj; throw::Bool=false)
+    issues = String[]
+    face_report = check_face(face(E))
+    append!(issues, face_report.issues)
+    ambient_dim(E) == ambient_dim(face(E)) || push!(issues,
+        "injective translation length $(ambient_dim(E)) does not match face dimension $(ambient_dim(face(E))).")
+    valid = isempty(issues)
+    throw && !valid && _throw_invalid_flange(:check_indinj, issues)
+    return _flange_issue_report(:injective, valid;
+                                id=E.id,
+                                ambient_dim=ambient_dim(E),
+                                translation=translation(E),
+                                free_coordinates=free_coordinates(face(E)),
+                                issues=issues)
+end
+
+"""
+    check_flange(FG; throw=false) -> NamedTuple
+
+Validate a hand-built flange presentation.
+
+This helper checks:
+- the coefficient field matches the matrix element type,
+- the matrix size matches `(#injectives, #flats)`,
+- every flat and injective has ambient dimension `ambient_dim(FG)`,
+- every nonzero matrix entry satisfies the flange monomial support condition.
+
+Wrap the returned report with [`flange_validation_summary`](@ref) when you want
+a readable notebook or REPL summary.
+"""
+function check_flange(FG::Flange; throw::Bool=false)
+    issues = String[]
+    coeff_type(FG.field) == eltype(FG.phi) || push!(issues,
+        "coeff_type(field) does not match coefficient matrix element type.")
+    matrix_size(FG) == (ninjectives(FG), nflats(FG)) || push!(issues,
+        "coefficient matrix has size $(matrix_size(FG)), expected ($(ninjectives(FG)), $(nflats(FG))).")
+    @inbounds for (j, F) in enumerate(FG.flats)
+        append!(issues, ["flat[$j]: $msg" for msg in check_indflat(F).issues])
+        ambient_dim(F) == ambient_dim(FG) || push!(issues,
+            "flat[$j] has ambient dimension $(ambient_dim(F)), expected $(ambient_dim(FG)).")
+    end
+    @inbounds for (i, E) in enumerate(FG.injectives)
+        append!(issues, ["injective[$i]: $msg" for msg in check_indinj(E).issues])
+        ambient_dim(E) == ambient_dim(FG) || push!(issues,
+            "injective[$i] has ambient dimension $(ambient_dim(E)), expected $(ambient_dim(FG)).")
+    end
+    @inbounds for i in 1:ninjectives(FG), j in 1:nflats(FG)
+        if !iszero(FG.phi[i, j]) && !intersects(FG.flats[j], FG.injectives[i])
+            push!(issues,
+                "phi[$i,$j] is nonzero even though injective $i and flat $j have empty intersection.")
+        end
+    end
+    valid = isempty(issues)
+    throw && !valid && _throw_invalid_flange(:check_flange, issues)
+    return _flange_issue_report(:flange, valid;
+                                ambient_dim=ambient_dim(FG),
+                                field=_flange_field_label(FG.field),
+                                matrix_size=matrix_size(FG),
+                                generator_counts=generator_counts(FG),
+                                minimized=is_minimized(FG),
+                                issues=issues)
+end
+
+"""
+    check_flange_point(FG, g; throw=false) -> NamedTuple
+
+Validate the shape of a single flange query point before calling
+[`dim_at`](@ref) or [`degree_matrix`](@ref).
+
+The canonical public contract expects an integer lattice point in `Z^n`,
+provided either as an `AbstractVector` of integers or as an integer tuple of
+length `ambient_dim(FG)`.
+
+Use this helper when validating interactive user input before calling the local
+dimension or degree-matrix queries. For notebook display, wrap the returned
+report with [`flange_validation_summary`](@ref).
+"""
+function check_flange_point(FG::Flange, g; throw::Bool=false)
+    issues = String[]
+    _append_flange_point_issues!(issues, FG, g)
+    valid = isempty(issues)
+    throw && !valid && _throw_invalid_flange(:check_flange_point, issues)
+    return _flange_issue_report(:flange_point, valid;
+                                ambient_dim=ambient_dim(FG),
+                                point_type=typeof(g),
+                                point_length=_integer_point_length(g),
+                                issues=issues)
+end
+
+"""
+    check_flange_points(FG, points; sweep=:auto, throw=false) -> NamedTuple
+
+Validate the shape of a batched flange query collection before calling
+[`dim_at_many!`](@ref) or [`dim_at_many`](@ref).
+
+This helper checks:
+- `points` is an `AbstractVector`,
+- each point satisfies the single-point contract of [`check_flange_point`](@ref),
+- `sweep` is one of `:auto`, `:none`, or `:box`,
+- when `sweep=:box`, the tuple points form a full axis-aligned integer box after
+  deduplication, matching the fast-path contract of [`dim_at_many!`](@ref).
+
+Use this helper before a batched `dim_at_many!` workflow when query shape is
+coming from user data rather than trusted internal code. For notebook display,
+wrap the returned report with [`flange_validation_summary`](@ref).
+"""
+function check_flange_points(FG::Flange, points; sweep::Symbol=:auto, throw::Bool=false)
+    issues = String[]
+    sweep in (:auto, :none, :box) || push!(issues, "sweep must be :auto, :none, or :box.")
+    if !(points isa AbstractVector)
+        push!(issues, "points must be an AbstractVector of integer lattice points.")
+    else
+        bad = String[]
+        @inbounds for i in eachindex(points)
+            local_issues = String[]
+            _append_flange_point_issues!(local_issues, FG, points[i]; label="points[$i]")
+            if !isempty(local_issues)
+                append!(bad, local_issues)
+                length(bad) >= 3 && break
+            end
+        end
+        append!(issues, bad)
+        if sweep === :box && isempty(bad)
+            if _tuple_int_points(points)
+                unique_points, _, unique_index = _dedup_points(points)
+                _full_box_axes(unique_points, unique_index) === nothing &&
+                    push!(issues, "sweep=:box requires tuple points that form a full axis-aligned integer box after deduplication.")
+            else
+                push!(issues, "sweep=:box requires tuple points.")
+            end
+        end
+    end
+    valid = isempty(issues)
+    throw && !valid && _throw_invalid_flange(:check_flange_points, issues)
+    return _flange_issue_report(:flange_points, valid;
+                                ambient_dim=ambient_dim(FG),
+                                point_count=(points isa AbstractVector ? length(points) : nothing),
+                                sweep=sweep,
+                                issues=issues)
+end
+
+@inline function _flange_field_label(field::AbstractCoeffField)
+    return string(typeof(field))
+end
+
+function _flange_describe(tau::Face)
+    free = free_coordinates(tau)
+    return (
+        kind = :face,
+        ambient_dim = ambient_dim(tau),
+        free_coordinates = free,
+        free_count = length(free),
+    )
+end
+
+function _flange_describe(F::IndFlat{N}) where {N}
+    return (
+        kind = :flat,
+        ambient_dim = ambient_dim(F),
+        id = F.id,
+        translation = translation(F),
+        free_coordinates = free_coordinates(face(F)),
+    )
+end
+
+function _flange_describe(E::IndInj{N}) where {N}
+    return (
+        kind = :injective,
+        ambient_dim = ambient_dim(E),
+        id = E.id,
+        translation = translation(E),
+        free_coordinates = free_coordinates(face(E)),
+    )
+end
+
+function _flange_describe(FG::Flange)
+    return (
+        kind = :flange,
+        ambient_dim = ambient_dim(FG),
+        field = _flange_field_label(FG.field),
+        nflats = nflats(FG),
+        ninjectives = ninjectives(FG),
+        matrix_size = size(coefficient_matrix(FG)),
+    )
+end
+
+function Base.show(io::IO, tau::Face)
+    print(io, "Face(n=", ambient_dim(tau), ", free=", free_coordinates(tau), ")")
+end
+
+function Base.show(io::IO, ::MIME"text/plain", tau::Face)
+    println(io, "Face")
+    println(io, "  ambient_dim = ", ambient_dim(tau))
+    println(io, "  free_coordinates = ", free_coordinates(tau))
+end
+
+function Base.show(io::IO, F::IndFlat)
+    print(io,
+          "IndFlat(id=",
+          repr(F.id),
+          ", n=",
+          ambient_dim(F),
+          ", translation=",
+          translation(F),
+          ", free=",
+          free_coordinates(face(F)),
+          ")")
+end
+
+function Base.show(io::IO, ::MIME"text/plain", F::IndFlat)
+    println(io, "IndFlat")
+    println(io, "  id = ", repr(F.id))
+    println(io, "  ambient_dim = ", ambient_dim(F))
+    println(io, "  translation = ", translation(F))
+    println(io, "  free_coordinates = ", free_coordinates(face(F)))
+end
+
+function Base.show(io::IO, E::IndInj)
+    print(io,
+          "IndInj(id=",
+          repr(E.id),
+          ", n=",
+          ambient_dim(E),
+          ", translation=",
+          translation(E),
+          ", free=",
+          free_coordinates(face(E)),
+          ")")
+end
+
+function Base.show(io::IO, ::MIME"text/plain", E::IndInj)
+    println(io, "IndInj")
+    println(io, "  id = ", repr(E.id))
+    println(io, "  ambient_dim = ", ambient_dim(E))
+    println(io, "  translation = ", translation(E))
+    println(io, "  free_coordinates = ", free_coordinates(face(E)))
+end
+
+function Base.show(io::IO, FG::Flange)
+    print(io,
+          "Flange(n=",
+          ambient_dim(FG),
+          ", field=",
+          _flange_field_label(FG.field),
+          ", flats=",
+          nflats(FG),
+          ", injectives=",
+          ninjectives(FG),
+          ", matrix_size=",
+          size(coefficient_matrix(FG)),
+          ")")
+end
+
+function Base.show(io::IO, ::MIME"text/plain", FG::Flange)
+    println(io, "Flange")
+    println(io, "  ambient_dim = ", ambient_dim(FG))
+    println(io, "  field = ", _flange_field_label(FG.field))
+    println(io, "  nflats = ", nflats(FG))
+    println(io, "  ninjectives = ", ninjectives(FG))
+    println(io, "  matrix_size = ", size(coefficient_matrix(FG)))
+end
+
+function Base.show(io::IO, summary::FlangeValidationSummary)
+    r = summary.report
+    print(io, "FlangeValidationSummary(kind=", r.kind,
+          ", valid=", r.valid,
+          ", issues=", length(r.issues), ")")
+end
+
+function Base.show(io::IO, ::MIME"text/plain", summary::FlangeValidationSummary)
+    r = summary.report
+    println(io, "FlangeValidationSummary")
+    println(io, "  kind: ", r.kind)
+    println(io, "  valid: ", r.valid)
+    for key in propertynames(r)
+        key in (:kind, :valid, :issues) && continue
+        println(io, "  ", key, ": ", repr(getproperty(r, key)))
+    end
+    if isempty(r.issues)
+        print(io, "  issues: []")
+    else
+        println(io, "  issues:")
+        for issue in r.issues
+            println(io, "    - ", issue)
+        end
+    end
+end
+
 
 # ---------------------------------------------------------------------------
 # Compiled SoA kernel + dim cache
@@ -681,6 +1220,8 @@ function FlangeDimCache(FG::Flange{K,F,N}; max_entries::Int=0) where {K,F<:Abstr
                                  Dict{UInt64, Vector{_FlangeDimCacheEntry}}(),
                                  max_entries, 0, 0, 0)
 end
+
+@inline field(cache::FlangeDimCache) = cache.field
 
 function Base.empty!(cache::FlangeDimCache)
     empty!(cache.table)
@@ -960,13 +1501,18 @@ end
     return _store_rank!(cache, key, row_words, col_words, rk)
 end
 
+@inline function _rest_coord(rest::NTuple{M,Int}, axis::Int, d::Int) where {M}
+    return @inbounds rest[d < axis ? d : d - 1]
+end
+
 @inline function _line_pass_flat_other(k::FlangeCompiledKernel{N},
                                        j::Int,
+                                       axis::Int,
                                        rest::NTuple{M,Int})::Bool where {N,M}
     @inbounds for ptr in k.flat_offsets[j]:(k.flat_offsets[j + 1] - 1)
         d = k.flat_dims[ptr]
-        d == 1 && continue
-        if rest[d - 1] < k.flat_bounds[ptr]
+        d == axis && continue
+        if _rest_coord(rest, axis, d) < k.flat_bounds[ptr]
             return false
         end
     end
@@ -975,15 +1521,30 @@ end
 
 @inline function _line_pass_inj_other(k::FlangeCompiledKernel{N},
                                       i::Int,
+                                      axis::Int,
                                       rest::NTuple{M,Int})::Bool where {N,M}
     @inbounds for ptr in k.inj_offsets[i]:(k.inj_offsets[i + 1] - 1)
         d = k.inj_dims[ptr]
-        d == 1 && continue
-        if rest[d - 1] > k.inj_bounds[ptr]
+        d == axis && continue
+        if _rest_coord(rest, axis, d) > k.inj_bounds[ptr]
             return false
         end
     end
     return true
+end
+
+@inline function _sweep_axis_cost(k::FlangeCompiledKernel, axis::Int)
+    flat_events = k.flat_event_offsets[axis + 1] - k.flat_event_offsets[axis]
+    inj_events = k.inj_event_offsets[axis + 1] - k.inj_event_offsets[axis]
+    flat_free = k.flat_free_offsets[axis + 1] - k.flat_free_offsets[axis]
+    inj_free = k.inj_free_offsets[axis + 1] - k.inj_free_offsets[axis]
+    return flat_events + inj_events + flat_free + inj_free
+end
+
+function _sweep_axes_by_cost(k::FlangeCompiledKernel)
+    axes = collect(1:k.n)
+    sort!(axes; by=axis -> (_sweep_axis_cost(k, axis), axis))
+    return axes
 end
 
 struct _BoxSweepScratch
@@ -1015,49 +1576,30 @@ function _box_sweep_scratch(k::FlangeCompiledKernel, xlen::Int)
                             line_uids)
 end
 
-@inline function _box_strides(axes::NTuple{N,UnitRange{Int}}) where {N}
-    s = Vector{Int}(undef, N)
-    s[1] = 1
-    @inbounds for d in 2:N
-        s[d] = s[d - 1] * length(axes[d - 1])
-    end
-    return s
+@inline function _box_rest_ranges(axes::NTuple{N,UnitRange{Int}}, axis::Int) where {N}
+    return ntuple(d -> axes[d < axis ? d : d + 1], N - 1)
 end
 
-@inline function _box_linear_index(p::NTuple{N,<:Integer},
-                                   axes::NTuple{N,UnitRange{Int}},
-                                   strides::Vector{Int}) where {N}
-    idx = 1
-    @inbounds for d in 1:N
-        idx += (Int(p[d]) - first(axes[d])) * strides[d]
-    end
-    return idx
+@inline function _line_point(::Val{N}, axis::Int, x::Int, rest::NTuple{M,Int}) where {N,M}
+    return ntuple(d -> d == axis ? x : _rest_coord(rest, axis, d), N)
 end
 
-function _build_uid_lookup(unique_index::Dict{T,Int},
-                           axes::NTuple{N,UnitRange{Int}},
-                           strides::Vector{Int}) where {N,T<:NTuple{N,<:Integer}}
-    total = prod(length(r) for r in axes)
-    uid_lookup = Base.zeros(Int, total)
-    for (p, uid) in unique_index
-        li = _box_linear_index(p, axes, strides)
-        @inbounds uid_lookup[li] = uid
+@inline function _fill_box_line_uids!(line_uids::AbstractVector{Int},
+                                      unique_index::Dict{T,Int},
+                                      axes::NTuple{N,UnitRange{Int}},
+                                      axis::Int,
+                                      rest::NTuple{M,Int}) where {N,M,T<:NTuple{N,<:Integer}}
+    xr = axes[axis]
+    x0 = first(xr)
+    @inbounds for (off, x) in enumerate(xr)
+        line_uids[off] = unique_index[_line_point(Val(N), axis, x, rest)]
     end
-    return uid_lookup
-end
-
-@inline function _box_base_index(rest::NTuple{M,Int},
-                                 axes::NTuple{N,UnitRange{Int}},
-                                 strides::Vector{Int}) where {M,N}
-    base = 1
-    @inbounds for d in 2:N
-        base += (rest[d - 1] - first(axes[d])) * strides[d]
-    end
-    return base
+    return x0, last(xr)
 end
 
 @inline function _prepare_line_sweep_events!(scratch::_BoxSweepScratch,
                                              k::FlangeCompiledKernel{N},
+                                             axis::Int,
                                              rest::NTuple{M,Int},
                                              xmin::Int,
                                              xmax::Int) where {N,M}
@@ -1075,16 +1617,16 @@ end
     empty!(col_add_pos); empty!(col_add_idx)
     empty!(row_rem_pos); empty!(row_rem_idx)
 
-    @inbounds for ptr in k.flat_free_offsets[1]:(k.flat_free_offsets[2] - 1)
+    @inbounds for ptr in k.flat_free_offsets[axis]:(k.flat_free_offsets[axis + 1] - 1)
         j = k.flat_free_idx[ptr]
-        _line_pass_flat_other(k, j, rest) || continue
+        _line_pass_flat_other(k, j, axis, rest) || continue
         col_count += _set_active_bit!(col_words, j)
     end
 
-    @inbounds for ptr in k.flat_event_offsets[1]:(k.flat_event_offsets[2] - 1)
+    @inbounds for ptr in k.flat_event_offsets[axis]:(k.flat_event_offsets[axis + 1] - 1)
         pos = k.flat_event_pos[ptr]
         j = k.flat_event_idx[ptr]
-        _line_pass_flat_other(k, j, rest) || continue
+        _line_pass_flat_other(k, j, axis, rest) || continue
         if pos <= xmin
             col_count += _set_active_bit!(col_words, j)
         elseif pos <= xmax
@@ -1093,16 +1635,16 @@ end
         end
     end
 
-    @inbounds for ptr in k.inj_free_offsets[1]:(k.inj_free_offsets[2] - 1)
+    @inbounds for ptr in k.inj_free_offsets[axis]:(k.inj_free_offsets[axis + 1] - 1)
         i = k.inj_free_idx[ptr]
-        _line_pass_inj_other(k, i, rest) || continue
+        _line_pass_inj_other(k, i, axis, rest) || continue
         row_count += _set_active_bit!(row_words, i)
     end
 
-    @inbounds for ptr in k.inj_event_offsets[1]:(k.inj_event_offsets[2] - 1)
+    @inbounds for ptr in k.inj_event_offsets[axis]:(k.inj_event_offsets[axis + 1] - 1)
         bi = k.inj_event_pos[ptr]
         i = k.inj_event_idx[ptr]
-        _line_pass_inj_other(k, i, rest) || continue
+        _line_pass_inj_other(k, i, axis, rest) || continue
         if bi >= xmin
             row_count += _set_active_bit!(row_words, i)
             rem = bi - xmin + 2
@@ -1144,13 +1686,19 @@ const _DEGREE_COLS_SCRATCH = Vector{Vector{Int}}()
 end
 
 """
-    degree_matrix(FG, g)
+    degree_matrix!(rows, cols, FG, g)
 
 Return `(Phi_g, rows, cols)` where:
 
 * `rows` are the active injective indices at `g`
 * `cols` are the active flat indices at `g`
 * `Phi_g = FG.phi[rows, cols]`
+
+Mathematically, this is the local presentation matrix whose rank equals the
+fiber dimension [`dim_at(FG, g)`](@ref).
+
+This allocating wrapper is the right choice for one-off inspection. In hot
+loops, prefer [`degree_matrix!`](@ref) so the row/column buffers can be reused.
 """
 function degree_matrix!(rows::Vector{Int}, cols::Vector{Int},
                         FG::Flange{K}, g::Vector{Int}) where {K}
@@ -1194,6 +1742,22 @@ function degree_matrix!(FG::Flange{K}, g::NTuple{N,Int}) where {K,N}
     return degree_matrix!(rows, cols, FG, g)
 end
 
+"""
+    degree_matrix(FG, g)
+
+Return the explicit local matrix of the flange `FG` at the lattice point `g`,
+together with the active injective and flat indices.
+
+This is the mathematically transparent inspection path:
+- `rows` are the active injectives,
+- `cols` are the active flats,
+- `Phi_g = FG.phi[rows, cols]`,
+- and `rank(Phi_g) == dim_at(FG, g)`.
+
+Use this allocating wrapper when you want to inspect the local matrix itself.
+For repeated or performance-sensitive queries, use [`dim_at`](@ref) or the
+buffer-reusing [`degree_matrix!`](@ref) variants instead.
+"""
 function degree_matrix(FG::Flange{K}, g::Vector{Int}) where {K}
     rows = Vector{Int}()
     cols = Vector{Int}()
@@ -1244,11 +1808,26 @@ end
 
 Fiberwise dimension of a flange at `g`.
 
-The default path computes rank via a restricted linear algebra kernel to avoid
-materializing the local submatrix `FG.phi[rows, cols]`.
+Mathematically, this is the rank of the local matrix returned by
+[`degree_matrix(FG, g)`](@ref), i.e. the dimension of the fiber of the encoded
+module at the lattice point `g`.
 
-If `cache::FlangeDimCache` is supplied (and `rankfun === nothing`), we use a
-packed active-set cache keyed by row/column activity masks.
+Cheap/default path:
+- When `rankfun === nothing`, `dim_at` uses a restricted-rank kernel on the
+  global coefficient matrix, so it usually avoids materializing the explicit
+  local submatrix.
+- For tiny QQ workloads there is a measured crossover where explicitly
+  materializing the local submatrix is faster, so the implementation may take
+  that path automatically.
+
+Cache behavior:
+- If `cache::FlangeDimCache` is supplied and `rankfun === nothing`, active-set
+  masks are memoized so repeated queries with the same active flats/injectives
+  reuse the previous rank result.
+
+Heavier path:
+- Supplying `rankfun` disables the restricted-rank fast path and passes the
+  explicit local matrix to the user-provided rank routine.
 """
 function dim_at(FG::Flange{K}, g::Vector{Int}; rankfun=nothing, cache::Union{Nothing,FlangeDimCache}=nothing) where {K}
     if rankfun === nothing
@@ -1276,6 +1855,59 @@ function dim_at(FG::Flange{K}, g::NTuple{N,Int}; rankfun=nothing, cache::Union{N
     Phi_g, _, _ = degree_matrix(FG, g)
     isempty(Phi_g) && return 0
     return rankfun(Phi_g)
+end
+
+"""
+    active_counts(FG, g) -> NamedTuple
+
+Return the number of active injectives and active flats at the lattice point
+`g` as `(; injectives=..., flats=...)`.
+
+This is a cheap exploratory helper for understanding the local size of
+[`degree_matrix(FG, g)`](@ref) before calling a rank routine.
+"""
+function active_counts(FG::Flange, g)
+    check_flange_point(FG, g; throw=true)
+    return (; injectives=length(active_injectives(FG, g)),
+            flats=length(active_flats(FG, g)))
+end
+
+"""
+    flange_summary(FG) -> NamedTuple
+
+Return an owner-local summary of the flange `FG`.
+
+This is the discoverable `FlangeZn` summary entrypoint parallel to the shared
+[`describe(FG)`](@ref) surface. It reports the ambient dimension, coefficient
+field, matrix shape, generator counts, and whether the current presentation is
+already minimized.
+"""
+function flange_summary(FG::Flange)
+    return (; _flange_describe(FG)...,
+            generator_counts=generator_counts(FG),
+            is_minimized=is_minimized(FG))
+end
+
+"""
+    flange_query_summary(FG, g; cache=nothing) -> NamedTuple
+
+Return a compact summary of the local query state of `FG` at the lattice point
+`g`.
+
+This helper is intended for notebook and REPL exploration. It reports the local
+active row/column counts, the resulting local matrix size, and the fiber
+dimension computed by [`dim_at`](@ref).
+"""
+function flange_query_summary(FG::Flange, g; cache::Union{Nothing,FlangeDimCache}=nothing)
+    check_flange_point(FG, g; throw=true)
+    counts = active_counts(FG, g)
+    return (
+        kind = :flange_query,
+        point = _point_key(g),
+        active_counts = counts,
+        local_matrix_size = (counts.injectives, counts.flats),
+        dimension = dim_at(FG, g; cache=cache),
+    )
 end
 
 @inline _lex_sortable_points(points::AbstractVector) = eltype(points) <: NTuple
@@ -1409,11 +2041,12 @@ function _eval_unique_line_sweep!(vals::Vector{Int},
                                   line_uids::AbstractVector{Int},
                                   xmin::Int,
                                   xmax::Int,
-                                  rest::NTuple{M,Int}) where {K,F,N,M}
+                                  rest::NTuple{M,Int};
+                                  axis::Int=1) where {K,F,N,M}
     k = cache.kernel
     xlen = length(line_uids)
 
-    row_count, col_count = _prepare_line_sweep_events!(scratch, k, rest, xmin, xmax)
+    row_count, col_count = _prepare_line_sweep_events!(scratch, k, axis, rest, xmin, xmax)
     row_words = scratch.row_words
     col_words = scratch.col_words
     col_add_pos = scratch.col_add_pos
@@ -1456,14 +2089,14 @@ function _eval_unique_box_sweep!(vals::Vector{Int},
                                  unique_index::Dict{T,Int},
                                  axes::NTuple{N,UnitRange{Int}};
                                  cache::Union{Nothing,FlangeDimCache{K,F,N}}=nothing,
-                                 threaded::Bool=false) where {K,F,N,T<:NTuple{N,<:Integer}}
+                                 threaded::Bool=false,
+                                 axis::Int=1) where {K,F,N,T<:NTuple{N,<:Integer}}
     cache0 = cache === nothing ? FlangeDimCache(FG) : cache
     _check_cache_compat(cache0, FG)
     fill!(vals, 0)
-    strides = _box_strides(axes)
-    uid_lookup = _build_uid_lookup(unique_index, axes, strides)
-    xlen = length(axes[1])
-    rest_ranges = ntuple(d -> axes[d + 1], N - 1)
+    uid_lookup = unique_index
+    xlen = length(axes[axis])
+    rest_ranges = _box_rest_ranges(axes, axis)
 
     if threaded && Threads.nthreads() > 1
         rest_lines = collect(Iterators.product(rest_ranges...))
@@ -1486,11 +2119,8 @@ function _eval_unique_box_sweep!(vals::Vector{Int},
                     scratches[tid] = s
                 end
                 rest = rest_lines[li]
-                line_base = _box_base_index(rest, axes, strides)
-                @inbounds for xi in 1:xlen
-                    s.line_uids[xi] = uid_lookup[line_base + xi - 1]
-                end
-                _eval_unique_line_sweep!(vals, FG, c, s, s.line_uids, first(axes[1]), last(axes[1]), rest)
+                xmin, xmax = _fill_box_line_uids!(s.line_uids, uid_lookup, axes, axis, rest)
+                _eval_unique_line_sweep!(vals, FG, c, s, s.line_uids, xmin, xmax, rest; axis=axis)
             end
             return vals
         end
@@ -1498,21 +2128,18 @@ function _eval_unique_box_sweep!(vals::Vector{Int},
 
     scratch0 = _box_sweep_scratch(cache0.kernel, xlen)
     for rest in Iterators.product(rest_ranges...)
-        line_base = _box_base_index(rest, axes, strides)
-        @inbounds for xi in 1:xlen
-            scratch0.line_uids[xi] = uid_lookup[line_base + xi - 1]
-        end
-        _eval_unique_line_sweep!(vals, FG, cache0, scratch0, scratch0.line_uids, first(axes[1]), last(axes[1]), rest)
+        xmin, xmax = _fill_box_line_uids!(scratch0.line_uids, uid_lookup, axes, axis, rest)
+        _eval_unique_line_sweep!(vals, FG, cache0, scratch0, scratch0.line_uids, xmin, xmax, rest; axis=axis)
     end
     return vals
 end
 
-function _dense_slab_groups(unique_points::Vector{T}) where {N,T<:NTuple{N,<:Integer}}
+function _dense_slab_groups(unique_points::Vector{T}; axis::Int=1) where {N,T<:NTuple{N,<:Integer}}
     groups = Dict{Any, Vector{Tuple{Int,Int}}}()
     @inbounds for (uid, p) in enumerate(unique_points)
-        rest = N == 1 ? () : ntuple(d -> Int(p[d + 1]), N - 1)
+        rest = N == 1 ? () : ntuple(d -> Int(p[d < axis ? d : d + 1]), N - 1)
         bucket = get!(groups, rest, Tuple{Int,Int}[])
-        push!(bucket, (Int(p[1]), uid))
+        push!(bucket, (Int(p[axis]), uid))
     end
 
     slabs = NamedTuple[]
@@ -1529,7 +2156,7 @@ function _dense_slab_groups(unique_points::Vector{T}) where {N,T<:NTuple{N,<:Int
         @inbounds for (x, uid) in pairs
             line_uids[x - xmin + 1] = uid
         end
-        push!(slabs, (; rest, xmin, xmax, line_uids))
+        push!(slabs, (; axis, rest, xmin, xmax, line_uids))
         total_points += npts
     end
     total_points == length(unique_points) || return nothing
@@ -1566,7 +2193,7 @@ function _eval_unique_slab_sweep!(vals::Vector{Int},
             end
             @views s.line_uids[1:length(slab.line_uids)] .= slab.line_uids
             _eval_unique_line_sweep!(vals, FG, c, s, @view(s.line_uids[1:length(slab.line_uids)]),
-                                     slab.xmin, slab.xmax, slab.rest)
+                                     slab.xmin, slab.xmax, slab.rest; axis=slab.axis)
         end
         return vals
     end
@@ -1576,7 +2203,7 @@ function _eval_unique_slab_sweep!(vals::Vector{Int},
     for slab in slabs
         @views scratch0.line_uids[1:length(slab.line_uids)] .= slab.line_uids
         _eval_unique_line_sweep!(vals, FG, cache0, scratch0, @view(scratch0.line_uids[1:length(slab.line_uids)]),
-                                 slab.xmin, slab.xmax, slab.rest)
+                                 slab.xmin, slab.xmax, slab.rest; axis=slab.axis)
     end
     return vals
 end
@@ -1586,6 +2213,26 @@ end
                  dedup=true, threaded=false, sweep=:auto)
 
 Compute `dim_at(FG, p)` for each point in `points` and write into `out`.
+
+Mathematically, this evaluates the fiber dimension of the flange on a finite set
+of lattice points in `Z^n`.
+
+Cheap/default path:
+- With `sweep=:auto`, the implementation first tries packed cache-friendly
+  evaluation and only enables the line-sweep kernels when the query geometry is
+  favorable.
+- `dedup=true` and `sort_points=true` are the recommended defaults for notebook
+  and workflow code because they improve cache reuse without changing the
+  mathematical result.
+
+Cache behavior:
+- Passing `cache::FlangeDimCache` helps when many points share the same active
+  sets, especially across repeated calls.
+
+Restricted-rank behavior:
+- Just like [`dim_at`](@ref), the default path uses restricted-rank kernels and
+  avoids explicit local matrix materialization unless a lower-level fast path
+  decides that a tiny explicit submatrix is cheaper.
 
 When `sort_points=true` and `points` is an `AbstractVector` of tuples, points are
 processed in lexicographic order to increase active-set cache reuse.
@@ -1627,23 +2274,30 @@ function dim_at_many!(out::AbstractVector{Int},
        dedup &&
        unique_index isa Dict &&
        _tuple_int_points(unique_points)
+        sweep_cache = cache === nothing ? FlangeDimCache(FG) : cache
+        sweep_axes = _sweep_axes_by_cost(sweep_cache.kernel)
         axes = _full_box_axes(unique_points, unique_index)
         if axes !== nothing
-            xlen = length(axes[1])
-            # Auto mode: only use sweep when x-axis is long enough to amortize setup.
+            axis = sweep_axes[1]
+            xlen = length(axes[axis])
+            # Auto mode: only use sweep when the chosen sweep axis is long enough to amortize setup.
             use_sweep = sweep == :box || (xlen >= 96 && length(unique_points) >= 2048)
             if use_sweep
                 _eval_unique_box_sweep!(vals_unique, FG, unique_points, unique_index, axes;
-                                        cache=cache, threaded=threaded)
+                                        cache=sweep_cache, threaded=threaded, axis=axis)
                 did_sweep = true
             end
         elseif sweep == :box
             error("dim_at_many!: sweep=:box requires tuple points that form a full axis-aligned integer box")
         else
-            slabs = _dense_slab_groups(unique_points)
+            slabs = nothing
+            for axis in sweep_axes
+                slabs = _dense_slab_groups(unique_points; axis=axis)
+                slabs === nothing || break
+            end
             if slabs !== nothing && length(unique_points) >= 1024
                 _eval_unique_slab_sweep!(vals_unique, FG, slabs;
-                                         cache=cache, threaded=threaded)
+                                         cache=sweep_cache, threaded=threaded)
                 did_sweep = true
             end
         end
@@ -1695,7 +2349,7 @@ end
 # ---------------------------------------------------------------------------
 # Unified API: dim_at on finite-poset modules (IndicatorResolutions.PModule)
 #
-# The umbrella module `PosetModules` exports `dim_at` from the flange layer
+# The umbrella module `TamerOp` exports `dim_at` from the flange layer
 # (this file). Downstream code/tests also want to write `dim_at(M, q)` when `M`
 # is a finite-poset module (a `PModule`).
 #
@@ -1726,6 +2380,11 @@ Return an axis-aligned bounding box `(a, b)` for the region where the flange
 can be nontrivial, based on the inequality coordinates of flats/injectives.
 
 This is primarily used as a finite search window for encoding and testing.
+
+This helper is cheap: it scans the generator data once and does not touch any
+linear algebra. Coordinates that are completely free remain unconstrained and
+can therefore produce `typemin(Int)` or `typemax(Int)` entries in the returned
+box.
 
 For a coordinate `i`:
 
@@ -1843,7 +2502,10 @@ Rationale:
 
 The same logic applies to injectives (rows).
 
-This is primarily a performance optimization (smaller encodings).
+This is primarily a performance optimization (smaller encodings). It is not a
+cheap per-query helper: use it once when you want a smaller but equivalent
+presentation, and prefer [`is_minimized`](@ref) when you only want to inspect
+whether duplicate proportional generators remain.
 """
 function minimize(FG::Flange{K,FT,N}; rankfun = rank) where {K,FT,N}
     flats = FG.flats
@@ -1903,6 +2565,41 @@ function minimize(FG::Flange{K,FT,N}; rankfun = rank) where {K,FT,N}
     return Flange{K}(FG.n, flats2, injectives2, Phi3)
 end
 
+"""
+    is_minimized(FG) -> Bool
+
+Return `true` if `FG` has no proportional duplicate rows or columns among
+generators with identical underlying sets, i.e. if [`minimize(FG)`](@ref)
+would leave the presentation unchanged.
+"""
+function is_minimized(FG::Flange{K,FT,N}) where {K,FT,N}
+    flats = FG.flats
+    injectives = FG.injectives
+    Phi = FG.phi
+
+    col_groups = Dict{_UnderlyingKey{N}, Vector{Int}}()
+    for (j, F) in enumerate(flats)
+        push!(get!(col_groups, _underlying_key(F), Int[]), j)
+    end
+    for idxs in values(col_groups)
+        for a in 1:(length(idxs) - 1), b in (a + 1):length(idxs)
+            _is_proportional(view(Phi, :, idxs[a]), view(Phi, :, idxs[b])) && return false
+        end
+    end
+
+    row_groups = Dict{_UnderlyingKey{N}, Vector{Int}}()
+    for (i, E) in enumerate(injectives)
+        push!(get!(row_groups, _underlying_key(E), Int[]), i)
+    end
+    for idxs in values(row_groups)
+        for a in 1:(length(idxs) - 1), b in (a + 1):length(idxs)
+            _is_proportional(view(Phi, idxs[a], :), view(Phi, idxs[b], :)) && return false
+        end
+    end
+
+    return true
+end
+
 # ---------------------------------------------------------------------------
 # Canonical matrices
 # ---------------------------------------------------------------------------
@@ -1913,7 +2610,9 @@ end
 Build the (0,1) matrix with entry 1 exactly when the underlying flat and injective
 can intersect.
 
-This is useful for constructing small example flanges.
+This is useful for constructing small example flanges and sanity checks. It is
+not intended as a hot-path kernel for large presentations, since it explicitly
+checks all injective/flat pairs.
 """
 function canonical_matrix(flats::Vector{IndFlat{N}}, injectives::Vector{IndInj{N}};
                           field::AbstractCoeffField = QQField()) where {N}
@@ -2023,6 +2722,11 @@ _contains(D::AxisDownset{T}, x::NTuple{N,T}) where {N,T} =
 2. Evaluate 'dim M_g' for all integer 'g in [a,b]' via the flange.
 3. Build an axis-aligned proxy and evaluate the same lattice points.
 4. Compare; return '(all_equal?, report::Dict)'.
+
+This is a diagnostic-heavy routine intended for validation, not a cheap query:
+it enumerates every lattice point in the chosen box and evaluates a rank at
+each point. Use it when debugging a hand-built flange or checking an
+implementation change, not inside a workflow hot path.
 """
 function cross_validate(fr::Flange; margin=1,
                         rankfun = A -> FieldLinAlg.rank(fr.field, A))

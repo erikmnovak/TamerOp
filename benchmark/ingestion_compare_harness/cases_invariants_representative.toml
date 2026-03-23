@@ -1,0 +1,64 @@
+[meta]
+version = 1
+description = "Representative end-to-end invariant comparison cases for tamer-op vs multipers, including order-of-magnitude scale growth within each parity-clean family."
+
+[invariant_eligibility]
+alpha_parity = ["euler_signed_measure"]
+cubical_parity = ["euler_signed_measure"]
+
+[[cases]]
+id = "inv_alpha_n150_d2_md2_s11"
+regime = "alpha_parity"
+dataset = "gaussian_shell"
+n_points = 150
+ambient_dim = 2
+seed = 11
+max_dim = 2
+
+[[cases]]
+id = "inv_alpha_n1500_d2_md2_s11"
+regime = "alpha_parity"
+dataset = "gaussian_shell"
+n_points = 1500
+ambient_dim = 2
+seed = 11
+max_dim = 2
+
+[[cases]]
+id = "inv_alpha_n15000_d2_md2_s11"
+regime = "alpha_parity"
+dataset = "gaussian_shell"
+n_points = 15000
+ambient_dim = 2
+seed = 11
+max_dim = 2
+
+[[cases]]
+id = "inv_cubical_side24_s11"
+regime = "cubical_parity"
+dataset = "image_sine"
+n_points = 576
+ambient_dim = 2
+seed = 11
+max_dim = 2
+image_side = 24
+
+[[cases]]
+id = "inv_cubical_side80_s11"
+regime = "cubical_parity"
+dataset = "image_sine"
+n_points = 6400
+ambient_dim = 2
+seed = 11
+max_dim = 2
+image_side = 80
+
+[[cases]]
+id = "inv_cubical_side253_s11"
+regime = "cubical_parity"
+dataset = "image_sine"
+n_points = 64009
+ambient_dim = 2
+seed = 11
+max_dim = 2
+image_side = 253

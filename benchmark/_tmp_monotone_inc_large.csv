@@ -1,3 +1,0 @@
-case,family,stage,cache_mode,median_ms,p90_ms,median_alloc_kib
-monotone_incremental_probe_graded_t1,graded,cohomology_dims,incremental_on,3.44805,4.781449,3877.492188
-monotone_incremental_probe_graded_t1,graded,cohomology_dims,incremental_off,2.765896,3.156701,3877.335938

@@ -1,9 +1,0 @@
-case,family,stage,cache_mode,median_ms,p90_ms,median_alloc_kib
-term_materialization_probe_rips_d1,point,module,structural_on,0.06586,0.70607,84.265625
-term_materialization_probe_rips_d1,point,module,structural_off,0.362914,0.548613,691.1875
-pointcloud_dense_stream_probe_rips_d2,point,graded_complex,stream_on,4.138183,4.905283,5319.265625
-pointcloud_dense_stream_probe_rips_d2,point,graded_complex,stream_off_packed,8.172441,16.026796,6966.507812
-graph_clique_probe_lower_star,graph,graded_complex,intersection,0.206494,1.22992,154.984375
-graph_clique_probe_lower_star,graph,graded_complex,combinations,0.313959,0.614962,359.953125
-graph_clique_probe_weight_threshold,graph,graded_complex,intersection,0.21187,0.480007,162.53125
-graph_clique_probe_weight_threshold,graph,graded_complex,combinations,0.592358,0.783966,367.3125

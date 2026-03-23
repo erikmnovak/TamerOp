@@ -52,6 +52,7 @@ using ..FiniteFringe: cover_edges, nvertices, _succs, _preds,
 
 using ..CoreModules: AbstractCoeffField, QQField, PrimeField, RealField, eye
 using ..FieldLinAlg
+import ..Modules
 
 using ..Modules: CoverCache, _get_cover_cache,
                  CoverEdgeMapStore,
@@ -73,6 +74,21 @@ Returns `true` when `A` is treated as zero over the given coefficient field:
 This is used throughout categorical parity/exactness checks so that the
 `RealField` paths respect the field's configured tolerances.
 """
+
+struct _CoverGraphLists
+    preds::Vector{Vector{Int}}
+    succs::Vector{Vector{Int}}
+    pred_slot_of_succ::Vector{Vector{Int}}
+end
+
+@inline function _cover_graph_lists(cc::CoverCache)
+    n = nvertices(cc.Q)
+    preds = [collect(_preds(cc, v)) for v in 1:n]
+    succs = [collect(_succs(cc, u)) for u in 1:n]
+    pred_slot_of_succ = [collect(_pred_slots_of_succ(cc, u)) for u in 1:n]
+    return _CoverGraphLists(preds, succs, pred_slot_of_succ)
+end
+
 function _is_zero_matrix(field::AbstractCoeffField, A::AbstractMatrix)
     if field isa RealField
         isempty(A) && return true
@@ -81,6 +97,49 @@ function _is_zero_matrix(field::AbstractCoeffField, A::AbstractMatrix)
         return maxabs <= tol
     end
     return all(iszero, A)
+end
+
+@inline function _abelian_validation_error(fn::AbstractString, issues::Vector{String})
+    error("$(fn): validation failed:\n - " * join(issues, "\n - "))
+end
+
+"""
+    ValidationSummary
+
+Display wrapper for validation reports returned by helpers such as
+`check_submodule`, `check_short_exact_sequence`, and `check_snake_lemma`.
+
+The canonical validation helpers still return structured `NamedTuple`s for easy
+programmatic inspection. Wrap one of those reports with `validation_summary(...)`
+when you want a compact REPL/notebook presentation of the same information.
+"""
+struct ValidationSummary{R}
+    report::R
+end
+
+"""
+    validation_summary(report) -> ValidationSummary
+
+Wrap a validation report in a small display-oriented object.
+
+Use this when you want the report returned by `check_*` helpers to print as a
+compact mathematical summary with the issue list laid out line by line.
+
+Best practices
+- keep the original `NamedTuple` report for programmatic branching,
+- call `validation_summary(report)` when you want a readable notebook or REPL
+  display.
+"""
+@inline validation_summary(report::NamedTuple) = ValidationSummary(report)
+
+@inline function _zero_composition(field::AbstractCoeffField,
+                                   g::PMorphism,
+                                   f::PMorphism)::Bool
+    n = min(length(g.comps), length(f.comps))
+    @inbounds for v in 1:n
+        _is_zero_matrix(field, g.comps[v] * f.comps[v]) || return false
+    end
+    return true
 end
 
 const COKERNEL_BATCH_MIN_FANOUT = 3
@@ -637,6 +696,32 @@ struct _CokernelIncrementalEntry{K}
     q::Matrix{K}
 end
 
+mutable struct _CokernelTransportCache{K}
+    active_mask::BitVector
+    frontier_mask::BitVector
+    frontier_vertices::Vector{Int}
+    qsig_rows::Vector{Int}
+    qsig_cols::Vector{Int}
+    qtrans::Vector{Union{Nothing,Matrix{K}}}
+    selector_rows::Vector{Vector{Int}}
+    selector_is_std::BitVector
+    changed_vertices::Vector{Int}
+end
+
+@inline function _new_cokernel_transport_cache(::Type{K}, n::Int) where {K}
+    return _CokernelTransportCache{K}(
+        falses(n),
+        falses(n),
+        Int[],
+        zeros(Int, n),
+        zeros(Int, n),
+        Vector{Union{Nothing,Matrix{K}}}(fill(nothing, n)),
+        [Int[] for _ in 1:n],
+        falses(n),
+        Int[],
+    )
+end
+
 const _VertexIncrementalCacheEntry{K} = Union{
     Nothing,
     _KernelIncrementalEntry{K},
@@ -1134,6 +1219,10 @@ function _cokernel_module_cached(
     iota::PMorphism{K},
     cc::CoverCache;
     incremental_cache::Union{Nothing,AbstractVector}=nothing,
+    active_vertices::Union{Nothing,Vector{Int}}=nothing,
+    active_mask::Union{Nothing,BitVector}=nothing,
+    transport_cache::Union{Nothing,_CokernelTransportCache{K}}=nothing,
+    graph_lists::Union{Nothing,_CoverGraphLists}=nothing,
 ) where {K}
     E = iota.cod; Q = E.Q; n = nvertices(Q)
     Cdims  = zeros(Int, n)
@@ -1141,24 +1230,36 @@ function _cokernel_module_cached(
     field = E.field
     ic = incremental_cache
     ic === nothing || _ensure_vertex_cache!(ic, n)
+    if active_mask === nothing && active_vertices !== nothing
+        active_mask = falses(n)
+        @inbounds for u in active_vertices
+            active_mask[u] = true
+        end
+    end
 
     # Degreewise quotients. For a general map ii, q_i is a basis of the left
     # kernel of ii (as row vectors), i.e. transpose(nullspace(transpose(ii))).
     # This avoids a separate colspace pass.
+    q_reused = falses(n)
     for i in 1:n
         ii = iota.comps[i]
         qi = nothing
-        if ic !== nothing
+        if active_mask !== nothing && !active_mask[i]
+            qi = eye(field, size(ii, 1))
+            q_reused[i] = true
+        elseif ic !== nothing
             entry = ic[i]
             if entry isa _CokernelIncrementalEntry{K}
                 prev = entry.map
                 prev_q = entry.q
                 if prev === ii
                     qi = prev_q
+                    q_reused[i] = true
                 elseif size(prev, 1) <= size(ii, 1) &&
                        size(prev, 2) <= size(ii, 2) &&
                        _is_appended_zero_matrix(field, prev, ii)
                     qi = _extend_cokernel_q_appended(K, prev_q, size(prev, 1), size(ii, 1))
+                    q_reused[i] = true
                 end
             end
         end
@@ -1170,7 +1271,7 @@ function _cokernel_module_cached(
                 qi = transpose(Ni)
             end
         end
-        if ic !== nothing
+        if ic !== nothing && (active_mask === nothing || active_mask[i])
             ic[i] = ii isa Matrix{K} ? _CokernelIncrementalEntry{K}(ii, qi) :
                                        _CokernelIncrementalEntry{K}(Matrix{K}(ii), qi)
         end
@@ -1178,20 +1279,121 @@ function _cokernel_module_cached(
         qcomps[i] = qi
     end
 
-    preds = [collect(_preds(cc, v)) for v in 1:n]
-    succs = [collect(_succs(cc, u)) for u in 1:n]
-    pred_slot_of_succ = [collect(_pred_slots_of_succ(cc, u)) for u in 1:n]
-    qtrans = [transpose(qcomps[i]) for i in 1:n]
+    preds = graph_lists === nothing ? [collect(_preds(cc, v)) for v in 1:n] : graph_lists.preds
+    succs = graph_lists === nothing ? [collect(_succs(cc, u)) for u in 1:n] : graph_lists.succs
+    pred_slot_of_succ = graph_lists === nothing ?
+        [collect(_pred_slots_of_succ(cc, u)) for u in 1:n] : graph_lists.pred_slot_of_succ
+    qtrans = Vector{Matrix{K}}(undef, n)
+    nactive = active_vertices === nothing ? (active_mask === nothing ? n : count(active_mask)) : length(active_vertices)
+    use_active_frontier_fastpath = active_mask !== nothing && nactive < n
+    active_succ_vertices = Int[]
+    active_succ_mask = if use_active_frontier_fastpath
+        mask = falses(n)
+        if active_vertices !== nothing
+            sizehint!(active_succ_vertices, length(active_vertices))
+            @inbounds for u in active_vertices
+                if !mask[u]
+                    mask[u] = true
+                    push!(active_succ_vertices, u)
+                end
+                for v in succs[u]
+                    if !mask[v]
+                        mask[v] = true
+                        push!(active_succ_vertices, v)
+                    end
+                end
+            end
+        else
+            mask = copy(active_mask)::BitVector
+            @inbounds for u in 1:n
+                if active_mask[u]
+                    for v in succs[u]
+                        mask[v] = true
+                    end
+                end
+            end
+            sizehint!(active_succ_vertices, count(mask))
+            @inbounds for u in 1:n
+                mask[u] || continue
+                push!(active_succ_vertices, u)
+            end
+        end
+        if count(mask) < n
+            mask
+        else
+            use_active_frontier_fastpath = false
+            empty!(active_succ_vertices)
+            nothing
+        end
+    else
+        nothing
+    end
     selector_rows = Vector{Vector{Int}}(undef, n)
     selector_is_std = falses(n)
     empty_selector = Int[]
-    for i in 1:n
-        rows = _selector_rows_from_basis(field, qtrans[i])
-        if rows === nothing
-            selector_rows[i] = empty_selector
+    changed_vertices = Int[]
+    sizehint!(changed_vertices, max(1, nactive))
+    if transport_cache !== nothing
+        if length(transport_cache.active_mask) != n
+            transport_cache.active_mask = falses(n)
+        end
+        if length(transport_cache.frontier_mask) != n
+            transport_cache.frontier_mask = falses(n)
+        end
+        length(transport_cache.qsig_rows) == n || resize!(transport_cache.qsig_rows, n)
+        length(transport_cache.qsig_cols) == n || resize!(transport_cache.qsig_cols, n)
+        length(transport_cache.qtrans) == n || resize!(transport_cache.qtrans, n)
+        length(transport_cache.selector_rows) == n || resize!(transport_cache.selector_rows, n)
+        length(transport_cache.selector_is_std) == n || resize!(transport_cache.selector_is_std, n)
+    end
+    @inbounds for i in 1:n
+        rows_i = size(qcomps[i], 1)
+        cols_i = size(qcomps[i], 2)
+        cache_reusable = transport_cache !== nothing &&
+                         q_reused[i] &&
+                         transport_cache.qsig_rows[i] == rows_i &&
+                         transport_cache.qsig_cols[i] == cols_i &&
+                         ((active_mask === nothing && !transport_cache.active_mask[i]) ||
+                          (active_mask !== nothing && transport_cache.active_mask[i] == active_mask[i])) &&
+                         ((active_succ_mask === nothing && !transport_cache.frontier_mask[i]) ||
+                          (active_succ_mask !== nothing && transport_cache.frontier_mask[i] == active_succ_mask[i]))
+        if cache_reusable
+            qti = transport_cache.qtrans[i]
+            qtrans[i] = qti === nothing ? Matrix(transpose(qcomps[i])) : qti
+            selector_rows[i] = transport_cache.selector_rows[i]
+            selector_is_std[i] = transport_cache.selector_is_std[i]
         else
-            selector_rows[i] = rows
-            selector_is_std[i] = true
+            qti = transpose(qcomps[i])
+            qtrans[i] = qti isa Matrix{K} ? qti : Matrix(qti)
+            if !use_active_frontier_fastpath || active_succ_mask[i]
+                rows = _selector_rows_from_basis(field, qtrans[i])
+                if rows === nothing
+                    selector_rows[i] = empty_selector
+                else
+                    selector_rows[i] = rows
+                    selector_is_std[i] = true
+                end
+            else
+                selector_rows[i] = empty_selector
+            end
+            push!(changed_vertices, i)
+        end
+        if transport_cache !== nothing
+            transport_cache.qsig_rows[i] = rows_i
+            transport_cache.qsig_cols[i] = cols_i
+            transport_cache.active_mask[i] = active_mask === nothing ? false : active_mask[i]
+            transport_cache.frontier_mask[i] = active_succ_mask === nothing ? false : active_succ_mask[i]
+            transport_cache.qtrans[i] = qtrans[i]
+            transport_cache.selector_rows[i] = selector_rows[i]
+            transport_cache.selector_is_std[i] = selector_is_std[i]
+        end
+    end
+    if transport_cache !== nothing
+        empty!(transport_cache.changed_vertices)
+        append!(transport_cache.changed_vertices, changed_vertices)
+        empty!(transport_cache.frontier_vertices)
+        if active_succ_mask !== nothing
+            append!(transport_cache.frontier_vertices, active_succ_vertices)
         end
     end
     OutMatT = _store_out_type(K, _module_prefers_sparse_store(E))
@@ -1209,11 +1411,33 @@ function _cokernel_module_cached(
         du = Cdims[u]
         is_selector_u = selector_is_std[u]
         rows_u = selector_rows[u]
+        inactive_u = use_active_frontier_fastpath && active_mask !== nothing && !active_mask[u]
 
         if du == 0
             for j in eachindex(su)
                 v = su[j]
                 Auv = _zero_store_map(OutMatT, K, Cdims[v], 0)
+                outu[j] = Auv
+                ip = pred_slot_of_succ[u][j]
+                maps_from_pred[v][ip] = Auv
+            end
+            continue
+        end
+
+        if inactive_u
+            for j in eachindex(su)
+                v = su[j]
+                cv = Cdims[v]
+                inactive_v = active_mask !== nothing && !active_mask[v]
+                Auv = if cv == 0
+                    _zero_store_map(OutMatT, K, 0, du)
+                elseif inactive_v
+                    _to_store_map(OutMatT, maps_u[j])
+                elseif selector_is_std[v]
+                    _to_store_map(OutMatT, view(maps_u[j], selector_rows[v], :))
+                else
+                    _to_store_map(OutMatT, qcomps[v] * maps_u[j])
+                end
                 outu[j] = Auv
                 ip = pred_slot_of_succ[u][j]
                 maps_from_pred[v][ip] = Auv
@@ -1247,8 +1471,13 @@ function _cokernel_module_cached(
             for j in eachindex(su)
                 v = su[j]
                 cv = Cdims[v]
+                inactive_v = active_mask !== nothing && !active_mask[v]
                 Auv = if cv == 0
                     _zero_store_map(OutMatT, K, 0, du)
+                elseif inactive_u && inactive_v
+                    _to_store_map(OutMatT, maps_u[j])
+                elseif inactive_v
+                    _to_store_map(OutMatT, view(maps_u[j], :, rows_u))
                 elseif selector_is_std[v]
                     _to_store_map(OutMatT, maps_u[j][selector_rows[v], rows_u])
                 else
@@ -1277,7 +1506,15 @@ function _cokernel_module_cached(
                     _zero_store_map(OutMatT, K, 0, du)
                 else
                     rhs = view(rhs_buf, :, 1:cv)
-                    if selector_is_std[v]
+                    inactive_v = active_mask !== nothing && !active_mask[v]
+                    if inactive_u && inactive_v
+                        outu[j] = _to_store_map(OutMatT, maps_u[j])
+                        ip = pred_slot_of_succ[u][j]
+                        maps_from_pred[v][ip] = outu[j]
+                        continue
+                    elseif inactive_v
+                        rhs .= transpose(maps_u[j])
+                    elseif selector_is_std[v]
                         rhs .= transpose(view(maps_u[j], selector_rows[v], :))
                     else
                         mul!(rhs, transpose(maps_u[j]), qtrans[v])
@@ -1311,10 +1548,15 @@ function _cokernel_module_cached(
             v = su[j]
             cv = Cdims[v]
             cv == 0 && continue
+            if inactive_u && active_mask !== nothing && !active_mask[v]
+                continue
+            end
             c0 = offsets[j]
             c1 = offsets[j + 1] - 1
             block = view(rhs_all, :, c0:c1)
-            if selector_is_std[v]
+            if active_mask !== nothing && !active_mask[v]
+                block .= transpose(maps_u[j])
+            elseif selector_is_std[v]
                 block .= transpose(view(maps_u[j], selector_rows[v], :))
             else
                 mul!(block, transpose(maps_u[j]), qtrans[v])
@@ -1335,6 +1577,8 @@ function _cokernel_module_cached(
             cv = Cdims[v]
             Auv = if cv == 0
                 _zero_store_map(OutMatT, K, 0, du)
+            elseif inactive_u && active_mask !== nothing && !active_mask[v]
+                _to_store_map(OutMatT, maps_u[j])
             else
                 c0 = offsets[j]
                 c1 = offsets[j + 1] - 1
@@ -1494,9 +1738,18 @@ function _cokernel_module(
     iota::PMorphism{K};
     cache::Union{Symbol,CoverCache}=:auto,
     incremental_cache::Union{Nothing,AbstractVector}=nothing,
+    active_vertices::Union{Nothing,Vector{Int}}=nothing,
+    active_mask::Union{Nothing,BitVector}=nothing,
+    transport_cache::Union{Nothing,_CokernelTransportCache{K}}=nothing,
+    graph_lists::Union{Nothing,_CoverGraphLists}=nothing,
 ) where {K}
     cc = _resolve_cover_cache(iota.cod.Q, cache)
-    return _cokernel_module_cached(iota, cc; incremental_cache=incremental_cache)
+    return _cokernel_module_cached(iota, cc;
+                                   incremental_cache=incremental_cache,
+                                   active_vertices=active_vertices,
+                                   active_mask=active_mask,
+                                   transport_cache=transport_cache,
+                                   graph_lists=graph_lists)
 end
 
 # =============================================================================
@@ -1809,10 +2062,20 @@ end
 """
     Submodule(incl)
 
-A lightweight wrapper around an inclusion morphism `incl : N -> M` representing the submodule
-N <= M. The ambient module is `_ambient(S)` and the underlying module is `_sub(S)`.
+A lightweight categorical wrapper for a submodule `N <= M`.
 
-This wrapper is intentionally minimal: it stores only the inclusion map.
+If `incl : N -> M` is an inclusion morphism, `Submodule(incl)` packages that
+subobject as a first-class value. The wrapper is intentionally minimal: it
+stores only the inclusion morphism, and the represented module and ambient
+module are recovered through accessors.
+
+Best practices
+- construct user-facing values with `submodule(incl; ...)` so monicity checks
+  and clearer error messages are available,
+- inspect with `describe(S)` and `dimensions(S)` before reaching into the stored
+  morphism,
+- use `submodule_object(S)`, `ambient_module(S)`, and `inclusion_map(S)` rather
+  than raw field access.
 """
 struct Submodule{K}
     incl::PMorphism{K}  # incl : sub -> ambient
@@ -1861,6 +2124,116 @@ If `S` represents `N <= M`, this returns `M`. This helper is internal and is
 used to keep owner-module logic explicit without exposing extra public surface.
 """
 @inline _ambient(S::Submodule) = S.incl.cod
+
+"""
+    submodule_object(S::Submodule) -> PModule
+
+Return the module represented by the subobject `S`.
+
+If `S` was built from an inclusion `N <= M`, this returns `N`.
+
+Best practice:
+- use this accessor instead of reaching into internal fields or internal helpers
+  when you want the stored submodule object explicitly.
+"""
+@inline submodule_object(S::Submodule) = _sub(S)
+
+"""
+    ambient_module(S::Submodule) -> PModule
+
+Return the ambient module of the subobject `S`.
+
+If `S` represents `N <= M`, this returns `M`.
+
+Best practice:
+- use this accessor when you want the ambient object for quotient or image
+  constructions, instead of reaching into stored fields.
+"""
+@inline ambient_module(S::Submodule) = _ambient(S)
+
+"""
+    inclusion_map(S::Submodule) -> PMorphism
+
+Return the inclusion morphism stored by `S`.
+
+Best practice:
+- use this accessor when passing a `Submodule` back into categorical routines,
+  rather than reaching into `S.incl` directly.
+"""
+@inline inclusion_map(S::Submodule) = S.incl
+
+"""
+    dimensions(S::Submodule) -> NamedTuple
+
+Return a compact dimension summary for a `Submodule`.
+
+The result records:
+- the number of vertices,
+- the stalk dimensions of the represented submodule,
+- the stalk dimensions of the ambient module,
+- the corresponding total dimensions.
+"""
+@inline _submodule_dimensions(S::Submodule) = (
+    vertices = nvertices(_ambient(S).Q),
+    submodule = copy(_sub(S).dims),
+    ambient = copy(_ambient(S).dims),
+    submodule_total = sum(_sub(S).dims),
+    ambient_total = sum(_ambient(S).dims),
+)
+
+"""
+    describe(S::Submodule) -> NamedTuple
+
+Return a compact mathematical summary of a `Submodule`.
+
+This is the notebook/REPL companion to `show(S)`: it exposes the field, number
+of vertices, and the dimension summary in a structured form.
+"""
+@inline _submodule_describe(S::Submodule{K}) where {K} = (
+    kind = :submodule,
+    field = _scalar_name(K),
+    dimensions = _submodule_dimensions(S),
+)
+
+"""
+    check_submodule(S; throw=false) -> NamedTuple
+
+Validate a `Submodule` wrapper built from an inclusion map.
+
+The returned report has fields:
+- `kind = :submodule`
+- `valid::Bool`
+- `issues::Vector{String}`
+
+What is checked
+- structural validity of the inclusion morphism,
+- structural validity of the represented and ambient modules,
+- pointwise monomorphism of the inclusion.
+
+Best practices
+- use this after constructing a `Submodule` by hand or after wrapping a map you
+  believe to be an inclusion,
+- use `throw=true` in tests and scripts when invalid input should stop
+  execution immediately.
+"""
+function check_submodule(S::Submodule{K}; throw::Bool=false) where {K}
+    issues = String[]
+    rep_sub = Modules.check_module(_sub(S))
+    rep_amb = Modules.check_module(_ambient(S))
+    rep_incl = Modules.check_morphism(S.incl)
+    rep_sub.valid || append!(issues, "submodule object: " .* rep_sub.issues)
+    rep_amb.valid || append!(issues, "ambient module: " .* rep_amb.issues)
+    rep_incl.valid || append!(issues, "inclusion morphism: " .* rep_incl.issues)
+    _is_monomorphism(S.incl) || push!(issues, "expected the stored inclusion map to be a monomorphism")
+    report = (
+        kind = :submodule,
+        valid = isempty(issues),
+        issues = issues,
+        dimensions = _submodule_dimensions(S),
+    )
+    throw && !report.valid && _abelian_validation_error("check_submodule", issues)
+    return report
+end
 
 """
     _inclusion(S::Submodule) -> PMorphism
@@ -2084,7 +2457,7 @@ end
 Internal specialized pushout constructor for the diagonal case `pushout(f, f)`.
 
 Returns the pushout object, the two comparison maps into it, the quotient map
-from `cod(f) ⊕ cod(f)`, and the defining map `phi`.
+from `cod(f) oplus cod(f)`, and the defining map `phi`.
 """
 function _pushout_same_map(
     f::PMorphism{K},
@@ -2132,7 +2505,7 @@ end
 Internal specialized pullback constructor for the diagonal case `pullback(f, f)`.
 
 Returns the pullback object, the two projections, the kernel inclusion into
-`dom(f) ⊕ dom(f)`, and the defining map `psi`.
+`dom(f) oplus dom(f)`, and the defining map `psi`.
 """
 function _pullback_same_map(
     f::PMorphism{K},
@@ -2269,7 +2642,7 @@ end
 Internal pushout builder via cokernels.
 
 Returns:
-- `S = cod(f) ⊕ cod(g)`,
+- `S = cod(f) oplus cod(g)`,
 - `P`: the pushout object,
 - `q : S -> P`: the quotient map,
 - `phi : dom(f) -> S`: the defining map whose cokernel is the pushout.
@@ -2495,7 +2868,7 @@ end
 Internal pullback builder via kernels.
 
 Returns:
-- `S = dom(f) ⊕ dom(g)`,
+- `S = dom(f) oplus dom(g)`,
 - `P`: the pullback object,
 - `iota : P -> S`: the kernel inclusion,
 - `psi : S -> cod(f)`: the defining map whose kernel is the pullback.
@@ -2864,6 +3237,12 @@ constructions (Ext/Tor LES, snake lemma, etc.) use them repeatedly.
 Recommended cache usage:
 - normal use: keep `cache=:auto`
 - repeated low-level exactness checks on one poset: call `build_cache!(Q)` first and reuse `cache=cc`
+
+For user-facing inspection, prefer:
+- `describe(ses)` for a structured summary,
+- `dimensions(ses)` for the size data,
+- `exactness_summary(ses)` for the cheap cached exactness state,
+- `check_short_exact_sequence(ses)` when you want an explicit validation report.
 """
 mutable struct ShortExactSequence{K}
     A::PModule{K}
@@ -2921,12 +3300,146 @@ Best practice:
     ShortExactSequence(i, p; check=check, cache=cache)
 
 """
+    inclusion_map(ses::ShortExactSequence) -> PMorphism
+
+Return the left map `i : A -> B` stored in the short exact sequence
+
+`0 -> A -i-> B -p-> C -> 0`.
+
+Best practice:
+- use this accessor rather than `ses.i` when passing the sequence back into
+  categorical code.
+"""
+@inline inclusion_map(ses::ShortExactSequence) = ses.i
+
+"""
+    projection_map(ses::ShortExactSequence) -> PMorphism
+
+Return the right map `p : B -> C` stored in the short exact sequence
+
+`0 -> A -i-> B -p-> C -> 0`.
+
+Best practice:
+- use this accessor rather than `ses.p` when you want the canonical quotient map
+  from the stored sequence.
+"""
+@inline projection_map(ses::ShortExactSequence) = ses.p
+
+"""
+    exactness_summary(ses::ShortExactSequence) -> NamedTuple
+
+Return a cheap summary of the current exactness state of `ses`.
+
+This helper never recomputes exactness. It only reports:
+- whether exactness has already been checked,
+- the cached exactness value (or `nothing` if unchecked),
+- whether `ker(p)` and `im(i)` have been cached.
+
+Use this when you want a quick status report before deciding whether to call
+`is_exact(ses; ...)` or inspect the full sequence more closely.
+"""
+@inline exactness_summary(ses::ShortExactSequence) = (
+    checked = ses.checked,
+    exact = ses.checked ? ses.exact : nothing,
+    ker_cached = ses.ker_p !== nothing,
+    img_cached = ses.img_i !== nothing,
+)
+
+"""
+    dimensions(ses::ShortExactSequence) -> NamedTuple
+
+Return a compact dimension summary for a `ShortExactSequence`.
+
+The summary records the number of vertices, the stalk dimensions of `A`, `B`,
+and `C`, their total dimensions, and the current cached exactness state.
+"""
+@inline _short_exact_sequence_dimensions(ses::ShortExactSequence) = (
+    vertices = nvertices(ses.B.Q),
+    A = copy(ses.A.dims),
+    B = copy(ses.B.dims),
+    C = copy(ses.C.dims),
+    A_total = sum(ses.A.dims),
+    B_total = sum(ses.B.dims),
+    C_total = sum(ses.C.dims),
+    checked = ses.checked,
+    exact = ses.checked ? ses.exact : nothing,
+)
+
+"""
+    describe(ses::ShortExactSequence) -> NamedTuple
+
+Return a compact mathematical summary of a `ShortExactSequence`.
+
+This is the structured companion to the pretty-printer and is intended for
+notebooks and programmatic inspection.
+"""
+@inline _short_exact_sequence_describe(ses::ShortExactSequence{K}) where {K} = (
+    kind = :short_exact_sequence,
+    field = _scalar_name(K),
+    dimensions = _short_exact_sequence_dimensions(ses),
+    ker_cached = ses.ker_p !== nothing,
+    img_cached = ses.img_i !== nothing,
+)
+
+"""
+    check_short_exact_sequence(ses; throw=false, cache=:auto) -> NamedTuple
+
+Validate a `ShortExactSequence` container.
+
+The returned report has fields:
+- `kind = :short_exact_sequence`
+- `valid::Bool`
+- `issues::Vector{String}`
+
+What is checked
+- structural validity of `A`, `B`, `C`,
+- structural validity of the maps `i` and `p`,
+- composability `i.cod === p.dom`,
+- vanishing of `p circ i`,
+- exactness via `is_exact(ses; cache=...)`.
+
+Best practices
+- use this on hand-built short exact sequence containers,
+- leave `cache=:auto` in ordinary code,
+- use `throw=true` in tests when any failure should stop execution immediately.
+"""
+function check_short_exact_sequence(ses::ShortExactSequence{K};
+                                    throw::Bool=false,
+                                    cache::Union{Symbol,CoverCache}=:auto) where {K}
+    issues = String[]
+    repA = Modules.check_module(ses.A)
+    repB = Modules.check_module(ses.B)
+    repC = Modules.check_module(ses.C)
+    repi = Modules.check_morphism(ses.i)
+    repp = Modules.check_morphism(ses.p)
+    repA.valid || append!(issues, "module A: " .* repA.issues)
+    repB.valid || append!(issues, "module B: " .* repB.issues)
+    repC.valid || append!(issues, "module C: " .* repC.issues)
+    repi.valid || append!(issues, "map i: " .* repi.issues)
+    repp.valid || append!(issues, "map p: " .* repp.issues)
+    ses.i.cod === ses.p.dom || push!(issues, "expected i.cod === p.dom so that the maps are composable")
+    if ses.i.cod === ses.p.dom
+        _zero_composition(ses.A.field, ses.p, ses.i) ||
+            push!(issues, "expected the composite p circ i to be the zero morphism")
+    end
+    is_exact(ses; cache=cache) || push!(issues, "expected the stored sequence to be exact")
+    report = (
+        kind = :short_exact_sequence,
+        valid = isempty(issues),
+        issues = issues,
+        dimensions = _short_exact_sequence_dimensions(ses),
+    )
+    throw && !report.valid && _abelian_validation_error("check_short_exact_sequence", issues)
+    return report
+end
+
+"""
     is_exact(ses; cache=:auto) -> Bool
 
 Check whether the stored maps define a short exact sequence.
 
 Returns `true` exactly when:
-- `p ∘ i = 0`,
+- `p circ i = 0`,
 - `i` is pointwise injective,
 - `p` is pointwise surjective,
 - `im(i) = ker(p)` at every vertex.
@@ -3084,6 +3597,15 @@ The long exact sequence has the form:
     ker(fA) -> ker(fB) -> ker(fC) --delta--> coker(fA) -> coker(fB) -> coker(fC)
 
 All maps are returned as actual morphisms of P-modules (natural transformations).
+
+For user-facing inspection, prefer:
+- `describe(sn)` for a structured overview,
+- `dimensions(sn)` for the size data,
+- `kernel_objects(sn)` / `cokernel_objects(sn)` for the six stored objects,
+- `kernel_inclusions(sn)` / `cokernel_projections(sn)` for the associated
+  universal maps,
+- `connecting_map(sn)` for the snake-lemma connecting morphism,
+- `check_snake_lemma(sn)` for an explicit validation report.
 """
 struct SnakeLemmaResult{K}
     kerA::Tuple{PModule{K},PMorphism{K}}   # (KerA, inclusion KerA -> A)
@@ -3100,9 +3622,153 @@ struct SnakeLemmaResult{K}
 end
 
 """
+    connecting_map(sn::SnakeLemmaResult) -> PMorphism
+
+Return the connecting morphism `delta : ker(fC) -> coker(fA)` in the snake
+lemma exact sequence.
+"""
+@inline connecting_map(sn::SnakeLemmaResult) = sn.delta
+
+"""
+    kernel_objects(sn::SnakeLemmaResult) -> NamedTuple
+
+Return the three kernel objects in the snake-lemma sequence as a named tuple
+`(A=..., B=..., C=...)`.
+
+This avoids unpacking the stored `(object, map)` tuples manually.
+"""
+@inline kernel_objects(sn::SnakeLemmaResult) = (A = sn.kerA[1], B = sn.kerB[1], C = sn.kerC[1])
+
+"""
+    kernel_inclusions(sn::SnakeLemmaResult) -> NamedTuple
+
+Return the three kernel inclusions in the snake-lemma sequence as a named tuple
+`(A=..., B=..., C=...)`.
+"""
+@inline kernel_inclusions(sn::SnakeLemmaResult) = (A = sn.kerA[2], B = sn.kerB[2], C = sn.kerC[2])
+
+"""
+    cokernel_objects(sn::SnakeLemmaResult) -> NamedTuple
+
+Return the three cokernel objects in the snake-lemma sequence as a named tuple
+`(A=..., B=..., C=...)`.
+"""
+@inline cokernel_objects(sn::SnakeLemmaResult) = (A = sn.cokA[1], B = sn.cokB[1], C = sn.cokC[1])
+
+"""
+    cokernel_projections(sn::SnakeLemmaResult) -> NamedTuple
+
+Return the three cokernel projections in the snake-lemma sequence as a named
+tuple `(A=..., B=..., C=...)`.
+"""
+@inline cokernel_projections(sn::SnakeLemmaResult) = (A = sn.cokA[2], B = sn.cokB[2], C = sn.cokC[2])
+
+"""
+    dimensions(sn::SnakeLemmaResult) -> NamedTuple
+
+Return a compact dimension summary of the snake-lemma exact sequence.
+
+The summary records the stalk dimensions of the three kernel objects and the
+three cokernel objects that appear in the sequence.
+"""
+@inline _snake_lemma_dimensions(sn::SnakeLemmaResult) = (
+    vertices = nvertices(sn.kerA[1].Q),
+    kerA = copy(sn.kerA[1].dims),
+    kerB = copy(sn.kerB[1].dims),
+    kerC = copy(sn.kerC[1].dims),
+    cokA = copy(sn.cokA[1].dims),
+    cokB = copy(sn.cokB[1].dims),
+    cokC = copy(sn.cokC[1].dims),
+    kerA_total = sum(sn.kerA[1].dims),
+    kerB_total = sum(sn.kerB[1].dims),
+    kerC_total = sum(sn.kerC[1].dims),
+    cokA_total = sum(sn.cokA[1].dims),
+    cokB_total = sum(sn.cokB[1].dims),
+    cokC_total = sum(sn.cokC[1].dims),
+)
+
+"""
+    describe(sn::SnakeLemmaResult) -> NamedTuple
+
+Return a compact mathematical summary of a `SnakeLemmaResult`.
+
+The summary records the scalar type, the size of the underlying poset, and the
+dimension summary of the kernel/cokernel sequence.
+"""
+@inline _snake_lemma_describe(sn::SnakeLemmaResult{K}) where {K} = (
+    kind = :snake_lemma,
+    field = _scalar_name(K),
+    dimensions = _snake_lemma_dimensions(sn),
+)
+
+"""
+    check_snake_lemma(sn; throw=false) -> NamedTuple
+
+Validate a `SnakeLemmaResult`.
+
+The returned report has fields:
+- `kind = :snake_lemma`
+- `valid::Bool`
+- `issues::Vector{String}`
+
+What is checked
+- structural validity of the stored kernel and cokernel objects,
+- structural validity of the five sequence maps,
+- composability of consecutive maps,
+- vanishing of consecutive compositions in the snake-lemma sequence.
+
+Best practices
+- use this on hand-built or experimentally modified snake-lemma output,
+- use `throw=true` in tests when any contract failure should abort execution.
+"""
+function check_snake_lemma(sn::SnakeLemmaResult{K}; throw::Bool=false) where {K}
+    issues = String[]
+    kernel_data = (sn.kerA, sn.kerB, sn.kerC)
+    cokernel_data = (sn.cokA, sn.cokB, sn.cokC)
+    for (label, pair) in zip((:kerA, :kerB, :kerC), kernel_data)
+        M, iota = pair
+        repM = Modules.check_module(M)
+        repf = Modules.check_morphism(iota)
+        repM.valid || append!(issues, "$(label) object: " .* repM.issues)
+        repf.valid || append!(issues, "$(label) inclusion: " .* repf.issues)
+    end
+    for (label, pair) in zip((:cokA, :cokB, :cokC), cokernel_data)
+        M, proj = pair
+        repM = Modules.check_module(M)
+        repf = Modules.check_morphism(proj)
+        repM.valid || append!(issues, "$(label) object: " .* repM.issues)
+        repf.valid || append!(issues, "$(label) projection: " .* repf.issues)
+    end
+    for (label, f) in zip((:k1, :k2, :delta, :c1, :c2), (sn.k1, sn.k2, sn.delta, sn.c1, sn.c2))
+        rep = Modules.check_morphism(f)
+        rep.valid || append!(issues, "$(label): " .* rep.issues)
+    end
+    consecutive = ((:k1, sn.k1, :k2, sn.k2),
+                   (:k2, sn.k2, :delta, sn.delta),
+                   (:delta, sn.delta, :c1, sn.c1),
+                   (:c1, sn.c1, :c2, sn.c2))
+    field = sn.k1.dom.field
+    for (f_label, f, g_label, g) in consecutive
+        f.cod === g.dom || push!(issues, "expected $(g_label) to be composable after $(f_label)")
+        if f.cod === g.dom
+            _zero_composition(field, g, f) ||
+                push!(issues, "expected the consecutive composite $(g_label) circ $(f_label) to be zero")
+        end
+    end
+    report = (
+        kind = :snake_lemma,
+        valid = isempty(issues),
+        issues = issues,
+        dimensions = _snake_lemma_dimensions(sn),
+    )
+    throw && !report.valid && _abelian_validation_error("check_snake_lemma", issues)
+    return report
+end
+
+"""
     _check_commutative_square(g1, f1, g2, f2) -> Bool
 
-Check whether the square `g1 ∘ f1 = g2 ∘ f2` commutes at every stalk.
+Check whether the square `g1 circ f1 = g2 circ f2` commutes at every stalk.
 
 Returns a field-aware Boolean result, using exact equality for exact fields and
 tolerance-aware equality for `RealField`.
@@ -3624,129 +4290,44 @@ function _print_int_vec(io::IO, v::AbstractVector{<:Integer};
 end
 
 """
-    Base.show(io::IO, M::PModule{K}) where {K}
+    Base.show(io::IO, summary::ValidationSummary)
 
-Compact one-line summary for a `PModule`.
-
-This is intended for quick REPL inspection. It prints:
-- nverts: number of vertices in the underlying finite poset,
-- sum/nnz/max: cheap statistics of the stalk dimension vector,
-- dims: the stalk dimensions (truncated if `IOContext(io, :limit=>true)`),
-- cover_maps: number of stored structure maps along cover edges.
-
-ASCII-only by design.
+Compact one-line summary for a wrapped validation report.
 """
-function Base.show(io::IO, M::PModule{K}) where {K}
-    nverts = nvertices(M.Q)
-    s, nnz, mx = _dims_stats(M.dims)
-
-    print(io, "PModule(")
-    print(io, "nverts=", nverts)
-    print(io, ", sum=", s)
-    print(io, ", nnz=", nnz)
-    print(io, ", max=", mx)
-    print(io, ", dims=")
-    _print_int_vec(io, M.dims)
-    print(io, ", cover_maps=", length(M.edge_maps))
-    print(io, ")")
+function Base.show(io::IO, summary::ValidationSummary)
+    report = summary.report
+    kind = get(report, :kind, :validation)
+    valid = get(report, :valid, false)
+    issues = get(report, :issues, String[])
+    print(io, "ValidationSummary(kind=", kind,
+          ", valid=", valid,
+          ", issues=", length(issues), ")")
 end
 
 """
-    Base.show(io::IO, ::MIME"text/plain", M::PModule{K}) where {K}
+    Base.show(io::IO, ::MIME"text/plain", summary::ValidationSummary)
 
-Verbose multi-line summary for a `PModule` (what the REPL typically shows).
-
-This is still cheap: it only scans `dims` once and does not compute ranks,
-images, kernels, etc.
+Verbose multi-line summary for a wrapped validation report.
 """
-function Base.show(io::IO, ::MIME"text/plain", M::PModule{K}) where {K}
-    nverts = nvertices(M.Q)
-    s, nnz, mx = _dims_stats(M.dims)
-
-    println(io, "PModule")
-    println(io, "  scalars = ", _scalar_name(K))
-    println(io, "  nverts = ", nverts)
-
-    print(io, "  dims = ")
-    _print_int_vec(io, M.dims)
-    println(io)
-
-    println(io, "    sum = ", s, ", nnz = ", nnz, ", max = ", mx)
-    println(io, "  cover_maps = ", length(M.edge_maps), "  (maps stored along cover edges)")
-end
-
-"""
-    Base.show(io::IO, f::PMorphism{K}) where {K}
-
-Compact one-line summary for a vertexwise morphism of P-modules.
-
-We intentionally avoid any expensive linear algebra (ranks, images, etc.) here.
-"""
-function Base.show(io::IO, f::PMorphism{K}) where {K}
-    n_dom = nvertices(f.dom.Q)
-    n_cod = nvertices(f.cod.Q)
-
-    dom_sum, _, _ = _dims_stats(f.dom.dims)
-    cod_sum, _, _ = _dims_stats(f.cod.dims)
-
-    print(io, "PMorphism(")
-    if f.dom === f.cod
-        print(io, "endo, ")
+function Base.show(io::IO, ::MIME"text/plain", summary::ValidationSummary)
+    report = summary.report
+    kind = get(report, :kind, :validation)
+    valid = get(report, :valid, false)
+    issues = get(report, :issues, String[])
+    println(io, "ValidationSummary")
+    println(io, "  kind = ", kind)
+    println(io, "  valid = ", valid)
+    if haskey(report, :dimensions)
+        println(io, "  dimensions = ", report.dimensions)
     end
-
-    if n_dom == n_cod
-        print(io, "nverts=", n_dom)
+    if isempty(issues)
+        println(io, "  issues = none")
     else
-        # Should not happen in well-formed inputs, but keep printing robust.
-        print(io, "nverts_dom=", n_dom, ", nverts_cod=", n_cod)
+        println(io, "  issues:")
+        for msg in issues
+            println(io, "    - ", msg)
+        end
     end
-
-    print(io, ", dom_sum=", dom_sum)
-    print(io, ", cod_sum=", cod_sum)
-    print(io, ", comps=", length(f.comps))
-    print(io, ")")
-end
-
-"""
-    Base.show(io::IO, ::MIME"text/plain", f::PMorphism{K}) where {K}
-
-Verbose multi-line summary for `PMorphism`.
-
-We report basic size information about the domain/codomain and indicate the
-intended per-vertex matrix sizes, without verifying them (verification can be
-added as a separate validator; printing should stay cheap and noninvasive).
-"""
-function Base.show(io::IO, ::MIME"text/plain", f::PMorphism{K}) where {K}
-    n_dom = nvertices(f.dom.Q)
-    n_cod = nvertices(f.cod.Q)
-
-    dom_sum, dom_nnz, dom_max = _dims_stats(f.dom.dims)
-    cod_sum, cod_nnz, cod_max = _dims_stats(f.cod.dims)
-
-    println(io, "PMorphism")
-    println(io, "  scalars = ", _scalar_name(K))
-
-    if n_dom == n_cod
-        println(io, "  nverts = ", n_dom)
-    else
-        println(io, "  nverts_dom = ", n_dom)
-        println(io, "  nverts_cod = ", n_cod)
-    end
-
-    println(io, "  endomorphism = ", (f.dom === f.cod))
-
-    print(io, "  dom dims = ")
-    _print_int_vec(io, f.dom.dims)
-    println(io)
-    println(io, "    sum = ", dom_sum, ", nnz = ", dom_nnz, ", max = ", dom_max)
-
-    print(io, "  cod dims = ")
-    _print_int_vec(io, f.cod.dims)
-    println(io)
-    println(io, "    sum = ", cod_sum, ", nnz = ", cod_nnz, ", max = ", cod_max)
-
-    println(io, "  comps: ", length(f.comps), " vertexwise linear maps")
-    println(io, "    comps[i] has size cod.dims[i] x dom.dims[i] (for each vertex i)")
 end
 
 """

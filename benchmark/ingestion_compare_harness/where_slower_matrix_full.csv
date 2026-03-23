@@ -1,9 +1,9 @@
 case_id,regime,n_points,ambient_dim,max_dim,warm_tamer_over_multipers,cold_tamer_over_multipers,warm_status,cold_status
 matrix_claim_n5000_d8_md1_s11,claim_matching,5000,8,1,0.643394,8.437882,faster,slower
 matrix_claim_n10000_d8_md1_s11,claim_matching,10000,8,1,0.430292,0.45079,faster,faster
-matrix_parity_n300_d2_md2_s17,normalized_parity,300,2,2,0.40599,0.320808,faster,faster
-matrix_parity_n200_d8_md2_s11,normalized_parity,200,8,2,0.372634,0.371125,faster,faster
-matrix_parity_n200_d2_md2_s11,normalized_parity,200,2,2,0.356827,18.005427,faster,slower
+matrix_parity_n300_d2_md2_s17,rips_parity,300,2,2,0.40599,0.320808,faster,faster
+matrix_parity_n200_d8_md2_s11,rips_parity,200,8,2,0.372634,0.371125,faster,faster
+matrix_parity_n200_d2_md2_s11,rips_parity,200,2,2,0.356827,18.005427,faster,slower
 matrix_claim_n20000_d8_md1_s11,claim_matching,20000,8,1,0.330168,0.340627,faster,faster
 matrix_claim_n5000_d2_md1_s11,claim_matching,5000,2,1,0.275782,92.825546,faster,slower
 matrix_claim_n50000_d8_md1_s11,claim_matching,50000,8,1,0.225808,0.224723,faster,faster

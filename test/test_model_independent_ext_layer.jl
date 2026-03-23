@@ -2,9 +2,9 @@ using Test
 using LinearAlgebra
 using SparseArrays
 
-const FL = PosetModules.FieldLinAlg
+const FL = TamerOp.FieldLinAlg
 
-# Included from test/runtests.jl; uses shared aliases (PM, FF, IR, ...).
+# Included from test/runtests.jl; uses shared aliases (TO, FF, IR, ...).
 #
 # The fallback helpers below are only for standalone runs; the main test suite
 # does not use them.
@@ -171,13 +171,31 @@ end
     N = direct_sum([S2, S2])
 
     # Unified Ext object, canonical basis chosen from the projective model.
-    E = DF.Ext(M, N, PM.DerivedFunctorOptions(maxdeg = 1, model = :unified, canon = :projective))
+    E = DF.Ext(M, N, TO.DerivedFunctorOptions(maxdeg = 1, model = :unified, canon = :projective))
+    cmp = getfield(E, :comparison)
 
     @test DF.dim(E, 1) == 4
+    @test all(isnothing, cmp.P2I)
+    @test all(isnothing, cmp.I2P)
+    @test !cmp.complete
 
     # Comparison maps should be inverse isomorphisms.
     P2I = DF.comparison_isomorphism(E, 1; from = :projective, to = :injective)
     I2P = DF.comparison_isomorphism(E, 1; from = :injective, to = :projective)
+    @test cmp.P2I[2] !== nothing
+    @test cmp.I2P[2] !== nothing
+    @test cmp.P2I[1] === nothing
+    @test cmp.I2P[1] === nothing
+    @test !cmp.complete
+
+    famP2I, famI2P = DF.comparison_isomorphisms(E)
+    @test length(famP2I) == 2
+    @test famP2I[2] == P2I
+    @test famI2P[2] == I2P
+    _ = collect(famP2I)
+    @test cmp.P2I[1] !== nothing
+    @test cmp.I2P[1] !== nothing
+    @test cmp.complete
 
     I4 = CM.eye(field, 4)
     @test P2I * I2P == I4
@@ -202,7 +220,7 @@ end
     M = direct_sum([S1, S1])
     N = direct_sum([S2, S2])
 
-    Einj = DF.ExtInjective(M, N, PM.DerivedFunctorOptions(maxdeg = 2))
+    Einj = DF.ExtInjective(M, N, TO.DerivedFunctorOptions(maxdeg = 2))
 
     # Noncommuting endomorphisms of N at vertex 2 (dims there are 2).
     C = [c(1) c(1); c(0) c(1)]
@@ -248,7 +266,7 @@ end
     p_comps[1] = CM.ones(field, 1, 1)
     p = MD.PMorphism(I12, S1, p_comps)
 
-    df0 = PM.DerivedFunctorOptions(maxdeg=0)
+    df0 = TO.DerivedFunctorOptions(maxdeg=0)
     les = DF.ExtLongExactSequenceFirst(S2, I12, S1, S2, i, p, df0)
 
     # Connecting map delta: Ext^0(S2,S2) -> Ext^1(S1,S2) should be nonzero (rank 1).
@@ -268,7 +286,7 @@ end
     # Endomorphism: scale vertex 1 by 2 and vertex 2 by 3.
     g = MD.PMorphism(N, N, [fill(c(2), 1, 1), fill(c(3), 1, 1)])
 
-    res = DF.injective_resolution(N, PM.ResolutionOptions(maxlen=2))
+    res = DF.injective_resolution(N, TO.ResolutionOptions(maxlen=2))
     phis = DF.lift_injective_chainmap(g, res, res; upto=2)
 
     @test length(phis) == 3

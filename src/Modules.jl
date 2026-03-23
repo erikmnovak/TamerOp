@@ -4,7 +4,7 @@ using SparseArrays, LinearAlgebra
 using ..CoreModules: QQ, AbstractCoeffField, QQField, PrimeField, RealField,
     BackendMatrix, coeff_type, field_from_eltype, eye, coerce
 using ..Options: ModuleOptions
-import ..CoreModules: change_field
+import ..CoreModules: change_field, _append_scaled_triplets!
 import ..FiniteFringe
 import ..FiniteFringe: AbstractPoset, FinitePoset, cover_edges, leq, nvertices,
        CoverCache, PosetCache, _get_cover_cache, _succs, _preds,
@@ -41,6 +41,9 @@ const MAP_LEQ_MANY_LONG_MIN_AVG_HOPS_REAL = Ref(5.0)
 const MAP_LEQ_MANY_PLAN_MIN_SCORE_QQ = Ref(0.18)
 const MAP_LEQ_MANY_PLAN_MIN_SCORE_PRIME = Ref(0.20)
 const MAP_LEQ_MANY_PLAN_MIN_SCORE_REAL = Ref(0.22)
+const MAP_LEQ_MANY_TRIPLET_PLAN_MIN_LEN = Ref(32)
+const MAP_LEQ_QQ_NEMO_LONG_MIN_HOPS = Ref(5)
+const MAP_LEQ_QQ_NEMO_LONG_MIN_WORK = Ref(192)
 const DIRECT_SUM_SPARSE_MIN_TOTAL_ENTRIES = Ref(16_384)
 const DIRECT_SUM_SPARSE_MIN_AVG_EDGE_ENTRIES_QQ = Ref(128.0)
 const DIRECT_SUM_SPARSE_MIN_AVG_EDGE_ENTRIES_PRIME = Ref(256.0)
@@ -327,8 +330,10 @@ end
 mutable struct MapLeqScratch{K}
     tmp1::Matrix{K}
     tmp2::Matrix{K}
-    chain::Vector{Int}
-    slots::Vector{Int}
+    pool1::Vector{Matrix{K}}
+    pool2::Vector{Matrix{K}}
+    qq_nemo_owner::Any
+    qq_nemo_edge::IdDict{Any,Any}
 end
 
 const _MAP_LEQ_BATCH_ID_COUNTER = Threads.Atomic{UInt}(UInt(1))
@@ -371,6 +376,7 @@ mutable struct _MapLeqManyPlan
     suffix_child_node::Vector{Int}# node after suffix source on chosen cover chain
     suffix_head_slot::Vector{Int} # slot of edge suffix_u -> suffix_child_node
     suffix_tail_slot::Vector{Int} # slot of direct cover tail suffix_child_node -> suffix_v when suffix_child == 0
+    suffix_hops::Vector{Int}      # hop count represented by each suffix entry
 end
 
 mutable struct _MapLeqManyPlanArena
@@ -388,6 +394,7 @@ mutable struct _MapLeqManyPlanArena
     suffix_child_node::Vector{Int}
     suffix_head_slot::Vector{Int}
     suffix_tail_slot::Vector{Int}
+    suffix_hops::Vector{Int}
     suffix_id_dense::Vector{Int}
     suffix_id_touched::Vector{Int}
     target_seen::BitVector
@@ -442,15 +449,34 @@ struct _MapLeqManyBatchStats
 end
 
 """
-A minimal module over a finite poset `Q`.
+    PModule{K}(Q, dims, edge_maps; field=..., check_sizes=true)
 
-A `PModule` is a functor `Q -> Vec_K` specified by:
+A module over a finite poset `Q`, viewed as a functor `Q -> Vec_K`.
 
-  * `dims[i] = dim_K M(i)`
-  * maps on cover relations `u leq with dot v`
+Mathematically, a `PModule` assigns:
+- a finite-dimensional vector space `M(q)` to each vertex `q` of `Q`,
+- a linear map `M(q <= q') : M(q) -> M(q')` to each comparable pair,
+- subject to the usual functorial composition law.
 
-For performance, cover-edge maps are stored in a `CoverEdgeMapStore`,
-aligned with the cover graph, rather than in a dictionary keyed by `(u,v)`.
+The constructor is given concretely by:
+- `dims[i] = dim_K M(i)`,
+- one structure map for each cover relation of the poset.
+
+Implementation notes
+- For performance, only cover-edge maps are stored explicitly in a
+  `CoverEdgeMapStore`.
+- Maps for longer comparable pairs are derived from those cover-edge maps.
+
+Best practices
+- Prefer the canonical `PModule(...)` constructors to direct field manipulation.
+- After building a module by hand, run `check_module(M)` before using it in
+  invariants, derived functors, or benchmarks.
+- Prefer `describe(M)`, `dimensions(M)`, `basis(M, q)`, and
+  `coordinates(M, q, x)` over reading `M.dims` and `M.edge_maps` directly unless
+  you explicitly need the raw storage.
+
+See also: `PMorphism`, `check_module`, `describe`, `dimensions`, `basis`,
+`coordinates`.
 """
 struct PModule{K,F<:AbstractCoeffField,MatT<:AbstractMatrix{K},QT<:AbstractPoset}
     field::F
@@ -556,14 +582,34 @@ end
 
 @inline function _new_map_leq_many_plan_arena()
     nt = max(1, Threads.maxthreadid())
-    return [_MapLeqManyPlanArena(UInt8[], Int[], Int[], Int[], Int[], Int[], Int[],
-                                 Int[], Int[], Int[], Int[], Int[], Int[], Int[],
-                                 Int[], Int[], falses(0), Int[], Int[]) for _ in 1:nt]
+    return [_MapLeqManyPlanArena(
+                UInt8[],
+                Int[],
+                Int[],
+                Int[],
+                Int[],
+                Int[],
+                Int[],
+                Int[],
+                Int[],
+                Int[],
+                Int[],
+                Int[],
+                Int[],
+                Int[],
+                Int[],
+                Int[],
+                Int[],
+                falses(0),
+                Int[],
+                Int[],
+            ) for _ in 1:nt]
 end
 
 @inline function _new_map_leq_scratch(::Type{K}) where {K}
     nt = max(1, Threads.maxthreadid())
-    return [MapLeqScratch{K}(Matrix{K}(undef, 0, 0), Matrix{K}(undef, 0, 0), Int[], Int[])
+    return [MapLeqScratch{K}(Matrix{K}(undef, 0, 0), Matrix{K}(undef, 0, 0),
+                             Matrix{K}[], Matrix{K}[], nothing, IdDict{Any,Any}())
             for _ in 1:nt]
 end
 
@@ -737,9 +783,361 @@ Notes
 -----
 - Vertices are encoded as integers `1:Q.n`.
 - This is a pure convenience method: it simply returns `M.dims[q]`.
+
+Best practices
+- Treat `dim_at(M, q)` as the canonical public stalk-dimension query.
+- Prefer this over reading `M.dims[q]` directly in examples and notebook code.
+- Pair it with `basis(M, q)` and `coordinates(M, q, x)` when you want an
+  explicit coordinate convention on the stalk.
 """
 function dim_at(M::PModule{K}, q::Integer) where {K}
     return M.dims[Int(q)]
+end
+
+"""
+    support(M::PModule) -> Vector{Int}
+
+Return the vertices where the module has nonzero stalk dimension.
+
+Mathematically, this is the support of the module viewed as a representation of
+the finite poset.
+
+Best practices
+- use this to understand where a sparse module is actually nontrivial,
+- pair it with `support_dims(M)` when you also want the corresponding stalk
+  dimensions.
+"""
+function support(M::PModule)
+    out = Int[]
+    sizehint!(out, length(M.dims))
+    @inbounds for q in eachindex(M.dims)
+        M.dims[q] != 0 && push!(out, q)
+    end
+    return out
+end
+
+"""
+    nonzero_vertices(M::PModule) -> Vector{Int}
+
+Explicit synonym for `support(M)`.
+
+This name is useful when you want the output to read purely in terms of poset
+vertices rather than representation-theoretic support.
+"""
+@inline nonzero_vertices(M::PModule) = support(M)
+
+"""
+    support_dims(M::PModule) -> NamedTuple
+
+Return the support of `M` together with the corresponding nonzero stalk
+dimensions.
+
+The result has fields:
+- `vertices`
+- `dims`
+
+where `vertices[i]` is in the support of `M` and `dims[i] = dim_at(M, vertices[i])`.
+"""
+function support_dims(M::PModule)
+    verts = support(M)
+    dims = Vector{Int}(undef, length(verts))
+    @inbounds for i in eachindex(verts)
+        dims[i] = M.dims[verts[i]]
+    end
+    return (vertices = verts, dims = dims)
+end
+
+"""
+    structure_map(M; source, target, cache=nothing, opts=ModuleOptions()) -> AbstractMatrix
+
+Return the structure map `M(source <= target)` of the module `M`.
+
+This is the named-keyword companion to `map_leq(M, source, target; ...)`. It is
+the more didactic call style for mathematicians, since the roles of the two
+vertices are explicit at the call site.
+
+Best practices
+- prefer `structure_map(M; source=u, target=v)` in examples and notebook code,
+- use `map_leq(M, u, v; ...)` in tight internal loops when positional calling is
+  clearer,
+- treat the returned matrix as read-only because it may alias cached internal
+  storage.
+"""
+function structure_map(M::PModule{K};
+                       source::Integer,
+                       target::Integer,
+                       cache::Union{Nothing,CoverCache}=nothing,
+                       opts::ModuleOptions=ModuleOptions()) where {K}
+    return map_leq(M, Int(source), Int(target); cache=cache, opts=opts)
+end
+
+@inline function _module_field_label(field::AbstractCoeffField)
+    field isa QQField && return "QQ"
+    field isa PrimeField && return "F$(field.p)"
+    field isa RealField && return "Real"
+    return string(typeof(field))
+end
+
+@inline function _module_matrix_zero(A::AbstractMatrix{K}) where {K}
+    if K <: AbstractFloat
+        tol = sqrt(eps(K))
+        @inbounds for x in A
+            abs(x) <= tol || return false
+        end
+        return true
+    end
+    if A isa SparseMatrixCSC
+        return nnz(A) == 0
+    end
+    @inbounds for x in A
+        iszero(x) || return false
+    end
+    return true
+end
+
+@inline function _module_nonzero_components(comps)
+    count(A -> !_module_matrix_zero(A), comps)
+end
+
+@inline function _pmodule_total_dim(M::PModule)
+    return sum(M.dims)
+end
+
+@inline function _pmodule_dimensions(M::PModule)
+    return (
+        vertices = nvertices(M.Q),
+        stalks = copy(M.dims),
+        total = _pmodule_total_dim(M),
+        maximum_stalk = isempty(M.dims) ? 0 : maximum(M.dims),
+        edges = length(M.edge_maps),
+    )
+end
+
+@inline function _pmodule_dimensions(M::PModule, q::Int)
+    return (
+        vertex = q,
+        stalk = M.dims[q],
+    )
+end
+
+@inline function _pmodule_basis(M::PModule{K}, q::Int) where {K}
+    1 <= q <= length(M.dims) || error("basis: vertex $(q) is out of range for a module on $(length(M.dims)) vertices")
+    return eye(M.field, M.dims[q])
+end
+
+@inline function _pmodule_coordinates(M::PModule{K}, q::Int, x::AbstractVector{K}) where {K}
+    1 <= q <= length(M.dims) || error("coordinates: vertex $(q) is out of range for a module on $(length(M.dims)) vertices")
+    length(x) == M.dims[q] || error("coordinates: expected a vector of length $(M.dims[q]) at vertex $(q); got $(length(x))")
+    return copy(x)
+end
+
+@inline function _pmodule_coordinates(M::PModule{K}, q::Int, X::AbstractMatrix{K}) where {K}
+    1 <= q <= length(M.dims) || error("coordinates: vertex $(q) is out of range for a module on $(length(M.dims)) vertices")
+    size(X, 1) == M.dims[q] || error("coordinates: expected $(M.dims[q]) rows at vertex $(q); got $(size(X, 1))")
+    return Matrix{K}(X)
+end
+
+@inline function _pmodule_describe(M::PModule)
+    dims = _pmodule_dimensions(M)
+    return (
+        kind = :pmodule,
+        field = _module_field_label(M.field),
+        vertices = dims.vertices,
+        total_dimension = dims.total,
+        maximum_stalk = dims.maximum_stalk,
+        edge_count = dims.edges,
+        poset_type = nameof(typeof(M.Q)),
+    )
+end
+
+@inline function _pmorphism_dimensions(f)
+    return (
+        vertices = length(f.comps),
+        domain = copy(f.dom.dims),
+        codomain = copy(f.cod.dims),
+        nonzero_components = _module_nonzero_components(f.comps),
+    )
+end
+
+@inline function _pmorphism_describe(f)
+    dims = _pmorphism_dimensions(f)
+    return (
+        kind = :pmorphism,
+        field = _module_field_label(f.dom.field),
+        vertices = dims.vertices,
+        domain_total_dimension = sum(dims.domain),
+        codomain_total_dimension = sum(dims.codomain),
+        nonzero_components = dims.nonzero_components,
+    )
+end
+
+@inline function _modules_validation_error(fn::AbstractString, issues::Vector{String})
+    error("$(fn): validation failed:\n - " * join(issues, "\n - "))
+end
+
+"""
+    check_module_data(Q, dims, edge_maps; throw=false) -> NamedTuple
+
+Validate raw constructor data for a `PModule` before building the object.
+
+Inputs
+- `Q`: the underlying finite poset,
+- `dims`: proposed stalk dimensions,
+- `edge_maps`: proposed cover-edge structure maps, keyed by `(u,v)`.
+
+The returned report has fields:
+- `kind = :pmodule_data`
+- `valid::Bool`
+- `vertices`
+- `edge_count`
+- `issues::Vector{String}`
+
+What is checked
+- `length(dims) == nvertices(Q)`,
+- all stalk dimensions are nonnegative,
+- every cover edge of `Q` has exactly one proposed map,
+- no non-cover edges are supplied,
+- each supplied map has size `(dims[v], dims[u])`.
+
+Best practices
+- use this before `PModule(Q, dims, edge_maps; ...)` when building examples or
+  notebook fixtures by hand,
+- use `throw=true` in tests when invalid raw data should abort immediately.
+"""
+function check_module_data(Q::AbstractPoset,
+                           dims::AbstractVector{<:Integer},
+                           edge_maps;
+                           throw::Bool=false)
+    issues = String[]
+    n = nvertices(Q)
+    length(dims) == n || push!(issues,
+        "expected dims to have length $(n); got $(length(dims))")
+    any(<(0), dims) && push!(issues, "expected all stalk dimensions to be nonnegative")
+
+    cover = collect(cover_edges(Q))
+    cover_set = Set(cover)
+    sizehint!(issues, length(cover))
+
+    for (u, v) in cover
+        if !haskey(edge_maps, (u, v))
+            push!(issues, "expected one map for each cover edge; missing edge ($(u), $(v))")
+            continue
+        end
+        A = edge_maps[(u, v)]
+        du = 1 <= u <= length(dims) ? Int(dims[u]) : 0
+        dv = 1 <= v <= length(dims) ? Int(dims[v]) : 0
+        size(A) == (dv, du) || push!(issues,
+            "expected map $(u) <= $(v) to have size ($(dv), $(du)); got $(size(A))")
+    end
+
+    for (uv, A) in pairs(edge_maps)
+        uv isa Tuple{Int,Int} || begin
+            push!(issues, "expected edge-map keys to be integer pairs; got $(typeof(uv))")
+            continue
+        end
+        u, v = uv
+        ((u, v) in cover_set) || push!(issues,
+            "expected edge-map data only on cover edges; got ($(u), $(v))")
+        A isa AbstractMatrix || push!(issues,
+            "expected edge-map data at ($(u), $(v)) to be a matrix; got $(typeof(A))")
+    end
+
+    report = (
+        kind = :pmodule_data,
+        valid = isempty(issues),
+        vertices = n,
+        edge_count = length(edge_maps),
+        issues = issues,
+    )
+    throw && !report.valid && _modules_validation_error("check_module_data", issues)
+    return report
+end
+
+"""
+    check_module(M; throw=false) -> NamedTuple
+
+Validate a hand-built `PModule` without invoking heavier algebraic routines.
+
+The returned report has fields:
+- `kind = :pmodule`
+- `valid::Bool`
+- `vertices`
+- `dims`
+- `edge_count`
+- `issues::Vector{String}`
+
+Set `throw=true` to raise an error when validation fails.
+
+What is checked
+- the length and nonnegativity of the stalk-dimension vector,
+- predecessor/successor cover-edge storage consistency,
+- matrix sizes on every stored cover-edge map,
+- agreement between predecessor and successor edge views,
+- agreement between the number of stored maps and the cover graph of the poset.
+
+When to use this
+- immediately after building a module by hand,
+- before debugging `map_leq`, kernels, cokernels, or derived functors,
+- in tests with hand-computable examples.
+
+Best practices
+- Prefer `check_module(M)` over ad hoc inspection of internal fields.
+- Use `check_module(M; throw=true)` in scripts and tests when invalid input
+  should abort execution immediately.
+
+This is a structural validation helper. It checks the module-storage contract,
+not deeper semantic properties of a downstream computation.
+"""
+function check_module(M::PModule; throw::Bool=false)
+    issues = String[]
+    n = nvertices(M.Q)
+    length(M.dims) == n || push!(issues,
+        "expected dims to have length $(n); got $(length(M.dims))")
+    any(<(0), M.dims) && push!(issues, "expected all stalk dimensions to be nonnegative")
+
+    store = M.edge_maps
+    length(store.preds) == n || push!(issues, "expected edge-map predecessor storage for $(n) vertices; got $(length(store.preds))")
+    length(store.succs) == n || push!(issues, "expected edge-map successor storage for $(n) vertices; got $(length(store.succs))")
+    length(store.maps_from_pred) == n || push!(issues, "expected predecessor maps for $(n) vertices; got $(length(store.maps_from_pred))")
+    length(store.maps_to_succ) == n || push!(issues, "expected successor maps for $(n) vertices; got $(length(store.maps_to_succ))")
+
+    nscan = min(n, length(store.preds), length(store.succs), length(store.maps_from_pred), length(store.maps_to_succ))
+    for v in 1:nscan
+        length(store.preds[v]) == length(store.maps_from_pred[v]) || push!(issues,
+            "expected predecessor list and incoming maps to have the same length at vertex $(v)")
+        issorted(store.preds[v]) || push!(issues, "expected predecessor list at vertex $(v) to be sorted")
+        for (k, u) in pairs(store.preds[v])
+            (1 <= u <= n) || push!(issues, "expected predecessor indices to lie in 1:$(n); got $(u) at vertex $(v)")
+            size(store.maps_from_pred[v][k]) == (M.dims[v], M.dims[u]) || push!(issues,
+                "expected map $(u) <= $(v) to have size ($(M.dims[v]), $(M.dims[u])); got $(size(store.maps_from_pred[v][k]))")
+            haskey(store, u, v) || push!(issues, "expected cover-edge map store to contain edge ($(u), $(v))")
+        end
+
+        length(store.succs[v]) == length(store.maps_to_succ[v]) || push!(issues,
+            "expected successor list and outgoing maps to have the same length at vertex $(v)")
+        issorted(store.succs[v]) || push!(issues, "expected successor list at vertex $(v) to be sorted")
+        for (k, w) in pairs(store.succs[v])
+            (1 <= w <= n) || push!(issues, "expected successor indices to lie in 1:$(n); got $(w) at vertex $(v)")
+            size(store.maps_to_succ[v][k]) == (M.dims[w], M.dims[v]) || push!(issues,
+                "expected map $(v) <= $(w) to have size ($(M.dims[w]), $(M.dims[v])); got $(size(store.maps_to_succ[v][k]))")
+            slot = _find_sorted_index(store.preds[w], v)
+            slot != 0 || push!(issues, "expected successor edge ($(v), $(w)) to appear in predecessor storage as well")
+        end
+    end
+
+    length(store) == length(collect(cover_edges(M.Q))) || push!(issues,
+        "expected one structure map for each cover edge of the poset; got $(length(store)) maps for $(length(collect(cover_edges(M.Q)))) cover edges")
+
+    report = (
+        kind = :pmodule,
+        valid = isempty(issues),
+        vertices = n,
+        dims = copy(M.dims),
+        edge_count = length(store),
+        issues = issues,
+    )
+    throw && !report.valid && _modules_validation_error("check_module", issues)
+    return report
 end
 
 # ----------------------------
@@ -781,7 +1179,27 @@ function change_field(M::PModule{K}, field::AbstractCoeffField) where {K}
     return PModule{K2}(M.Q, M.dims, edge; field=field)
 end
 
-"Vertexwise morphism of P-modules (components are M_i \to N_i)."
+"""
+    PMorphism(dom, cod, comps)
+
+A morphism of modules on a common poset.
+
+If `dom` and `cod` are `PModule`s on the same poset `Q`, then a `PMorphism`
+stores a component map
+
+`f_q : dom(q) -> cod(q)`
+
+at each vertex `q`, and these component maps must commute with all structure
+maps of the modules.
+
+Best practices
+- Construct morphisms with `PMorphism(...)` so shape checks happen immediately.
+- Use `check_morphism(f)` for hand-built examples and debugging.
+- Prefer `describe(f)` and `dimensions(f)` for inspection before dropping to
+  raw component matrices in `f.comps`.
+
+See also: `PModule`, `check_morphism`, `describe`, `dimensions`.
+"""
 struct PMorphism{K, F<:AbstractCoeffField, MatT<:AbstractMatrix{K}}
     dom::PModule{K,F}
     cod::PModule{K,F}
@@ -853,6 +1271,212 @@ PMorphism(dom::PModule{K,F}, cod::PModule{K,F},
 PMorphism(dom::PModule{K,F}, cod::PModule{K,F},
           comps::Vector{MatT}) where {K,F,MatT<:AbstractMatrix{K}} =
     _build_p_morphism(dom, cod, comps)
+
+"""
+    component(f::PMorphism, q::Integer) -> AbstractMatrix
+
+Return the vertexwise component map `f_q` of a module morphism.
+
+If `f : M -> N` is a `PMorphism`, then `component(f, q)` is the linear map
+
+`f_q : M(q) -> N(q)`.
+
+This is the canonical accessor for stalkwise morphism data. It is preferable to
+reaching into `f.comps[q]` directly in user-facing code.
+"""
+function component(f::PMorphism, q::Integer)
+    n = length(f.comps)
+    1 <= q <= n || error("component: vertex $(q) is out of range for a morphism with $(n) components")
+    return f.comps[Int(q)]
+end
+
+"""
+    check_morphism_data(dom, cod, comps; throw=false) -> NamedTuple
+
+Validate raw constructor data for a `PMorphism` before building the object.
+
+Inputs
+- `dom`, `cod`: the proposed domain and codomain modules,
+- `comps`: one proposed component map per vertex.
+
+The returned report has fields:
+- `kind = :pmorphism_data`
+- `valid::Bool`
+- `vertices`
+- `issues::Vector{String}`
+
+What is checked
+- structural validity of `dom` and `cod`,
+- field agreement,
+- poset identity,
+- one component map per vertex,
+- component sizes,
+- commutativity on every cover-edge square.
+
+Best practices
+- use this before calling `PMorphism(dom, cod, comps)` in hand-built examples,
+- use `throw=true` in tests when any invalid raw data should stop execution.
+"""
+function check_morphism_data(dom::PModule{K},
+                             cod::PModule{K},
+                             comps::AbstractVector{<:AbstractMatrix{K}};
+                             throw::Bool=false) where {K}
+    issues = String[]
+    rep_dom = check_module(dom)
+    rep_cod = check_module(cod)
+    rep_dom.valid || append!(issues, "domain module: " .* rep_dom.issues)
+    rep_cod.valid || append!(issues, "codomain module: " .* rep_cod.issues)
+
+    dom.field == cod.field || push!(issues, "expected domain and codomain to use the same field")
+    dom.Q === cod.Q || push!(issues, "expected domain and codomain to live on the same poset object")
+
+    n = nvertices(dom.Q)
+    length(comps) == n || push!(issues, "expected one component per vertex, so length(comps) = $(n); got $(length(comps))")
+
+    nscan = min(length(comps), n)
+    for v in 1:nscan
+        size(comps[v]) == (cod.dims[v], dom.dims[v]) || push!(issues,
+            "expected component $(v) to have size ($(cod.dims[v]), $(dom.dims[v])); got $(size(comps[v]))")
+    end
+
+    if dom.Q === cod.Q && length(comps) >= n
+        for (u, v) in cover_edges(dom.Q)
+            if !(haskey(dom.edge_maps, u, v) && haskey(cod.edge_maps, u, v))
+                push!(issues, "expected both modules to carry the cover-edge map ($(u), $(v))")
+                continue
+            end
+            size(comps[u]) == (cod.dims[u], dom.dims[u]) || continue
+            size(comps[v]) == (cod.dims[v], dom.dims[v]) || continue
+            lhs = cod.edge_maps[u, v] * comps[u]
+            rhs = comps[v] * dom.edge_maps[u, v]
+            _module_matrix_zero(lhs - rhs) || push!(issues,
+                "expected the square on cover edge ($(u), $(v)) to commute")
+        end
+    end
+
+    report = (
+        kind = :pmorphism_data,
+        valid = isempty(issues),
+        vertices = n,
+        issues = issues,
+    )
+    throw && !report.valid && _modules_validation_error("check_morphism_data", issues)
+    return report
+end
+
+"""
+    check_morphism(f; throw=false) -> NamedTuple
+
+Validate a hand-built `PMorphism`.
+
+The returned report has fields:
+- `kind = :pmorphism`
+- `valid::Bool`
+- `vertices`
+- `issues::Vector{String}`
+
+Set `throw=true` to raise an error when validation fails.
+
+What is checked
+- domain/codomain field agreement,
+- domain/codomain poset identity,
+- one component map per vertex,
+- component matrix sizes,
+- commutativity on each cover-edge square.
+
+When to use this
+- after assembling a morphism by hand,
+- before calling kernels, images, cokernels, or derived constructions,
+- when debugging a morphism that should commute but appears not to.
+
+Best practices
+- Prefer `check_morphism(f)` over manually sampling a few component sizes.
+- Use `check_morphism(f; throw=true)` when invalid input should stop execution
+  immediately.
+
+This checks the algebraic contract of a module morphism, but it does not infer
+user intent beyond those commutativity and shape constraints.
+"""
+function check_morphism(f::PMorphism{K}; throw::Bool=false) where {K}
+    issues = String[]
+    dom = f.dom
+    cod = f.cod
+    n = nvertices(dom.Q)
+
+    dom.field == cod.field || push!(issues, "expected domain and codomain to use the same field")
+    dom.Q === cod.Q || push!(issues, "expected domain and codomain to live on the same poset object")
+    length(f.comps) == n || push!(issues, "expected one component per vertex, so length(comps) = $(n); got $(length(f.comps))")
+
+    nscan = min(length(f.comps), n)
+    for v in 1:nscan
+        size(f.comps[v]) == (cod.dims[v], dom.dims[v]) || push!(issues,
+            "expected component $(v) to have size ($(cod.dims[v]), $(dom.dims[v])); got $(size(f.comps[v]))")
+    end
+
+    if dom.Q === cod.Q
+        for (u, v) in cover_edges(dom.Q)
+            if !(haskey(dom.edge_maps, u, v) && haskey(cod.edge_maps, u, v))
+                push!(issues, "expected both modules to carry the cover-edge map ($(u), $(v))")
+                continue
+            end
+            if u > length(f.comps) || v > length(f.comps)
+                continue
+            end
+            try
+                lhs = cod.edge_maps[u, v] * f.comps[u]
+                rhs = f.comps[v] * dom.edge_maps[u, v]
+                _module_matrix_zero(lhs - rhs) || push!(issues,
+                    "expected the square on cover edge ($(u), $(v)) to commute")
+            catch
+                push!(issues, "could not compare the commutative square on cover edge ($(u), $(v)) because the component sizes are incompatible")
+            end
+        end
+    end
+
+    report = (
+        kind = :pmorphism,
+        valid = isempty(issues),
+        vertices = n,
+        issues = issues,
+    )
+    throw && !report.valid && _modules_validation_error("check_morphism", issues)
+    return report
+end
+
+function Base.show(io::IO, M::PModule)
+    d = _pmodule_describe(M)
+    print(io, "PModule(field=", d.field, ", vertices=", d.vertices,
+          ", total_dim=", d.total_dimension, ", edge_count=", d.edge_count, ")")
+end
+
+function Base.show(io::IO, ::MIME"text/plain", M::PModule)
+    d = _pmodule_describe(M)
+    print(io,
+          "PModule\n",
+          "  field: ", d.field, "\n",
+          "  vertices: ", d.vertices, "\n",
+          "  total dimension: ", d.total_dimension, "\n",
+          "  max stalk dimension: ", d.maximum_stalk, "\n",
+          "  edge count: ", d.edge_count, "\n",
+          "  poset type: ", d.poset_type)
+end
+
+function Base.show(io::IO, f::PMorphism)
+    d = _pmorphism_describe(f)
+    print(io, "PMorphism(field=", d.field, ", vertices=", d.vertices,
+          ", nonzero_components=", d.nonzero_components, ")")
+end
+
+function Base.show(io::IO, ::MIME"text/plain", f::PMorphism)
+    d = _pmorphism_describe(f)
+    print(io,
+          "PMorphism\n",
+          "  field: ", d.field, "\n",
+          "  vertices: ", d.vertices, "\n",
+          "  domain total dimension: ", d.domain_total_dimension, "\n",
+          "  codomain total dimension: ", d.codomain_total_dimension, "\n",
+          "  nonzero components: ", d.nonzero_components)
+end
 
 """
     change_field(f, field)
@@ -1110,6 +1734,7 @@ function _build_map_leq_many_suffix_program!(arena::_MapLeqManyPlanArena,
     suffix_child_node = arena.suffix_child_node
     suffix_head_slot = arena.suffix_head_slot
     suffix_tail_slot = arena.suffix_tail_slot
+    suffix_hops = arena.suffix_hops
     chain_ptr = arena.chain_ptr
     chain_data = arena.chain_data
     chain_slots = arena.chain_slots
@@ -1126,6 +1751,7 @@ function _build_map_leq_many_suffix_program!(arena::_MapLeqManyPlanArena,
     empty!(suffix_child_node)
     empty!(suffix_head_slot)
     empty!(suffix_tail_slot)
+    empty!(suffix_hops)
     resize!(target_seen, n)
     fill!(target_seen, false)
 
@@ -1165,6 +1791,7 @@ function _build_map_leq_many_suffix_program!(arena::_MapLeqManyPlanArena,
                 push!(suffix_child_node, child_node)
                 push!(suffix_head_slot, chain_slots[k + 1])
                 push!(suffix_tail_slot, child_id == 0 ? child_tail_slot : 0)
+                push!(suffix_hops, child_id == 0 ? 2 : (suffix_hops[child_id] + 1))
             end
             child_id = sid
             child_node = u
@@ -1278,7 +1905,8 @@ end
                            copy(arena.chain_ptr), copy(arena.chain_data), copy(arena.chain_slots),
                            copy(arena.query_suffix), copy(arena.suffix_u), copy(arena.suffix_v),
                            copy(arena.suffix_child), copy(arena.suffix_child_node),
-                           copy(arena.suffix_head_slot), copy(arena.suffix_tail_slot))
+                           copy(arena.suffix_head_slot), copy(arena.suffix_tail_slot),
+                           copy(arena.suffix_hops))
 end
 
 function _build_map_leq_many_plan(M::PModule,
@@ -1502,6 +2130,26 @@ end
     return Vector{MatT}(undef, n)
 end
 
+@inline function _use_qq_nemo_suffix_product(M::PModule{QQ},
+                                             tail::AbstractMatrix{QQ},
+                                             head::AbstractMatrix{QQ},
+                                             hops::Int)::Bool
+    FieldLinAlg._have_nemo() || return false
+    hops >= MAP_LEQ_QQ_NEMO_LONG_MIN_HOPS[] || return false
+    work = size(tail, 1) * size(head, 1) * size(head, 2)
+    return work >= MAP_LEQ_QQ_NEMO_LONG_MIN_WORK[]
+end
+
+@inline function _mul_qq_nemo_into!(out::Matrix{QQ},
+                                    s::MapLeqScratch{QQ},
+                                    M::PModule{QQ},
+                                    A::AbstractMatrix{QQ},
+                                    B::AbstractMatrix{QQ})
+    An = _qq_nemo_edge_matrix!(s, M, A)
+    Bn = _qq_nemo_edge_matrix!(s, M, B)
+    return _copy_from_fmpq_mat!(out, An * Bn)
+end
+
 @inline function _execute_suffix_program_dense!(suffix_vals::Vector{MatT},
                                                 M::PModule{K,F,Matrix{K}},
                                                 suffix_u::AbstractVector{Int},
@@ -1509,7 +2157,8 @@ end
                                                 suffix_child::AbstractVector{Int},
                                                 suffix_child_node::AbstractVector{Int},
                                                 suffix_head_slot::AbstractVector{Int},
-                                                suffix_tail_slot::AbstractVector{Int};
+                                                suffix_tail_slot::AbstractVector{Int},
+                                                suffix_hops::AbstractVector{Int};
                                                 store_results::Bool) where {K,F,MatT}
     store = M.edge_maps
     @inbounds for sid in eachindex(suffix_u)
@@ -1532,7 +2181,12 @@ end
             _as_mattype(MatT, out)
         else
             out = Matrix{K}(undef, size(tail, 1), size(head, 2))
-            mul!(out, tail, head)
+            if K === QQ && _use_qq_nemo_suffix_product(M, tail, head, suffix_hops[sid])
+                s = _map_leq_scratch(M)
+                _mul_qq_nemo_into!(out, s, M, tail, head)
+            else
+                _mul_dense_maybe_tiny!(out, tail, head)
+            end
             _as_mattype(MatT, out)
         end
         suffix_vals[sid] = store_results ? _map_leq_memo_set!(M, u, v, A) : A
@@ -1587,7 +2241,8 @@ function _map_leq_many_with_plan_unchecked!(dest::AbstractVector,
         if MatT <: Matrix{K}
             _execute_suffix_program_dense!(suffix_vals, M, plan.suffix_u, plan.suffix_v,
                                            plan.suffix_child, plan.suffix_child_node,
-                                           plan.suffix_head_slot, plan.suffix_tail_slot;
+                                           plan.suffix_head_slot, plan.suffix_tail_slot,
+                                           plan.suffix_hops;
                                            store_results=store_results)
         else
             _execute_suffix_program_generic!(suffix_vals, M, plan.suffix_u, plan.suffix_v,
@@ -1634,7 +2289,7 @@ function _map_leq_many_with_plan_unchecked!(dest::AbstractVector,
             E2 = M.edge_maps[p, v]
             E1 = M.edge_maps[u, p]
             out = _scratch_mat!(s, true, size(E2, 1), size(E1, 2))
-            mul!(out, E2, E1)
+            _mul_dense_maybe_tiny!(out, E2, E1)
             _as_mattype(MatT, copy(out))
         else
             _as_mattype(MatT, FieldLinAlg._matmul(M.edge_maps[p, v], M.edge_maps[u, p]))
@@ -1662,7 +2317,8 @@ function _map_leq_many_oneoff_long_batch!(dest::AbstractVector,
         if MatT <: Matrix{K}
             _execute_suffix_program_dense!(suffix_vals, M, arena.suffix_u, arena.suffix_v,
                                            arena.suffix_child, arena.suffix_child_node,
-                                           arena.suffix_head_slot, arena.suffix_tail_slot;
+                                           arena.suffix_head_slot, arena.suffix_tail_slot,
+                                           arena.suffix_hops;
                                            store_results=false)
         else
             _execute_suffix_program_generic!(suffix_vals, M, arena.suffix_u, arena.suffix_v,
@@ -1694,7 +2350,7 @@ function _map_leq_many_oneoff_long_batch!(dest::AbstractVector,
             E2 = M.edge_maps[p, v]
             E1 = M.edge_maps[u, p]
             out = _scratch_mat!(s, true, size(E2, 1), size(E1, 2))
-            mul!(out, E2, E1)
+            _mul_dense_maybe_tiny!(out, E2, E1)
             dest[i] = _as_mattype(MatT, copy(out))
         else
             p = arena.mids[i]
@@ -1736,7 +2392,7 @@ function _map_leq_many_scalar_long_batch!(dest::AbstractVector,
                 E2 = M.edge_maps[p, v]
                 E1 = M.edge_maps[u, p]
                 out = _ensure_dense_dest_matrix!(dest, i, K, size(E2, 1), size(E1, 2))
-                mul!(out, E2, E1)
+                _mul_dense_maybe_tiny!(out, E2, E1)
             else
                 dest[i] = _as_mattype(MatT, FieldLinAlg._matmul(M.edge_maps[p, v], M.edge_maps[u, p]))
             end
@@ -1746,7 +2402,11 @@ function _map_leq_many_scalar_long_batch!(dest::AbstractVector,
             if MatT <: Matrix{K}
                 s = _map_leq_scratch(M)
                 out = _ensure_dense_dest_matrix!(dest, i, K, M.dims[v], M.dims[u])
-                _compose_chain_dense_packed_slots_into!(out, M, chain_data, chain_slots, sidx, eidx, s)
+                if K === QQ && _use_qq_nemo_long_product(M, chain_data, chain_slots, sidx, eidx)
+                    _compose_chain_dense_packed_slots_nemo_into!(out, M, chain_data, chain_slots, sidx, eidx, s)
+                else
+                    _compose_chain_dense_packed_slots_into!(out, M, chain_data, chain_slots, sidx, eidx, s)
+                end
             else
                 dest[i] = _as_mattype(MatT, _compose_chain_generic_packed_slots(M, chain_data, chain_slots, sidx, eidx))
             end
@@ -1777,7 +2437,16 @@ end
 """
     zero_morphism(M::PModule{K}, N::PModule{K}) -> PMorphism{K}
 
-Zero morphism M -> N.
+Return the zero morphism `M -> N`.
+
+This is the canonical way to build a morphism whose component at every vertex is
+the zero matrix.
+
+Best practices
+- use this instead of assembling zero component matrices by hand,
+- domain and codomain must live on the same poset and field,
+- this is often the right starting point for hand-built exact-sequence and
+  snake-lemma examples.
 """
 function zero_morphism(M::PModule{K}, N::PModule{K}) where {K}
     Q = M.Q
@@ -1968,7 +2637,17 @@ end
 """
     direct_sum(A::PModule{K}, B::PModule{K}) -> PModule{K}
 
-Binary direct sum A oplus B as a P-module.
+Return the binary direct sum `A oplus B` as a `PModule`.
+
+At each vertex `q`, the stalk is `A(q) oplus B(q)`, and each structure map is the
+block-diagonal direct sum of the corresponding structure maps of `A` and `B`.
+
+Best practices
+- use this as the canonical binary coproduct/product object in the module
+  category,
+- use `direct_sum_with_maps` when you also want the canonical injections and
+  projections,
+- both modules must live on the same poset and use the same field.
 """
 function direct_sum(A::PModule{K,FA,MatA}, B::PModule{K,FB,MatB}) where {K,FA,FB,MatA,MatB}
     Q = A.Q
@@ -2083,18 +2762,80 @@ end
 
 
 
+@inline function _scratch_pool_lookup!(current::Matrix{K},
+                                       pool::Vector{Matrix{K}},
+                                       m::Int, n::Int)::Matrix{K} where {K}
+    if size(current, 1) == m && size(current, 2) == n
+        return current
+    end
+    @inbounds for A in pool
+        if size(A, 1) == m && size(A, 2) == n
+            return A
+        end
+    end
+    A = Matrix{K}(undef, m, n)
+    push!(pool, A)
+    return A
+end
+
 @inline function _scratch_mat!(s::MapLeqScratch{K}, which::Bool, m::Int, n::Int)::Matrix{K} where {K}
     if which
-        if size(s.tmp1, 1) != m || size(s.tmp1, 2) != n
-            s.tmp1 = Matrix{K}(undef, m, n)
-        end
+        s.tmp1 = _scratch_pool_lookup!(s.tmp1, s.pool1, m, n)
         return s.tmp1
     else
-        if size(s.tmp2, 1) != m || size(s.tmp2, 2) != n
-            s.tmp2 = Matrix{K}(undef, m, n)
-        end
+        s.tmp2 = _scratch_pool_lookup!(s.tmp2, s.pool2, m, n)
         return s.tmp2
     end
+end
+
+@inline function _qq_nemo_long_product_work(M::PModule{QQ},
+                                            chain_data::Vector{Int},
+                                            chain_slots::Vector{Int},
+                                            sidx::Int, eidx::Int)::Int
+    dom = M.dims[chain_data[sidx]]
+    work = 0
+    store = M.edge_maps
+    @inbounds for k in (sidx + 2):eidx
+        E = store.maps_from_pred[chain_data[k]][chain_slots[k]]
+        work += size(E, 1) * size(E, 2) * dom
+    end
+    return work
+end
+
+@inline function _use_qq_nemo_long_product(M::PModule{QQ},
+                                           chain_data::Vector{Int},
+                                           chain_slots::Vector{Int},
+                                           sidx::Int, eidx::Int)::Bool
+    FieldLinAlg._have_nemo() || return false
+    hops = eidx - sidx
+    hops >= MAP_LEQ_QQ_NEMO_LONG_MIN_HOPS[] || return false
+    return _qq_nemo_long_product_work(M, chain_data, chain_slots, sidx, eidx) >=
+           MAP_LEQ_QQ_NEMO_LONG_MIN_WORK[]
+end
+
+@inline function _qq_nemo_edge_matrix!(s::MapLeqScratch{QQ},
+                                       M::PModule{QQ},
+                                       A::AbstractMatrix{QQ})
+    if s.qq_nemo_owner !== M
+        empty!(s.qq_nemo_edge)
+        s.qq_nemo_owner = M
+    end
+    cached = get(s.qq_nemo_edge, A, nothing)
+    cached === nothing || return cached
+    cached = FieldLinAlg._to_fmpq_mat(A)
+    s.qq_nemo_edge[A] = cached
+    return cached
+end
+
+@inline function _copy_from_fmpq_mat!(out::Matrix{QQ}, M)
+    size(out, 1) == size(M, 1) || throw(DimensionMismatch("row mismatch in _copy_from_fmpq_mat!"))
+    size(out, 2) == size(M, 2) || throw(DimensionMismatch("column mismatch in _copy_from_fmpq_mat!"))
+    Nemo = FieldLinAlg.Nemo
+    @inbounds for j in 1:size(M, 2), i in 1:size(M, 1)
+        x = M[i, j]
+        out[i, j] = QQ(BigInt(Nemo.numerator(x)), BigInt(Nemo.denominator(x)))
+    end
+    return out
 end
 
 @inline function _build_cover_chain!(chain::Vector{Int}, u::Int, v::Int, cc::CoverCache)
@@ -2203,7 +2944,7 @@ end
     @inbounds for k in (sidx + 1):(eidx - 1)
         E = M.edge_maps[chain_data[k], chain_data[k + 1]]
         out = _scratch_mat!(s, !acc_is_tmp1, size(E, 1), size(acc, 2))
-        mul!(out, E, acc)
+        _mul_dense_maybe_tiny!(out, E, acc)
         acc = out
         acc_is_tmp1 = !acc_is_tmp1
     end
@@ -2224,7 +2965,7 @@ end
     @inbounds for k in (sidx + 2):eidx
         E = store.maps_from_pred[chain_data[k]][chain_slots[k]]
         out = _scratch_mat!(s, !acc_is_tmp1, size(E, 1), size(acc, 2))
-        mul!(out, E, acc)
+        _mul_dense_maybe_tiny!(out, E, acc)
         acc = out
         acc_is_tmp1 = !acc_is_tmp1
     end
@@ -2251,14 +2992,29 @@ end
     @inbounds for k in (sidx + 2):(eidx - 1)
         E = store.maps_from_pred[chain_data[k]][chain_slots[k]]
         tmp = _scratch_mat!(s, !acc_is_tmp1, size(E, 1), size(acc, 2))
-        mul!(tmp, E, acc)
+        _mul_dense_maybe_tiny!(tmp, E, acc)
         acc = tmp
         acc_is_tmp1 = !acc_is_tmp1
     end
 
     last_edge = store.maps_from_pred[chain_data[eidx]][chain_slots[eidx]]
-    mul!(out, last_edge, acc)
+    _mul_dense_maybe_tiny!(out, last_edge, acc)
     return out
+end
+
+@inline function _compose_chain_dense_packed_slots_nemo_into!(out::Matrix{QQ},
+                                                              M::PModule{QQ},
+                                                              chain_data::Vector{Int},
+                                                              chain_slots::Vector{Int},
+                                                              sidx::Int, eidx::Int,
+                                                              s::MapLeqScratch{QQ})
+    store = M.edge_maps
+    acc = _qq_nemo_edge_matrix!(s, M, store.maps_from_pred[chain_data[sidx + 1]][chain_slots[sidx + 1]])
+    @inbounds for k in (sidx + 2):eidx
+        E = _qq_nemo_edge_matrix!(s, M, store.maps_from_pred[chain_data[k]][chain_slots[k]])
+        acc = E * acc
+    end
+    return _copy_from_fmpq_mat!(out, acc)
 end
 
 @inline function _compose_chain_generic_packed(M::PModule,
@@ -2345,7 +3101,7 @@ end
         slot == 0 && error("missing cover-edge map for ($p,$d)")
         E = store.maps_from_pred[d][slot]
         out = _scratch_mat!(s, !acc_is_tmp1, size(acc, 1), size(E, 2))
-        mul!(out, acc, E)
+        _mul_dense_maybe_tiny!(out, acc, E)
         acc = out
         acc_is_tmp1 = !acc_is_tmp1
     end
@@ -2408,7 +3164,7 @@ end
     E1 = M.edge_maps.maps_from_pred[p][up_slot]
     if MatT <: Matrix{K}
         A = Matrix{K}(undef, size(E2, 1), size(E1, 2))
-        mul!(A, E2, E1)
+        _mul_dense_maybe_tiny!(A, E2, E1)
     else
         A = FieldLinAlg._matmul(E2, E1)
     end
@@ -2486,6 +3242,14 @@ Performance notes:
 Warning:
   The returned matrix may alias internal storage or memoized composed maps.
   Treat it as read-only.
+
+Best practices
+- use `map_leq(M, u, v)` as the canonical low-level query for a comparable-pair
+  structure map,
+- use `structure_map(M; source=u, target=v)` in examples and notebooks when the
+  named call style is clearer,
+- for repeated workloads, prefer `prepare_map_leq_batch` together with
+  `map_leq_many!`.
 """
 function map_leq(M::PModule{K}, u::Int, v::Int;
                  cache::Union{Nothing,CoverCache}=nothing,
@@ -2549,6 +3313,11 @@ Prepare a reusable query batch for repeated `map_leq_many` calls.
 
 The input pairs are copied on construction. Use this for hot repeated workloads
 to avoid per-call mutable-vector signature checks.
+
+Best practices
+- prefer this when the same comparable pairs are queried many times,
+- pass the resulting batch to `map_leq_many!`,
+- use the raw vector form only for one-off or tiny workloads.
 """
 function prepare_map_leq_batch(pairs::AbstractVector{<:Tuple{Int,Int}})
     copied = Vector{Tuple{Int,Int}}(undef, length(pairs))
@@ -2571,6 +3340,12 @@ Writes one map per pair into `dest` and returns `dest`.
 For large one-off batches, this may use an internal batch-local long-chain
 executor that avoids per-query scalar `map_leq` calls and avoids cached-plan
 copies. For repeated hot batches, prefer `prepare_map_leq_batch`.
+
+Best practices
+- use this when you need many comparable-pair maps at once,
+- pass a prepared batch when the same query pattern repeats,
+- size `dest` to match the number of requested pairs exactly,
+- treat returned matrices as read-only because they may alias cached storage.
 """
 function map_leq_many!(dest::AbstractVector,
                        M::PModule{K,F,MatT},
@@ -2612,6 +3387,9 @@ end
 
 Batch form of `map_leq` using a prepared query batch from
 `prepare_map_leq_batch`.
+
+This is the canonical hot-path entrypoint for repeated map queries on a stable
+set of comparable pairs.
 """
 function map_leq_many!(dest::AbstractVector,
                        M::PModule{K,F,MatT},
@@ -2634,6 +3412,335 @@ function map_leq_many!(dest::AbstractVector,
         return dest
     end
     return _map_leq_many_fallback!(dest, M, pairs, Q, n, cc)
+end
+
+@inline function _append_scaled_identity_triplets!(I::Vector{Int},
+                                                   J::Vector{Int},
+                                                   V::Vector{K},
+                                                   dim::Int,
+                                                   row_off::Int,
+                                                   col_off::Int;
+                                                   scale::K) where {K}
+    iszero(scale) && return nothing
+    @inbounds for t in 1:dim
+        push!(I, row_off + t)
+        push!(J, col_off + t)
+        push!(V, scale)
+    end
+    return nothing
+end
+
+@inline function _append_map_leq_triplets_from_plan_at!(I::Vector{Int},
+                                                        J::Vector{Int},
+                                                        V::Vector{K},
+                                                        M::PModule{K,F,MatT},
+                                                        plan::_MapLeqManyPlan,
+                                                        suffix_vals,
+                                                        idx::Int,
+                                                        row_off::Int,
+                                                        col_off::Int,
+                                                        scale::K) where {K,F,MatT}
+    iszero(scale) && return nothing
+
+    kind = plan.kinds[idx]
+    u = plan.us[idx]
+    v = plan.vs[idx]
+
+    if kind == 0x00
+        return _append_scaled_identity_triplets!(I, J, V, M.dims[v], row_off, col_off; scale=scale)
+    elseif kind == 0x01
+        return _append_scaled_triplets!(I, J, V, M.edge_maps[u, v], row_off, col_off; scale=scale)
+    end
+
+    memoA = _map_leq_memo_get(M, u, v)
+    memoA === nothing || return _append_scaled_triplets!(I, J, V, memoA, row_off, col_off; scale=scale)
+
+    if kind == 0x03
+        store_results = plan.has_repeats || plan.warmed
+        sidx = plan.chain_ptr[idx]
+        eidx = plan.chain_ptr[idx + 1] - 1
+        if MatT <: Matrix{K}
+            s = _map_leq_scratch(M)
+            out = _scratch_mat!(s, true, M.dims[v], M.dims[u])
+            if K === QQ && _use_qq_nemo_long_product(M, plan.chain_data, plan.chain_slots, sidx, eidx)
+                _compose_chain_dense_packed_slots_nemo_into!(out, M, plan.chain_data, plan.chain_slots, sidx, eidx, s)
+            else
+                _compose_chain_dense_packed_slots_into!(out, M, plan.chain_data, plan.chain_slots, sidx, eidx, s)
+            end
+            if store_results
+                A = _map_leq_memo_set!(M, u, v, _as_mattype(MatT, copy(out)))
+                return _append_scaled_triplets!(I, J, V, A, row_off, col_off; scale=scale)
+            end
+            return _append_scaled_triplets!(I, J, V, out, row_off, col_off; scale=scale)
+        end
+
+        A = _as_mattype(MatT, _compose_chain_generic_packed_slots(M, plan.chain_data, plan.chain_slots, sidx, eidx))
+        if store_results
+            A = _map_leq_memo_set!(M, u, v, A)
+        end
+        return _append_scaled_triplets!(I, J, V, A, row_off, col_off; scale=scale)
+    end
+
+    p = plan.mids[idx]
+    if M.dims[u] == 1 && M.dims[v] == 1
+        coeff = M.edge_maps[p, v][1, 1] * M.edge_maps[u, p][1, 1]
+        iszero(coeff) || begin
+            push!(I, row_off + 1)
+            push!(J, col_off + 1)
+            push!(V, scale * coeff)
+        end
+        return nothing
+    end
+
+    store_results = plan.has_repeats || plan.warmed
+    if MatT <: Matrix{K}
+        s = _map_leq_scratch(M)
+        E2 = M.edge_maps[p, v]
+        E1 = M.edge_maps[u, p]
+        out = _scratch_mat!(s, true, size(E2, 1), size(E1, 2))
+        _mul_dense_maybe_tiny!(out, E2, E1)
+        if store_results
+            A = _map_leq_memo_set!(M, u, v, _as_mattype(MatT, copy(out)))
+            return _append_scaled_triplets!(I, J, V, A, row_off, col_off; scale=scale)
+        end
+        return _append_scaled_triplets!(I, J, V, out, row_off, col_off; scale=scale)
+    end
+
+    A = _as_mattype(MatT, FieldLinAlg._matmul(M.edge_maps[p, v], M.edge_maps[u, p]))
+    if store_results
+        A = _map_leq_memo_set!(M, u, v, A)
+    end
+    return _append_scaled_triplets!(I, J, V, A, row_off, col_off; scale=scale)
+end
+
+function _append_map_leq_many_scaled_triplets!(I::Vector{Int},
+                                               J::Vector{Int},
+                                               V::Vector{K},
+                                               M::PModule{K,F,MatT},
+                                               batch::MapLeqQueryBatch,
+                                               row_ids::AbstractVector{<:Integer},
+                                               col_ids::AbstractVector{<:Integer},
+                                               row_offsets::AbstractVector{<:Integer},
+                                               col_offsets::AbstractVector{<:Integer},
+                                               scales::AbstractVector{K};
+                                               cache::Union{Nothing,CoverCache}=nothing) where {K,F,MatT}
+    pairs = batch.pairs
+    npairs = length(pairs)
+    length(row_ids) == npairs || error("_append_map_leq_many_scaled_triplets!: row_ids length mismatch")
+    length(col_ids) == npairs || error("_append_map_leq_many_scaled_triplets!: col_ids length mismatch")
+    length(scales) == npairs || error("_append_map_leq_many_scaled_triplets!: scales length mismatch")
+
+    Q = M.Q
+    cc = cache === nothing ? _get_cover_cache(Q) : cache
+    plan = _get_or_build_map_leq_many_plan!(M, batch, Q, cc)
+    if plan === nothing && npairs >= MAP_LEQ_MANY_TRIPLET_PLAN_MIN_LEN[]
+        arena = _map_leq_many_plan_arena(M)
+        stats = _fill_map_leq_many_plan_arena!(arena, M, pairs, Q, cc)
+        plan = _copy_map_leq_many_plan(arena, stats)
+    end
+    if plan === nothing
+        @inbounds for idx in 1:npairs
+            scale = scales[idx]
+            iszero(scale) && continue
+            row_off = Int(row_offsets[Int(row_ids[idx])])
+            col_off = Int(col_offsets[Int(col_ids[idx])])
+            A = map_leq(M, pairs[idx][1], pairs[idx][2]; cache=cc)
+            _append_scaled_triplets!(I, J, V, A, row_off, col_off; scale=scale)
+        end
+        return nothing
+    end
+
+    @inbounds for idx in 1:npairs
+        row_off = Int(row_offsets[Int(row_ids[idx])])
+        col_off = Int(col_offsets[Int(col_ids[idx])])
+        _append_map_leq_triplets_from_plan_at!(I, J, V, M, plan, nothing,
+                                               idx, row_off, col_off, scales[idx])
+    end
+    return nothing
+end
+
+@inline function _accum_scaled_vec!(dst::AbstractVector{K},
+                                    src::AbstractVector{K},
+                                    scale::K) where {K}
+    iszero(scale) && return nothing
+    @inbounds for t in eachindex(src)
+        dst[t] += scale * src[t]
+    end
+    return nothing
+end
+
+@inline function _accum_scaled_matvec!(dst::AbstractVector{K},
+                                       A::AbstractMatrix{K},
+                                       x::AbstractVector{K},
+                                       scale::K,
+                                       tmpbuf::Vector{K}) where {K}
+    iszero(scale) && return nothing
+    nrows = size(A, 1)
+    resize!(tmpbuf, nrows)
+    tmp = view(tmpbuf, 1:nrows)
+    mul!(tmp, A, x)
+    @inbounds for t in 1:nrows
+        dst[t] += scale * tmp[t]
+    end
+    return nothing
+end
+
+@inline function _accum_map_leq_matvec_from_plan_at!(dst::AbstractVector{K},
+                                                     M::PModule{K,F,MatT},
+                                                     plan::_MapLeqManyPlan,
+                                                     idx::Int,
+                                                     x::AbstractVector{K},
+                                                     scale::K,
+                                                     tmp1::Vector{K},
+                                                     tmp2::Vector{K}) where {K,F,MatT}
+    iszero(scale) && return nothing
+
+    kind = plan.kinds[idx]
+    u = plan.us[idx]
+    v = plan.vs[idx]
+
+    if kind == 0x00
+        return _accum_scaled_vec!(dst, x, scale)
+    elseif kind == 0x01
+        return _accum_scaled_matvec!(dst, M.edge_maps[u, v], x, scale, tmp1)
+    end
+
+    memoA = _map_leq_memo_get(M, u, v)
+    memoA === nothing || return _accum_scaled_matvec!(dst, memoA, x, scale, tmp1)
+
+    if kind == 0x03
+        store = M.edge_maps
+        sidx = plan.chain_ptr[idx]
+        eidx = plan.chain_ptr[idx + 1] - 1
+
+        E = store.maps_from_pred[plan.chain_data[sidx + 1]][plan.chain_slots[sidx + 1]]
+        resize!(tmp1, size(E, 1))
+        cur = view(tmp1, 1:size(E, 1))
+        mul!(cur, E, x)
+        if sidx + 1 == eidx
+            return _accum_scaled_vec!(dst, cur, scale)
+        end
+
+        cur_is_tmp1 = true
+        @inbounds for k in (sidx + 2):eidx
+            E = store.maps_from_pred[plan.chain_data[k]][plan.chain_slots[k]]
+            if cur_is_tmp1
+                resize!(tmp2, size(E, 1))
+                nxt = view(tmp2, 1:size(E, 1))
+            else
+                resize!(tmp1, size(E, 1))
+                nxt = view(tmp1, 1:size(E, 1))
+            end
+            mul!(nxt, E, cur)
+            cur = nxt
+            cur_is_tmp1 = !cur_is_tmp1
+        end
+        return _accum_scaled_vec!(dst, cur, scale)
+    end
+
+    p = plan.mids[idx]
+    if M.dims[u] == 1 && M.dims[v] == 1
+        coeff = M.edge_maps[p, v][1, 1] * M.edge_maps[u, p][1, 1]
+        iszero(coeff) || (dst[1] += scale * coeff * x[1])
+        return nothing
+    end
+
+    E1 = M.edge_maps[u, p]
+    resize!(tmp1, size(E1, 1))
+    mid = view(tmp1, 1:size(E1, 1))
+    mul!(mid, E1, x)
+    E2 = M.edge_maps[p, v]
+    resize!(tmp2, size(E2, 1))
+    out = view(tmp2, 1:size(E2, 1))
+    mul!(out, E2, mid)
+    return _accum_scaled_vec!(dst, out, scale)
+end
+
+function _accum_map_leq_many_scaled_matvecs!(out::AbstractVector{K},
+                                             M::PModule{K,F,MatT},
+                                             batch::MapLeqQueryBatch,
+                                             dest_ids::AbstractVector{<:Integer},
+                                             src_ids::AbstractVector{<:Integer},
+                                             dest_offsets::AbstractVector{<:Integer},
+                                             src_parts::AbstractVector,
+                                             scales::AbstractVector{K};
+                                             cache::Union{Nothing,CoverCache}=nothing) where {K,F,MatT}
+    pairs = batch.pairs
+    npairs = length(pairs)
+    length(dest_ids) == npairs || error("_accum_map_leq_many_scaled_matvecs!: dest_ids length mismatch")
+    length(src_ids) == npairs || error("_accum_map_leq_many_scaled_matvecs!: src_ids length mismatch")
+    length(scales) == npairs || error("_accum_map_leq_many_scaled_matvecs!: scales length mismatch")
+
+    Q = M.Q
+    cc = cache === nothing ? _get_cover_cache(Q) : cache
+    plan = _get_or_build_map_leq_many_plan!(M, batch, Q, cc)
+    if plan === nothing && npairs >= MAP_LEQ_MANY_TRIPLET_PLAN_MIN_LEN[]
+        arena = _map_leq_many_plan_arena(M)
+        stats = _fill_map_leq_many_plan_arena!(arena, M, pairs, Q, cc)
+        plan = _copy_map_leq_many_plan(arena, stats)
+    end
+
+    tmp1 = Vector{K}()
+    tmp2 = Vector{K}()
+    @inbounds for idx in 1:npairs
+        scale = scales[idx]
+        iszero(scale) && continue
+        did = Int(dest_ids[idx])
+        sid = Int(src_ids[idx])
+        dst = view(out, Int(dest_offsets[did]) + 1:Int(dest_offsets[did + 1]))
+        x = src_parts[sid]
+        if plan === nothing
+            A = map_leq(M, pairs[idx][1], pairs[idx][2]; cache=cc)
+            _accum_scaled_matvec!(dst, A, x, scale, tmp1)
+        else
+            _accum_map_leq_matvec_from_plan_at!(dst, M, plan, idx, x, scale, tmp1, tmp2)
+        end
+    end
+    return out
+end
+
+function _accum_map_leq_many_scaled_sourcevec!(out::AbstractVector{K},
+                                               M::PModule{K,F,MatT},
+                                               batch::MapLeqQueryBatch,
+                                               dest_ids::AbstractVector{<:Integer},
+                                               src_ids::AbstractVector{<:Integer},
+                                               dest_offsets::AbstractVector{<:Integer},
+                                               src_offsets::AbstractVector{<:Integer},
+                                               src::AbstractVector{K},
+                                               scales::AbstractVector{K};
+                                               cache::Union{Nothing,CoverCache}=nothing) where {K,F,MatT}
+    pairs = batch.pairs
+    npairs = length(pairs)
+    length(dest_ids) == npairs || error("_accum_map_leq_many_scaled_sourcevec!: dest_ids length mismatch")
+    length(src_ids) == npairs || error("_accum_map_leq_many_scaled_sourcevec!: src_ids length mismatch")
+    length(scales) == npairs || error("_accum_map_leq_many_scaled_sourcevec!: scales length mismatch")
+
+    Q = M.Q
+    cc = cache === nothing ? _get_cover_cache(Q) : cache
+    plan = _get_or_build_map_leq_many_plan!(M, batch, Q, cc)
+    if plan === nothing && npairs >= MAP_LEQ_MANY_TRIPLET_PLAN_MIN_LEN[]
+        arena = _map_leq_many_plan_arena(M)
+        stats = _fill_map_leq_many_plan_arena!(arena, M, pairs, Q, cc)
+        plan = _copy_map_leq_many_plan(arena, stats)
+    end
+
+    tmp1 = Vector{K}()
+    tmp2 = Vector{K}()
+    @inbounds for idx in 1:npairs
+        scale = scales[idx]
+        iszero(scale) && continue
+        did = Int(dest_ids[idx])
+        sid = Int(src_ids[idx])
+        dst = view(out, Int(dest_offsets[did]) + 1:Int(dest_offsets[did + 1]))
+        x = view(src, Int(src_offsets[sid]) + 1:Int(src_offsets[sid + 1]))
+        if plan === nothing
+            A = map_leq(M, pairs[idx][1], pairs[idx][2]; cache=cc)
+            _accum_scaled_matvec!(dst, A, x, scale, tmp1)
+        else
+            _accum_map_leq_matvec_from_plan_at!(dst, M, plan, idx, x, scale, tmp1, tmp2)
+        end
+    end
+    return out
 end
 
 """

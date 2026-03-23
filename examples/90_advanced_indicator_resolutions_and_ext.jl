@@ -29,13 +29,13 @@ example_header(
 Random.seed!(20260217)
 outdir = example_outdir("90_advanced_ext")
 
-CM = PM.CoreModules
-OPT = PM.Options
-DT = PM.DataTypes
-EC = PM.EncodingCore
-RES = PM.Results
-FF = PM.FiniteFringe
-IR = PM.IndicatorResolutions
+CM = TO.CoreModules
+OPT = TO.Options
+DT = TO.DataTypes
+EC = TO.EncodingCore
+RES = TO.Results
+FF = TO.FiniteFringe
+IR = TO.IndicatorResolutions
 
 stage("1) Build a tiny finite-fringe module and wrap as EncodingResult")
 
@@ -64,10 +64,10 @@ println("Encoded poset vertices: ", enc.P.n)
 stage("2) Resolve (projective + injective)")
 
 sc = CM.SessionCache()
-ropts = PM.ResolutionOptions(maxlen=2, minimal=false, check=true)
+ropts = TO.ResolutionOptions(maxlen=2, minimal=false, check=true)
 
-res_proj = PM.resolve(enc; kind=:projective, opts=ropts, cache=sc)
-res_inj = PM.resolve(enc; kind=:injective, opts=ropts, cache=sc)
+res_proj = TO.resolve(enc; kind=:projective, opts=ropts, cache=sc)
+res_inj = TO.resolve(enc; kind=:injective, opts=ropts, cache=sc)
 
 println("Projective resolution type: ", typeof(res_proj.res))
 println("Injective resolution type: ", typeof(res_inj.res))
@@ -76,13 +76,13 @@ println("Injective Bass table available: ", haskey(res_inj.meta, :bass))
 
 stage("3) Compute Ext dimensions and show cache reuse")
 
-E1 = PM.ext(enc, enc; maxdeg=2, model=:projective, cache=sc)
-E2 = PM.ext(enc, enc; maxdeg=2, model=:projective, cache=sc)
+E1 = TO.ext(enc, enc; maxdeg=2, model=:projective, cache=sc)
+E2 = TO.ext(enc, enc; maxdeg=2, model=:projective, cache=sc)
 
 # With shared SessionCache, repeated calls should reuse the cached resolution path.
 println("Ext cache reuse (E1.res === E2.res): ", E1.res === E2.res)
 
-ext_dims = [PM.dim(E1, t) for t in 0:2]
+ext_dims = [TO.dim(E1, t) for t in 0:2]
 println("Ext dimensions [t=0,1,2]: ", ext_dims)
 
 stage("4) Save a compact advanced report")

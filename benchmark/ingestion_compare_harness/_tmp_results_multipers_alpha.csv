@@ -1,3 +1,0 @@
-tool,case_id,regime,n_points,ambient_dim,max_dim,cold_ms,cold_alloc_kib,warm_median_ms,warm_p90_ms,warm_alloc_median_kib,simplex_count,edge_count,max_simplex_dim,notes,timestamp_utc
-multipers,alpha_n200_d2_md2_s11,alpha_function_delaunay,200,2,2,4.934274998959154,,3.800550475716591,5.376433953642845,,1141,,2,"kwargs={'complex': 'alpha', 'output_type': 'simplextree', 'expand_dim': 2, 'num_collapses': 0, 'safe_conversion': False}",2026-02-24T03:32:44.802769+00:00
-multipers,alpha_n300_d2_md2_s17,alpha_function_delaunay,300,2,2,5.430140998214483,,4.698873002780601,5.05190301919356,,1749,,2,"kwargs={'complex': 'alpha', 'output_type': 'simplextree', 'expand_dim': 2, 'num_collapses': 0, 'safe_conversion': False}",2026-02-24T03:32:45.170611+00:00

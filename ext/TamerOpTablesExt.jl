@@ -2,18 +2,18 @@ module TamerOpTablesExt
 
 using Tables
 
-const PM = let pm = nothing
-    if isdefined(Main, :PosetModules)
-        pm = getfield(Main, :PosetModules)
+const TO = let pm = nothing
+    if isdefined(Main, :TamerOp)
+        pm = getfield(Main, :TamerOp)
     else
-        @eval import PosetModules
-        pm = PosetModules
+        @eval import TamerOp
+        pm = TamerOp
     end
     pm
 end
 
-const FEA = PM.Featurizers
-const Inv = PM.Invariants
+const FEA = TO.Featurizers
+const Inv = TO.Invariants
 
 @inline function _named_cols(names::Vector{Symbol}, cols::Vector)
     return NamedTuple{Tuple(names)}(Tuple(cols))

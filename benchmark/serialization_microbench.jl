@@ -4,7 +4,7 @@
 #
 # Purpose
 # - Benchmark Serialization.jl under multiple regimes:
-#   * internal owned formats (flange, encoding, dataset, pipeline)
+#   * internal owned formats (flange, encoding, dataset, pipeline, PL fringe, MPPI)
 #   * external adapters (interop fixture loaders)
 # - Report runtime + allocations + serialized size where applicable.
 #
@@ -23,26 +23,29 @@ using SparseArrays
 using LinearAlgebra
 using Logging
 
-if isdefined(Main, :PosetModules)
-    const PosetModules = getfield(Main, :PosetModules)
+if isdefined(Main, :TamerOp)
+    const TamerOp = getfield(Main, :TamerOp)
 else
     try
-        using PosetModules
+        using TamerOp
     catch
-        include(joinpath(@__DIR__, "..", "src", "PosetModules.jl"))
-        using .PosetModules
+        include(joinpath(@__DIR__, "..", "src", "TamerOp.jl"))
+        using .TamerOp
     end
 end
 
-const SER = PosetModules.Serialization
-const CM = PosetModules.CoreModules
-const OPT = PosetModules.Options
-const DT = PosetModules.DataTypes
-const EC = PosetModules.EncodingCore
-const RES = PosetModules.Results
-const FF = PosetModules.FiniteFringe
-const FZ = PosetModules.FlangeZn
-const ZE = PosetModules.ZnEncoding
+const SER = TamerOp.Serialization
+const CM = TamerOp.CoreModules
+const OPT = TamerOp.Options
+const DT = TamerOp.DataTypes
+const EC = TamerOp.EncodingCore
+const RES = TamerOp.Results
+const FF = TamerOp.FiniteFringe
+const FZ = TamerOp.FlangeZn
+const ZE = TamerOp.ZnEncoding
+const IR = TamerOp.IndicatorResolutions
+const PLB = TamerOp.PLBackend
+const INV = TamerOp.Invariants
 
 function _parse_int_arg(args, key::String, default::Int)
     for a in args
@@ -367,27 +370,81 @@ function _bench_dataset_pipeline(tmpdir::AbstractString; reps::Int, profile::Sym
         SER.save_dataset_json(path, data)
         _ = SER.load_dataset_json(path)
         bsave = _bench("save $(name)", () -> SER.save_dataset_json(path, data); reps=reps)
-        bload = _bench("load $(name)", () -> SER.load_dataset_json(path); reps=reps)
+        bload_strict = _bench("load $(name) strict", () -> SER.load_dataset_json(path; validation=:strict); reps=reps)
+        bload_trusted = _bench("load $(name) trusted", () -> SER.load_dataset_json(path; validation=:trusted); reps=reps)
         bytes = filesize(path)
         println("  file_size=", bytes, " bytes",
                 "  save_throughput=", round(_mb_per_s(bytes, bsave.ms), digits=2), " MB/s",
-                "  load_throughput=", round(_mb_per_s(bytes, bload.ms), digits=2), " MB/s")
+                "  load_throughput=", round(_mb_per_s(bytes, bload_strict.ms), digits=2), " MB/s")
         push!(results, (section=:dataset, name="save_$(name)", ms=bsave.ms))
-        push!(results, (section=:dataset, name="load_$(name)", ms=bload.ms))
+        push!(results, (section=:dataset, name="load_$(name)_strict", ms=bload_strict.ms))
+        push!(results, (section=:dataset, name="load_$(name)_trusted", ms=bload_trusted.ms))
     end
 
     ppath = joinpath(tmpdir, "pipeline_pointcloud.json")
     SER.save_pipeline_json(ppath, point_cloud, spec; degree=1, pipeline_opts=popts)
     _ = SER.load_pipeline_json(ppath)
     bpsave = _bench("save pipeline(pointcloud)", () -> SER.save_pipeline_json(ppath, point_cloud, spec; degree=1, pipeline_opts=popts); reps=reps)
-    bpload = _bench("load pipeline(pointcloud)", () -> SER.load_pipeline_json(ppath); reps=reps)
+    bpload_strict = _bench("load pipeline(pointcloud) strict", () -> SER.load_pipeline_json(ppath; validation=:strict); reps=reps)
+    bpload_trusted = _bench("load pipeline(pointcloud) trusted", () -> SER.load_pipeline_json(ppath; validation=:trusted); reps=reps)
     push!(results, (section=:pipeline, name="save_pipeline", ms=bpsave.ms))
-    push!(results, (section=:pipeline, name="load_pipeline", ms=bpload.ms))
+    push!(results, (section=:pipeline, name="load_pipeline_strict", ms=bpload_strict.ms))
+    push!(results, (section=:pipeline, name="load_pipeline_trusted", ms=bpload_trusted.ms))
+    return results
+end
+
+function _bench_owned_aux(tmpdir::AbstractString; reps::Int, profile::Symbol)
+    println("\n=== Section D: PL fringe + MPPI JSON ===")
+    results = NamedTuple[]
+
+    Aup = reshape(CM.QQ[-1 0], 1, 2)
+    bup = CM.QQ[0]
+    Adown = reshape(CM.QQ[1 0], 1, 2)
+    bdown = CM.QQ[2]
+    ups = [TamerOp.PLPolyhedra.PLUpset(TamerOp.PLPolyhedra.PolyUnion(2, [
+        TamerOp.PLPolyhedra.HPoly(2, Aup, bup, nothing, falses(1), TamerOp.PLPolyhedra.STRICT_EPS_QQ),
+    ]))]
+    downs = [TamerOp.PLPolyhedra.PLDownset(TamerOp.PLPolyhedra.PolyUnion(2, [
+        TamerOp.PLPolyhedra.HPoly(2, Adown, bdown, nothing, falses(1), TamerOp.PLPolyhedra.STRICT_EPS_QQ),
+    ]))]
+    Fpl = TamerOp.PLPolyhedra.PLFringe(2, ups, downs, reshape(CM.QQ[1], 1, 1))
+    pl_path = joinpath(tmpdir, "pl_fringe.json")
+    SER.save_pl_fringe_json(pl_path, Fpl)
+    bpl_save = _bench("save pl_fringe", () -> SER.save_pl_fringe_json(pl_path, Fpl); reps=reps)
+    bpl_load_strict = _bench("load pl_fringe strict", () -> SER.load_pl_fringe_json(pl_path; validation=:strict); reps=reps)
+    bpl_load_trusted = _bench("load pl_fringe trusted", () -> SER.load_pl_fringe_json(pl_path; validation=:trusted); reps=reps)
+    push!(results, (section=:pl_fringe, name="save_pl_fringe", ms=bpl_save.ms))
+    push!(results, (section=:pl_fringe, name="load_pl_fringe_strict", ms=bpl_load_strict.ms))
+    push!(results, (section=:pl_fringe, name="load_pl_fringe_trusted", ms=bpl_load_trusted.ms))
+
+    Ups = [PLB.BoxUpset([0.0, 0.0], [1.0, 1.0])]
+    Downs = [PLB.BoxDownset([2.0, 2.0], [3.0, 3.0])]
+    _, Hbox, pibox = PLB.encode_fringe_boxes(Ups, Downs)
+    Mbox = IR.pmodule_from_fringe(Hbox)
+    resolution = profile == :full ? 16 : 8
+    img = INV.mpp_image(Mbox, pibox; resolution=resolution, sigma=0.3, N=4)
+
+    dpath = joinpath(tmpdir, "mpp_decomposition.json")
+    ipath = joinpath(tmpdir, "mpp_image.json")
+    INV.save_mpp_decomposition_json(dpath, img.decomp)
+    INV.save_mpp_image_json(ipath, img)
+    bd_save = _bench("save mpp_decomposition", () -> INV.save_mpp_decomposition_json(dpath, img.decomp); reps=reps)
+    bd_load_strict = _bench("load mpp_decomposition strict", () -> INV.load_mpp_decomposition_json(dpath; validation=:strict); reps=reps)
+    bd_load_trusted = _bench("load mpp_decomposition trusted", () -> INV.load_mpp_decomposition_json(dpath; validation=:trusted); reps=reps)
+    bi_save = _bench("save mpp_image", () -> INV.save_mpp_image_json(ipath, img); reps=reps)
+    bi_load_strict = _bench("load mpp_image strict", () -> INV.load_mpp_image_json(ipath; validation=:strict); reps=reps)
+    bi_load_trusted = _bench("load mpp_image trusted", () -> INV.load_mpp_image_json(ipath; validation=:trusted); reps=reps)
+    push!(results, (section=:mpp, name="save_decomposition", ms=bd_save.ms))
+    push!(results, (section=:mpp, name="load_decomposition_strict", ms=bd_load_strict.ms))
+    push!(results, (section=:mpp, name="load_decomposition_trusted", ms=bd_load_trusted.ms))
+    push!(results, (section=:mpp, name="save_image", ms=bi_save.ms))
+    push!(results, (section=:mpp, name="load_image_strict", ms=bi_load_strict.ms))
+    push!(results, (section=:mpp, name="load_image_trusted", ms=bi_load_trusted.ms))
     return results
 end
 
 function _bench_external_adapters(; reps::Int, profile::Symbol)
-    println("\n=== Section D: External adapter fixture loads ===")
+    println("\n=== Section E: External adapter fixture loads ===")
     fixtures = joinpath(@__DIR__, "..", "test", "fixtures", "interop")
     isdir(fixtures) || error("Interop fixtures not found: $(fixtures)")
 
@@ -450,6 +507,7 @@ function main(args=ARGS)
         append!(all_results, _bench_flange_roundtrip(tmpdir; reps=reps, profile=profile))
         append!(all_results, _bench_encoding_roundtrip(tmpdir; reps=reps, profile=profile))
         append!(all_results, _bench_dataset_pipeline(tmpdir; reps=reps, profile=profile))
+        append!(all_results, _bench_owned_aux(tmpdir; reps=reps, profile=profile))
         if include_external
             append!(all_results, _bench_external_adapters(; reps=reps, profile=profile))
         end

@@ -157,57 +157,46 @@ end
 function _run_probe(probe::String, DC::CC.DoubleComplex{K}) where {K}
     if probe == "vertical_build_auto"
         return () -> begin
-            ss = CC.spectral_sequence(DC; first=:vertical)
+            ss = CC.spectral_sequence(DC; output=:full, first=:vertical)
             _digest_diff(CC.differential(ss, 1))
         end
     elseif probe == "horizontal_build_auto"
         return () -> begin
-            ss = CC.spectral_sequence(DC; first=:horizontal)
+            ss = CC.spectral_sequence(DC; output=:full, first=:horizontal)
             _digest_diff(CC.differential(ss, 1))
         end
     elseif probe == "horizontal_build_optimized"
         return () -> begin
-            old = CC._spectral_exact_horizontal_filtimg_mode[]
+            old = CC._spectral_exact_filtimg_basis_mode[]
             try
-                CC._spectral_exact_horizontal_filtimg_mode[] = :optimized
-                ss = CC.spectral_sequence(DC; first=:horizontal)
+                CC._spectral_exact_filtimg_basis_mode[] = :full
+                ss = CC.spectral_sequence(DC; output=:full, first=:horizontal)
                 _digest_diff(CC.differential(ss, 1))
             finally
-                CC._spectral_exact_horizontal_filtimg_mode[] = old
-            end
-        end
-    elseif probe == "horizontal_build_legacy"
-        return () -> begin
-            old = CC._spectral_exact_horizontal_filtimg_mode[]
-            try
-                CC._spectral_exact_horizontal_filtimg_mode[] = :legacy
-                ss = CC.spectral_sequence(DC; first=:horizontal)
-                _digest_diff(CC.differential(ss, 1))
-            finally
-                CC._spectral_exact_horizontal_filtimg_mode[] = old
+                CC._spectral_exact_filtimg_basis_mode[] = old
             end
         end
     elseif probe == "page_terms_inf_vertical"
         return () -> begin
-            ss = CC.spectral_sequence(DC; first=:vertical)
+            ss = CC.spectral_sequence(DC; output=:full, first=:vertical)
             _digest_terms(CC.page_terms(ss, :inf))
         end
     elseif probe == "page_terms_inf_vertical_prebuilt"
-        ss = CC.spectral_sequence(DC; first=:vertical)
+        ss = CC.spectral_sequence(DC; output=:full, first=:vertical)
         return () -> begin
             ss.Einf_spaces.value = nothing
             _digest_terms(CC.page_terms(ss, :inf))
         end
     elseif probe == "page_terms_inf_horizontal_prebuilt"
-        ss = CC.spectral_sequence(DC; first=:horizontal)
+        ss = CC.spectral_sequence(DC; output=:full, first=:horizontal)
         return () -> begin
             ss.Einf_spaces.value = nothing
             _digest_terms(CC.page_terms(ss, :inf))
         end
     elseif probe == "filtration_basis_mid_vertical"
         return () -> begin
-            ss = CC.spectral_sequence(DC; first=:vertical)
-            tmid = ss.Tot.tmin + ((ss.Tot.tmax - ss.Tot.tmin) ÷ 2)
+            ss = CC.spectral_sequence(DC; output=:full, first=:vertical)
+            tmid = ss.Tot.tmin + div(ss.Tot.tmax - ss.Tot.tmin, 2)
             B = CC.filtration_basis(ss, ss.pmin, tmid)
             size(B, 1) + size(B, 2)
         end

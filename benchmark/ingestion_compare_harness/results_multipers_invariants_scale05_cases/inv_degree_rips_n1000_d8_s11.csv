@@ -1,0 +1,2 @@
+tool,case_id,regime,invariant_kind,degree,n_points,ambient_dim,max_dim,cold_ms,cold_alloc_kib,warm_median_ms,warm_p90_ms,warm_alloc_median_kib,output_term_count,output_abs_mass,notes,timestamp_utc
+multipers,inv_degree_rips_n1000_d8_s11,degree_rips_parity,euler_signed_measure,0,500,8,1,42.79453900016961,,45.818916999451176,47.55051500069385,,4262,4715.0,cold_mode=warm_uncached;cache=none;stage=filtered_complex_to_signed_measure;builder=emulated_degree_via_ripslowerstar,2026-03-19T13:26:10.446656+00:00

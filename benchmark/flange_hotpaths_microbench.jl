@@ -105,6 +105,16 @@ function _grid_points_2d(nx::Int, ny::Int; x0::Int=0, y0::Int=0, ystep::Int=1)
     return pts
 end
 
+function _grid_points_2d_axis2_dense(nx::Int, ny::Int; x0::Int=0, y0::Int=0, xstep::Int=2)
+    pts = Vector{NTuple{2,Int}}(undef, nx * ny)
+    k = 1
+    @inbounds for i in 0:(nx - 1), j in 0:(ny - 1)
+        pts[k] = (x0 + i * xstep, y0 + j)
+        k += 1
+    end
+    return pts
+end
+
 function _dim_at_cached_olddecode!(cache::FZ.FlangeDimCache, FG::FZ.Flange, g)
     k = cache.kernel
     nr = FZ._fill_active_injectives_words_kernel!(cache.row_words, k, g)
@@ -124,12 +134,30 @@ function _dim_at_cached_olddecode!(cache::FZ.FlangeDimCache, FG::FZ.Flange, g)
     return FZ._store_rank!(cache, key, cache.row_words, cache.col_words, rk)
 end
 
+function _rank_restricted_words_old(field, A, row_words, col_words, nr, nc; nrows::Int, ncols::Int)
+    B = FL._materialize_restricted_dense_from_words(A, row_words, col_words, nr, nc, nrows, ncols)
+    return FL.rank(field, B; backend=:auto)
+end
+
 function main(; reps::Int=6, nqueries::Int=8_000, nflats::Int=32, ninj::Int=32, pool_size::Int=64)
     FG = _fixture(; nflats=nflats, ninj=ninj)
     points = _query_points(FG.n, nqueries; pool_size=pool_size)
     out = Vector{Int}(undef, length(points))
     miss_points = _grid_points_2d(max(32, min(128, cld(nqueries, 8))), 8; x0=-16, y0=-6, ystep=3)
     slab_points = _grid_points_2d(max(256, min(1024, cld(nqueries, 4))), 4; x0=-24, y0=-6, ystep=2)
+    slab_points_axis2 = _grid_points_2d_axis2_dense(4, max(256, min(1024, cld(nqueries, 4))); x0=-6, y0=-24, xstep=2)
+    miss_probe = FZ.FlangeDimCache(FG)
+    miss_states = Tuple{Vector{UInt64},Vector{UInt64},Int,Int}[]
+    seen = Set{UInt64}()
+    @inbounds for p in miss_points
+        nr = FZ._fill_active_injectives_words_kernel!(miss_probe.row_words, miss_probe.kernel, p)
+        nc = FZ._fill_active_flats_words_kernel!(miss_probe.col_words, miss_probe.kernel, p)
+        (nr == 0 || nc == 0) && continue
+        key = FZ._active_words_hash(miss_probe.row_words, miss_probe.col_words)
+        key in seen && continue
+        push!(seen, key)
+        push!(miss_states, (copy(miss_probe.row_words), copy(miss_probe.col_words), nr, nc))
+    end
 
     cache = FZ.FlangeDimCache(FG)
     ref = [FZ.dim_at(FG, p) for p in points]
@@ -141,6 +169,8 @@ function main(; reps::Int=6, nqueries::Int=8_000, nflats::Int=32, ninj::Int=32, 
     @assert out == ref
     slab_ref = FZ.dim_at_many(FG, slab_points; sweep=:none, dedup=true, sort_points=true)
     @assert FZ.dim_at_many(FG, slab_points; sweep=:auto, dedup=true, sort_points=true) == slab_ref
+    slab_ref_axis2 = FZ.dim_at_many(FG, slab_points_axis2; sweep=:none, dedup=true, sort_points=true)
+    @assert FZ.dim_at_many(FG, slab_points_axis2; sweep=:auto, dedup=true, sort_points=true) == slab_ref_axis2
 
     println("Flange hotpaths micro-benchmark")
     println("reps=$(reps), nqueries=$(nqueries), pool_size=$(pool_size), nflats=$(nflats), ninj=$(ninj)\n")
@@ -198,6 +228,74 @@ function main(; reps::Int=6, nqueries::Int=8_000, nflats::Int=32, ninj::Int=32, 
         s
     end; reps=reps)
 
+    b_rank_words_old = _bench("rank_words old materialize", () -> begin
+        s = 0
+        @inbounds for (row_words, col_words, nr, nc) in miss_states
+            s += _rank_restricted_words_old(FG.field, FG.phi, row_words, col_words, nr, nc;
+                                            nrows=cache.kernel.ninj, ncols=cache.kernel.nflat)
+        end
+        s
+    end; reps=reps)
+
+    b_rank_words_new = _bench("rank_words current", () -> begin
+        s = 0
+        @inbounds for (row_words, col_words, nr, nc) in miss_states
+            s += FL.rank_restricted_words(FG.field, FG.phi, row_words, col_words, nr, nc;
+                                          nrows=cache.kernel.ninj, ncols=cache.kernel.nflat)
+        end
+        s
+    end; reps=reps)
+
+    small_states = [(row_words, col_words, nr, nc) for (row_words, col_words, nr, nc) in miss_states
+                    if length(row_words) <= 2 && length(col_words) <= 2 && nr * nc <= 256]
+    b_rank_words_small_old = _bench("rank_words old smallmask", () -> begin
+        s = 0
+        @inbounds for (row_words, col_words, nr, nc) in small_states
+            s += _rank_restricted_words_old(FG.field, FG.phi, row_words, col_words, nr, nc;
+                                            nrows=cache.kernel.ninj, ncols=cache.kernel.nflat)
+        end
+        s
+    end; reps=reps)
+
+    b_rank_words_small_new = _bench("rank_words current smallmask", () -> begin
+        s = 0
+        @inbounds for (row_words, col_words, nr, nc) in small_states
+            s += FL.rank_restricted_words(FG.field, FG.phi, row_words, col_words, nr, nc;
+                                          nrows=cache.kernel.ninj, ncols=cache.kernel.nflat)
+        end
+        s
+    end; reps=reps)
+
+    b_rank_words_exact = _bench("rank_words exact", () -> begin
+        s = 0
+        @inbounds for (row_words, col_words, nr, nc) in miss_states
+            s += FL.rank_restricted_words(FG.field, FG.phi, row_words, col_words, nr, nc;
+                                          nrows=cache.kernel.ninj, ncols=cache.kernel.nflat,
+                                          backend=:exact)
+        end
+        s
+    end; reps=reps)
+
+    b_rank_words_modular = _bench("rank_words modular", () -> begin
+        s = 0
+        @inbounds for (row_words, col_words, nr, nc) in miss_states
+            s += FL.rank_restricted_words(FG.field, FG.phi, row_words, col_words, nr, nc;
+                                          nrows=cache.kernel.ninj, ncols=cache.kernel.nflat,
+                                          backend=:modular)
+        end
+        s
+    end; reps=reps)
+
+    b_rank_words_nemo = _bench("rank_words nemo", () -> begin
+        s = 0
+        @inbounds for (row_words, col_words, nr, nc) in miss_states
+            s += FL.rank_restricted_words(FG.field, FG.phi, row_words, col_words, nr, nc;
+                                          nrows=cache.kernel.ninj, ncols=cache.kernel.nflat,
+                                          backend=:nemo)
+        end
+        s
+    end; reps=reps)
+
     b_many = _bench("dim_at_many! sorted warm", () -> begin
         FZ.dim_at_many!(out, FG, points; cache=cache, sort_points=true)
         sum(out)
@@ -218,11 +316,32 @@ function main(; reps::Int=6, nqueries::Int=8_000, nflats::Int=32, ninj::Int=32, 
         sum(slab_out)
     end; reps=reps)
 
+    slab_out_axis2 = Vector{Int}(undef, length(slab_points_axis2))
+    b_slab_axis2_none = _bench("dim_at_many! slab axis2 none", () -> begin
+        c = FZ.FlangeDimCache(FG)
+        FZ.dim_at_many!(slab_out_axis2, FG, slab_points_axis2;
+                        cache=c, dedup=true, sort_points=true, sweep=:none)
+        sum(slab_out_axis2)
+    end; reps=reps)
+
+    b_slab_axis2_auto = _bench("dim_at_many! slab axis2 auto", () -> begin
+        c = FZ.FlangeDimCache(FG)
+        FZ.dim_at_many!(slab_out_axis2, FG, slab_points_axis2;
+                        cache=c, dedup=true, sort_points=true, sweep=:auto)
+        sum(slab_out_axis2)
+    end; reps=reps)
+
     println("  fill/pure-words speedup: ", round(b_fill.ms / max(1e-9, b_fill_words.ms), digits=3), "x")
     println("  fill/cache speedup: ", round(b_fill.ms / max(1e-9, b_cached.ms), digits=3), "x")
     println("  cache/many speedup: ", round(b_cached.ms / max(1e-9, b_many.ms), digits=3), "x")
     println("  miss words speedup: ", round(b_miss_old.ms / max(1e-9, b_miss_new.ms), digits=3), "x")
+    println("  rank words speedup: ", round(b_rank_words_old.ms / max(1e-9, b_rank_words_new.ms), digits=3), "x")
+    println("  rank words smallmask speedup: ", round(b_rank_words_small_old.ms / max(1e-9, b_rank_words_small_new.ms), digits=3), "x")
+    println("  rank auto/exact speedup: ", round(b_rank_words_exact.ms / max(1e-9, b_rank_words_new.ms), digits=3), "x")
+    println("  rank auto/modular speedup: ", round(b_rank_words_modular.ms / max(1e-9, b_rank_words_new.ms), digits=3), "x")
+    println("  rank auto/nemo speedup: ", round(b_rank_words_nemo.ms / max(1e-9, b_rank_words_new.ms), digits=3), "x")
     println("  slab auto speedup: ", round(b_slab_none.ms / max(1e-9, b_slab_auto.ms), digits=3), "x")
+    println("  slab axis2 auto speedup: ", round(b_slab_axis2_none.ms / max(1e-9, b_slab_axis2_auto.ms), digits=3), "x")
 end
 
 if abspath(PROGRAM_FILE) == @__FILE__

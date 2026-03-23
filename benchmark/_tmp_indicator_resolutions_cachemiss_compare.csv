@@ -1,4 +1,0 @@
-before_probe,after_probe,before_ms,after_ms,speedup_before_over_after
-ir indicator_resolutions uncached,ir indicator_resolutions uncached,163.627065,131.140071,1.2477274394643265
-ir indicator_resolutions cache_miss,ir indicator_resolutions cache_miss_after_clear,124.58037700000001,117.167777,1.0632648343238604
-ir indicator_resolutions cache_miss,ir indicator_resolutions cache_miss_fresh,124.58037700000001,117.678848,1.0586471495710088

@@ -74,17 +74,17 @@ using SparseArrays
 using TOML
 
 try
-    using PosetModules
+    using TamerOp
 catch
-    include(joinpath(@__DIR__, "..", "src", "PosetModules.jl"))
-    using .PosetModules
+    include(joinpath(@__DIR__, "..", "src", "TamerOp.jl"))
+    using .TamerOp
 end
 
-const PM = PosetModules.Advanced
-const CM = PM.CoreModules
-const DI = PosetModules.DataIngestion
-const AC = PosetModules.AbelianCategories
-const FL = PosetModules.FieldLinAlg
+const TO = TamerOp.Advanced
+const CM = TO.CoreModules
+const DI = TamerOp.DataIngestion
+const AC = TamerOp.AbelianCategories
+const FL = TamerOp.FieldLinAlg
 
 # Ensure NearestNeighbors extension is loaded when available so nn_backend=:auto
 # in benchmark cases reflects the intended fast CPU path.
@@ -121,7 +121,7 @@ struct IngestionBenchCase
     name::String
     family::Symbol
     data
-    spec::PosetModules.FiltrationSpec
+    spec::TamerOp.FiltrationSpec
     degree::Int
 end
 
@@ -229,8 +229,8 @@ end
 end
 
 function _construction_with_stage(raw, stage::Symbol)
-    if raw isa PosetModules.ConstructionOptions
-        return PosetModules.ConstructionOptions(;
+    if raw isa TamerOp.ConstructionOptions
+        return TamerOp.ConstructionOptions(;
             sparsify=raw.sparsify,
             collapse=raw.collapse,
             output_stage=stage,
@@ -246,7 +246,7 @@ function _construction_with_stage(raw, stage::Symbol)
     max_edges = _get_key(budget_raw, :max_edges, nothing)
     memory_budget_bytes = _get_key(budget_raw, :memory_budget_bytes, nothing)
 
-    return PosetModules.ConstructionOptions(;
+    return TamerOp.ConstructionOptions(;
         sparsify=sparsify,
         collapse=collapse,
         output_stage=stage,
@@ -254,7 +254,7 @@ function _construction_with_stage(raw, stage::Symbol)
     )
 end
 
-function _spec_with_stage(spec::PosetModules.FiltrationSpec, stage::Symbol)
+function _spec_with_stage(spec::TamerOp.FiltrationSpec, stage::Symbol)
     ps = Pair{Symbol,Any}[]
     raw_construction = nothing
     for (k, v) in pairs(spec.params)
@@ -266,7 +266,7 @@ function _spec_with_stage(spec::PosetModules.FiltrationSpec, stage::Symbol)
     end
     push!(ps, :construction => _construction_with_stage(raw_construction, stage))
     nt = (; (kv.first => kv.second for kv in ps)...)
-    return PosetModules.FiltrationSpec(; kind=spec.kind, nt...)
+    return TamerOp.FiltrationSpec(; kind=spec.kind, nt...)
 end
 
 function _point_cloud_fixture(n::Int; seed::Int=0xD471)
@@ -277,7 +277,7 @@ function _point_cloud_fixture(n::Int; seed::Int=0xD471)
         y = 0.35 * sin(8.0 * x) + 0.15 * randn(rng)
         points[i] = [x, y]
     end
-    return PosetModules.PointCloud(points)
+    return TamerOp.PointCloud(points)
 end
 
 function _graph_fixture(n::Int; seed::Int=0xD472)
@@ -306,7 +306,7 @@ function _graph_fixture(n::Int; seed::Int=0xD472)
     edges = collect(keys(edge_w))
     sort!(edges)
     weights = [edge_w[e] for e in edges]
-    return PosetModules.GraphData(n, edges; coords=coords, weights=weights)
+    return TamerOp.GraphData(n, edges; coords=coords, weights=weights)
 end
 
 function _graph_clique_fixture(n::Int; seed::Int=0xD473)
@@ -328,7 +328,7 @@ function _graph_clique_fixture(n::Int; seed::Int=0xD473)
     edges = collect(keys(edge_w))
     sort!(edges)
     weights = [edge_w[e] for e in edges]
-    return PosetModules.GraphData(n, edges; coords=coords, weights=weights)
+    return TamerOp.GraphData(n, edges; coords=coords, weights=weights)
 end
 
 function _image_fixture(side::Int; seed::Int=0xD474)
@@ -340,7 +340,7 @@ function _image_fixture(side::Int; seed::Int=0xD474)
     vals = sort(vec(copy(img)))
     thr = vals[clamp(cld(3 * length(vals), 5), 1, length(vals))]
     mask = img .> thr
-    return PosetModules.ImageNd(img), mask
+    return TamerOp.ImageNd(img), mask
 end
 
 function _embedded_planar_fixture(n::Int; seed::Int=0xD475)
@@ -363,7 +363,7 @@ function _embedded_planar_fixture(n::Int; seed::Int=0xD475)
     xmax = maximum(v[1] for v in verts)
     ymin = minimum(v[2] for v in verts)
     ymax = maximum(v[2] for v in verts)
-    data = PosetModules.EmbeddedPlanarGraph2D(verts, edges; bbox=(xmin, xmax, ymin, ymax))
+    data = TamerOp.EmbeddedPlanarGraph2D(verts, edges; bbox=(xmin, xmax, ymin, ymax))
     return data, weights
 end
 
@@ -387,15 +387,15 @@ function _synthetic_cases(; point_n::Int, graph_n::Int, clique_n::Int, image_sid
     large_point = point_n >= 5_000
     if !large_point
         point_d2_n = min(point_n, 42)
-        point_data_d2 = PosetModules.PointCloud(point_data.points[1:point_d2_n])
+        point_data_d2 = TamerOp.PointCloud(point_data.points[1:point_d2_n])
         push!(cases, IngestionBenchCase(
             "point_rips_dense_d1",
             :point,
             point_data,
-            PosetModules.FiltrationSpec(
+            TamerOp.FiltrationSpec(
                 kind=:rips,
                 max_dim=1,
-                construction=PosetModules.ConstructionOptions(; sparsify=:none, budget=point_budget),
+                construction=TamerOp.ConstructionOptions(; sparsify=:none, budget=point_budget),
             ),
             0,
         ))
@@ -403,10 +403,10 @@ function _synthetic_cases(; point_n::Int, graph_n::Int, clique_n::Int, image_sid
             "point_rips_dense_d2",
             :point,
             point_data_d2,
-            PosetModules.FiltrationSpec(
+            TamerOp.FiltrationSpec(
                 kind=:rips,
                 max_dim=2,
-                construction=PosetModules.ConstructionOptions(; sparsify=:none, budget=point_budget),
+                construction=TamerOp.ConstructionOptions(; sparsify=:none, budget=point_budget),
             ),
             0,
         ))
@@ -414,11 +414,11 @@ function _synthetic_cases(; point_n::Int, graph_n::Int, clique_n::Int, image_sid
             "point_rips_density_dense_d1",
             :point,
             point_data,
-            PosetModules.FiltrationSpec(
+            TamerOp.FiltrationSpec(
                 kind=:rips_density,
                 max_dim=1,
                 density_k=point_knn,
-                construction=PosetModules.ConstructionOptions(; sparsify=:none, budget=point_budget),
+                construction=TamerOp.ConstructionOptions(; sparsify=:none, budget=point_budget),
             ),
             0,
         ))
@@ -426,12 +426,12 @@ function _synthetic_cases(; point_n::Int, graph_n::Int, clique_n::Int, image_sid
             "point_function_rips_dense_d1",
             :point,
             point_data,
-            PosetModules.FiltrationSpec(
+            TamerOp.FiltrationSpec(
                 kind=:function_rips,
                 max_dim=1,
                 vertex_values=pvals,
                 simplex_agg=:max,
-                construction=PosetModules.ConstructionOptions(; sparsify=:none, budget=point_budget),
+                construction=TamerOp.ConstructionOptions(; sparsify=:none, budget=point_budget),
             ),
             0,
         ))
@@ -440,12 +440,12 @@ function _synthetic_cases(; point_n::Int, graph_n::Int, clique_n::Int, image_sid
         "point_rips_knn_sparsify",
         :point,
         point_data,
-        PosetModules.FiltrationSpec(
+        TamerOp.FiltrationSpec(
             kind=:rips,
             max_dim=1,
             knn=point_knn,
             nn_backend=:auto,
-            construction=PosetModules.ConstructionOptions(; sparsify=:knn, budget=point_budget),
+            construction=TamerOp.ConstructionOptions(; sparsify=:knn, budget=point_budget),
         ),
         0,
     ))
@@ -453,11 +453,11 @@ function _synthetic_cases(; point_n::Int, graph_n::Int, clique_n::Int, image_sid
         "point_rips_greedy_landmarks",
         :point,
         point_data,
-        PosetModules.FiltrationSpec(
+        TamerOp.FiltrationSpec(
             kind=:rips,
             max_dim=1,
             n_landmarks=min(point_n, point_n >= 50_000 ? 2_048 : max(512, ceil(Int, sqrt(point_n)))),
-            construction=PosetModules.ConstructionOptions(; sparsify=:greedy_perm, budget=point_budget),
+            construction=TamerOp.ConstructionOptions(; sparsify=:greedy_perm, budget=point_budget),
         ),
         0,
     ))
@@ -465,11 +465,11 @@ function _synthetic_cases(; point_n::Int, graph_n::Int, clique_n::Int, image_sid
         "point_landmark_rips_d1",
         :point,
         point_data,
-        PosetModules.FiltrationSpec(
+        TamerOp.FiltrationSpec(
             kind=:landmark_rips,
             max_dim=1,
             landmarks=landmarks,
-            construction=PosetModules.ConstructionOptions(; budget=point_budget),
+            construction=TamerOp.ConstructionOptions(; budget=point_budget),
         ),
         0,
     ))
@@ -477,14 +477,14 @@ function _synthetic_cases(; point_n::Int, graph_n::Int, clique_n::Int, image_sid
         "point_function_rips_d1",
         :point,
         point_data,
-        PosetModules.FiltrationSpec(
+        TamerOp.FiltrationSpec(
             kind=:function_rips,
             max_dim=1,
             vertex_values=pvals,
             simplex_agg=:max,
             knn=point_knn,
             nn_backend=:auto,
-            construction=PosetModules.ConstructionOptions(; sparsify=:knn, budget=point_budget),
+            construction=TamerOp.ConstructionOptions(; sparsify=:knn, budget=point_budget),
         ),
         0,
     ))
@@ -493,12 +493,12 @@ function _synthetic_cases(; point_n::Int, graph_n::Int, clique_n::Int, image_sid
             "point_rips_knn_nearestneighbors",
             :point,
             point_data,
-            PosetModules.FiltrationSpec(
+            TamerOp.FiltrationSpec(
                 kind=:rips,
                 max_dim=1,
                 knn=point_knn,
                 nn_backend=:nearestneighbors,
-                construction=PosetModules.ConstructionOptions(; sparsify=:knn, budget=point_budget),
+                construction=TamerOp.ConstructionOptions(; sparsify=:knn, budget=point_budget),
             ),
             0,
         ))
@@ -506,59 +506,59 @@ function _synthetic_cases(; point_n::Int, graph_n::Int, clique_n::Int, image_sid
             "point_rips_knn_approx",
             :point,
             point_data,
-            PosetModules.FiltrationSpec(
+            TamerOp.FiltrationSpec(
                 kind=:rips,
                 max_dim=1,
                 knn=point_knn,
                 nn_backend=:approx,
                 nn_approx_candidates=48,
-                construction=PosetModules.ConstructionOptions(; sparsify=:knn, budget=point_budget),
+                construction=TamerOp.ConstructionOptions(; sparsify=:knn, budget=point_budget),
             ),
             0,
         ))
     end
 
     delaunay_n = min(point_n, 96)
-    point_delaunay = PosetModules.PointCloud(point_data.points[1:delaunay_n])
+    point_delaunay = TamerOp.PointCloud(point_data.points[1:delaunay_n])
     pvals_d = pvals[1:delaunay_n]
     push!(cases, IngestionBenchCase(
         "point_delaunay_lower_star_d2",
         :point,
         point_delaunay,
-        PosetModules.FiltrationSpec(kind=:delaunay_lower_star, max_dim=2, vertex_values=pvals_d, simplex_agg=:max),
+        TamerOp.FiltrationSpec(kind=:delaunay_lower_star, max_dim=2, vertex_values=pvals_d, simplex_agg=:max),
         0,
     ))
     push!(cases, IngestionBenchCase(
         "point_function_delaunay_d2",
         :point,
         point_delaunay,
-        PosetModules.FiltrationSpec(kind=:function_delaunay, max_dim=2, vertex_values=pvals_d, simplex_agg=:max),
+        TamerOp.FiltrationSpec(kind=:function_delaunay, max_dim=2, vertex_values=pvals_d, simplex_agg=:max),
         0,
     ))
     push!(cases, IngestionBenchCase(
         "point_alpha_d2",
         :point,
         point_delaunay,
-        PosetModules.FiltrationSpec(kind=:alpha, max_dim=2),
+        TamerOp.FiltrationSpec(kind=:alpha, max_dim=2),
         0,
     ))
     push!(cases, IngestionBenchCase(
         "point_core_delaunay_d2",
         :point,
         point_delaunay,
-        PosetModules.FiltrationSpec(kind=:core_delaunay, max_dim=2),
+        TamerOp.FiltrationSpec(kind=:core_delaunay, max_dim=2),
         0,
     ))
     push!(cases, IngestionBenchCase(
         "point_degree_rips_knn_d1",
         :point,
         point_data,
-        PosetModules.FiltrationSpec(
+        TamerOp.FiltrationSpec(
             kind=:degree_rips,
             max_dim=1,
             knn=point_knn,
             nn_backend=:auto,
-            construction=PosetModules.ConstructionOptions(; sparsify=:knn, budget=point_budget),
+            construction=TamerOp.ConstructionOptions(; sparsify=:knn, budget=point_budget),
         ),
         0,
     ))
@@ -566,34 +566,34 @@ function _synthetic_cases(; point_n::Int, graph_n::Int, clique_n::Int, image_sid
         "point_core",
         :point,
         point_data,
-        PosetModules.FiltrationSpec(kind=:core, knn=core_knn, vertex_values=pvals),
+        TamerOp.FiltrationSpec(kind=:core, knn=core_knn, vertex_values=pvals),
         0,
     ))
     push!(cases, IngestionBenchCase(
         "point_rhomboid_d1",
         :point,
         point_data,
-        PosetModules.FiltrationSpec(kind=:rhomboid, max_dim=1, vertex_values=pvals),
+        TamerOp.FiltrationSpec(kind=:rhomboid, max_dim=1, vertex_values=pvals),
         0,
     ))
     rhomboid2_n = min(point_n, 52)
-    point_rhomboid2 = PosetModules.PointCloud(point_data.points[1:rhomboid2_n])
+    point_rhomboid2 = TamerOp.PointCloud(point_data.points[1:rhomboid2_n])
     pvals_r2 = pvals[1:rhomboid2_n]
     push!(cases, IngestionBenchCase(
         "point_rhomboid_d2",
         :point,
         point_rhomboid2,
-        PosetModules.FiltrationSpec(kind=:rhomboid, max_dim=2, vertex_values=pvals_r2),
+        TamerOp.FiltrationSpec(kind=:rhomboid, max_dim=2, vertex_values=pvals_r2),
         0,
     ))
-    point_tree_data = PosetModules.encode(
+    point_tree_data = TamerOp.encode(
         point_data,
-        PosetModules.FiltrationSpec(
+        TamerOp.FiltrationSpec(
             kind=:rips,
             max_dim=1,
             knn=point_knn,
             nn_backend=:auto,
-            construction=PosetModules.ConstructionOptions(; sparsify=:knn, output_stage=:simplex_tree, budget=point_budget),
+            construction=TamerOp.ConstructionOptions(; sparsify=:knn, output_stage=:simplex_tree, budget=point_budget),
         );
         degree=0,
         cache=:auto,
@@ -602,29 +602,29 @@ function _synthetic_cases(; point_n::Int, graph_n::Int, clique_n::Int, image_sid
         "point_simplextree_input_rips",
         :point,
         point_tree_data,
-        PosetModules.FiltrationSpec(kind=:rips, max_dim=1,
-                                    construction=PosetModules.ConstructionOptions(; output_stage=:encoding_result, budget=point_budget)),
+        TamerOp.FiltrationSpec(kind=:rips, max_dim=1,
+                                    construction=TamerOp.ConstructionOptions(; output_stage=:encoding_result, budget=point_budget)),
         0,
     ))
     push!(cases, IngestionBenchCase(
         "point_simplextree_input_rips_eps",
         :point,
         point_tree_data,
-        PosetModules.FiltrationSpec(
+        TamerOp.FiltrationSpec(
             kind=:graded,
             eps=0.05,
-            construction=PosetModules.ConstructionOptions(; output_stage=:encoding_result, budget=point_budget),
+            construction=TamerOp.ConstructionOptions(; output_stage=:encoding_result, budget=point_budget),
         ),
         0,
     ))
     push!(cases, IngestionBenchCase(
         "point_simplextree_input_rips_eps_via_graded",
         :point,
-        PosetModules.DataIngestion._graded_complex_from_simplex_tree(point_tree_data),
-        PosetModules.FiltrationSpec(
+        TamerOp.DataIngestion._graded_complex_from_simplex_tree(point_tree_data),
+        TamerOp.FiltrationSpec(
             kind=:graded,
             eps=0.05,
-            construction=PosetModules.ConstructionOptions(; output_stage=:encoding_result, budget=point_budget),
+            construction=TamerOp.ConstructionOptions(; output_stage=:encoding_result, budget=point_budget),
         ),
         0,
     ))
@@ -636,14 +636,14 @@ function _synthetic_cases(; point_n::Int, graph_n::Int, clique_n::Int, image_sid
         [Float64[0.0, 0.0]],
         [Float64[1.0, 0.0], Float64[0.0, 1.0], Float64[1.0, 1.0]],
     ]
-    mc_g = PosetModules.MultiCriticalGradedComplex(mc_cells, [mc_b1], mc_grades)
-    mc_st = PosetModules.DataIngestion._simplex_tree_multi_from_complex(mc_g)
-    mc_one_spec = PosetModules.FiltrationSpec(
+    mc_g = TamerOp.MultiCriticalGradedComplex(mc_cells, [mc_b1], mc_grades)
+    mc_st = TamerOp.DataIngestion._simplex_tree_multi_from_complex(mc_g)
+    mc_one_spec = TamerOp.FiltrationSpec(
         kind=:graded,
         multicritical=:one_critical,
         onecritical_selector=:lexmin,
         onecritical_enforce_boundary=true,
-        construction=PosetModules.ConstructionOptions(; output_stage=:encoding_result, budget=point_budget),
+        construction=TamerOp.ConstructionOptions(; output_stage=:encoding_result, budget=point_budget),
     )
     push!(cases, IngestionBenchCase(
         "point_simplextree_multicritical_onecritical",
@@ -666,28 +666,28 @@ function _synthetic_cases(; point_n::Int, graph_n::Int, clique_n::Int, image_sid
         "graph_lower_star",
         :graph,
         graph_data,
-        PosetModules.FiltrationSpec(kind=:graph_lower_star, vertex_values=gvals, simplex_agg=:max),
+        TamerOp.FiltrationSpec(kind=:graph_lower_star, vertex_values=gvals, simplex_agg=:max),
         0,
     ))
     push!(cases, IngestionBenchCase(
         "graph_centrality_degree",
         :graph,
         graph_data,
-        PosetModules.FiltrationSpec(kind=:graph_centrality, centrality=:degree, lift=:lower_star),
+        TamerOp.FiltrationSpec(kind=:graph_centrality, centrality=:degree, lift=:lower_star),
         0,
     ))
     push!(cases, IngestionBenchCase(
         "graph_geodesic_hop",
         :graph,
         graph_data,
-        PosetModules.FiltrationSpec(kind=:graph_geodesic, sources=[1], metric=:hop, lift=:lower_star),
+        TamerOp.FiltrationSpec(kind=:graph_geodesic, sources=[1], metric=:hop, lift=:lower_star),
         0,
     ))
     push!(cases, IngestionBenchCase(
         "graph_function_geodesic_bi",
         :graph,
         graph_data,
-        PosetModules.FiltrationSpec(
+        TamerOp.FiltrationSpec(
             kind=:graph_function_geodesic_bifiltration,
             sources=[1],
             metric=:hop,
@@ -701,21 +701,21 @@ function _synthetic_cases(; point_n::Int, graph_n::Int, clique_n::Int, image_sid
         "graph_weight_threshold_graph",
         :graph,
         graph_data,
-        PosetModules.FiltrationSpec(kind=:graph_weight_threshold, lift=:graph, edge_weights=graph_data.weights),
+        TamerOp.FiltrationSpec(kind=:graph_weight_threshold, lift=:graph, edge_weights=graph_data.weights),
         0,
     ))
     push!(cases, IngestionBenchCase(
         "graph_edge_weighted",
         :graph,
         graph_data,
-        PosetModules.FiltrationSpec(kind=:edge_weighted, edge_weights=graph_data.weights),
+        TamerOp.FiltrationSpec(kind=:edge_weighted, edge_weights=graph_data.weights),
         0,
     ))
     push!(cases, IngestionBenchCase(
         "graph_core",
         :graph,
         graph_data,
-        PosetModules.FiltrationSpec(kind=:core, vertex_values=gvals),
+        TamerOp.FiltrationSpec(kind=:core, vertex_values=gvals),
         0,
     ))
 
@@ -725,14 +725,14 @@ function _synthetic_cases(; point_n::Int, graph_n::Int, clique_n::Int, image_sid
         "graph_weight_threshold_clique_d2",
         :graph,
         graph_clique,
-        PosetModules.FiltrationSpec(kind=:graph_weight_threshold, lift=:clique, max_dim=2, edge_weights=graph_clique.weights),
+        TamerOp.FiltrationSpec(kind=:graph_weight_threshold, lift=:clique, max_dim=2, edge_weights=graph_clique.weights),
         0,
     ))
     push!(cases, IngestionBenchCase(
         "graph_clique_lower_star_d2",
         :graph,
         graph_clique,
-        PosetModules.FiltrationSpec(kind=:clique_lower_star, max_dim=2, vertex_values=gvals_clique, simplex_agg=:max),
+        TamerOp.FiltrationSpec(kind=:clique_lower_star, max_dim=2, vertex_values=gvals_clique, simplex_agg=:max),
         0,
     ))
 
@@ -741,21 +741,21 @@ function _synthetic_cases(; point_n::Int, graph_n::Int, clique_n::Int, image_sid
         "image_lower_star",
         :image,
         image_data,
-        PosetModules.FiltrationSpec(kind=:lower_star),
+        TamerOp.FiltrationSpec(kind=:lower_star),
         0,
     ))
     push!(cases, IngestionBenchCase(
         "image_cubical",
         :image,
         image_data,
-        PosetModules.FiltrationSpec(kind=:cubical),
+        TamerOp.FiltrationSpec(kind=:cubical),
         0,
     ))
     push!(cases, IngestionBenchCase(
         "image_distance_bifiltration",
         :image,
         image_data,
-        PosetModules.FiltrationSpec(kind=:image_distance_bifiltration, mask=image_mask),
+        TamerOp.FiltrationSpec(kind=:image_distance_bifiltration, mask=image_mask),
         0,
     ))
 
@@ -765,7 +765,7 @@ function _synthetic_cases(; point_n::Int, graph_n::Int, clique_n::Int, image_sid
         "embedded_wing_vein_bifiltration",
         :image,
         embedded_data,
-        PosetModules.FiltrationSpec(
+        TamerOp.FiltrationSpec(
             kind=:wing_vein_bifiltration,
             grid=(32, 32),
             bbox=embedded_data.bbox,
@@ -775,16 +775,16 @@ function _synthetic_cases(; point_n::Int, graph_n::Int, clique_n::Int, image_sid
     push!(cases, IngestionBenchCase(
         "embedded_edge_weighted",
         :graph,
-        PosetModules.GraphData(length(embedded_data.vertices), embedded_data.edges;
+        TamerOp.GraphData(length(embedded_data.vertices), embedded_data.edges;
                                coords=embedded_data.vertices, weights=embedded_weights),
-        PosetModules.FiltrationSpec(kind=:edge_weighted, edge_weights=embedded_weights),
+        TamerOp.FiltrationSpec(kind=:edge_weighted, edge_weights=embedded_weights),
         0,
     ))
 
     return cases
 end
 
-function _write_pointcloud_csv(path::AbstractString, data::PosetModules.PointCloud)
+function _write_pointcloud_csv(path::AbstractString, data::TamerOp.PointCloud)
     open(path, "w") do io
         for p in data.points
             println(io, join(Float64[p...], ","))
@@ -793,7 +793,7 @@ function _write_pointcloud_csv(path::AbstractString, data::PosetModules.PointClo
     return nothing
 end
 
-function _write_graph_csv(path::AbstractString, data::PosetModules.GraphData)
+function _write_graph_csv(path::AbstractString, data::TamerOp.GraphData)
     open(path, "w") do io
         println(io, "u,v,weight")
         has_weights = data.weights !== nothing && length(data.weights) == length(data.edges)
@@ -806,7 +806,7 @@ function _write_graph_csv(path::AbstractString, data::PosetModules.GraphData)
     return nothing
 end
 
-function _write_image_csv(path::AbstractString, data::PosetModules.ImageNd)
+function _write_image_csv(path::AbstractString, data::TamerOp.ImageNd)
     arr = data.data
     if ndims(arr) == 2
         writedlm(path, Matrix{Float64}(arr), ',')
@@ -830,16 +830,16 @@ function _write_fixture_pack(dir::AbstractString, cases::Vector{IngestionBenchCa
         pipeline_file = base * ".pipeline.json"
         pipeline_path = joinpath(dir, pipeline_file)
         spec = _spec_with_stage(case.spec, :encoding_result)
-        PosetModules.save_pipeline_json(pipeline_path, case.data, spec; degree=case.degree)
+        TamerOp.save_pipeline_json(pipeline_path, case.data, spec; degree=case.degree)
 
         raw_file = ""
-        if case.data isa PosetModules.PointCloud
+        if case.data isa TamerOp.PointCloud
             raw_file = base * ".points.csv"
             _write_pointcloud_csv(joinpath(dir, raw_file), case.data)
-        elseif case.data isa PosetModules.GraphData
+        elseif case.data isa TamerOp.GraphData
             raw_file = base * ".edges.csv"
             _write_graph_csv(joinpath(dir, raw_file), case.data)
-        elseif case.data isa PosetModules.ImageNd
+        elseif case.data isa TamerOp.ImageNd
             raw_file = base * ".image.csv"
             _write_image_csv(joinpath(dir, raw_file), case.data)
         end
@@ -881,7 +881,7 @@ function _load_external_cases(dir::AbstractString)
                 @warn "Skipping missing pipeline fixture" path=pipe_path
                 continue
             end
-            data, spec, degree, _ = PosetModules.load_pipeline_json(pipe_path)
+            data, spec, degree, _ = TamerOp.load_pipeline_json(pipe_path)
             name = get(e, "name", basename(pipe_path))
             fam = Symbol(get(e, "family", "external"))
             push!(cases, IngestionBenchCase(name, fam, data, spec, Int(degree)))
@@ -890,7 +890,7 @@ function _load_external_cases(dir::AbstractString)
     end
 
     for path in sort(filter(p -> endswith(p, ".pipeline.json"), readdir(dir; join=true)))
-        data, spec, degree, _ = PosetModules.load_pipeline_json(path)
+        data, spec, degree, _ = TamerOp.load_pipeline_json(path)
         name = replace(basename(path), ".pipeline.json" => "")
         push!(cases, IngestionBenchCase(name, :external, data, spec, Int(degree)))
     end
@@ -899,13 +899,13 @@ end
 
 function _case_size_hint(case::IngestionBenchCase)
     d = case.data
-    if d isa PosetModules.PointCloud
+    if d isa TamerOp.PointCloud
         n = length(d.points)
         m = n == 0 ? 0 : length(d.points[1])
         return "n=$(n), dim=$(m)"
-    elseif d isa PosetModules.GraphData
+    elseif d isa TamerOp.GraphData
         return "n=$(d.n), edges=$(length(d.edges))"
-    elseif d isa PosetModules.ImageNd
+    elseif d isa TamerOp.ImageNd
         return "size=$(size(d.data))"
     end
     return "type=$(typeof(d))"
@@ -963,9 +963,9 @@ function _run_case(case::IngestionBenchCase, stage::Symbol; reps::Int)
     stage_label = stage == :graded_complex ? "graded" : (stage == :simplex_tree ? "tree" : "full")
     println("\n[case] ", case.name, "  family=", case.family, "  ", _case_size_hint(case), "  stage=", stage_label)
 
-    auto = _bench("  cache=:auto", () -> PosetModules.encode(case.data, spec; degree=case.degree, cache=:auto); reps=reps)
+    auto = _bench("  cache=:auto", () -> TamerOp.encode(case.data, spec; degree=case.degree, cache=:auto); reps=reps)
     sc = CM.SessionCache()
-    sess = _bench("  cache=SessionCache()", () -> PosetModules.encode(case.data, spec; degree=case.degree, cache=sc); reps=reps)
+    sess = _bench("  cache=SessionCache()", () -> TamerOp.encode(case.data, spec; degree=case.degree, cache=sc); reps=reps)
 
     speedup = auto.med_ms / max(sess.med_ms, 1e-12)
     println("  speedup session/auto=", round(speedup, digits=3), "x")
@@ -986,23 +986,23 @@ function _run_preflight_probe(; reps::Int, quick::Bool)
         max_edges = max(200_000, 40 * n),
         memory_budget_bytes = 8_000_000_000,
     )
-    spec = PosetModules.FiltrationSpec(
+    spec = TamerOp.FiltrationSpec(
         kind=:rips,
         max_dim=1,
         axes=(collect(range(0.0, stop=2.0, length=16)),),
         knn=knn,
         nn_backend=:auto,
-        construction=PosetModules.ConstructionOptions(; sparsify=:knn, output_stage=:graded_complex, budget=budget),
+        construction=TamerOp.ConstructionOptions(; sparsify=:knn, output_stage=:graded_complex, budget=budget),
     )
     println("\n[probe] preflight overhead  n=$(n), knn=$(knn)")
     off = _bench("  encode(...; preflight=false)",
-                 () -> PosetModules.encode(data, spec; degree=0, cache=:auto, preflight=false);
+                 () -> TamerOp.encode(data, spec; degree=0, cache=:auto, preflight=false);
                  reps=reps)
     on = _bench("  encode(...; preflight=true)",
-                () -> PosetModules.encode(data, spec; degree=0, cache=:auto, preflight=true);
+                () -> TamerOp.encode(data, spec; degree=0, cache=:auto, preflight=true);
                 reps=reps)
     strict = _bench("  encode(...; strict_preflight=true)",
-                    () -> PosetModules.encode(data, spec; degree=0, cache=:auto, strict_preflight=true);
+                    () -> TamerOp.encode(data, spec; degree=0, cache=:auto, strict_preflight=true);
                     reps=reps)
     println("  overhead preflight/on vs off=", round(on.med_ms / max(off.med_ms, 1e-12), digits=3), "x")
     println("  overhead strict vs off=", round(strict.med_ms / max(off.med_ms, 1e-12), digits=3), "x")
@@ -1095,35 +1095,35 @@ function _run_stage_isolation_probe(; reps::Int, quick::Bool)
         max_edges = max(500_000, 80 * n),
         memory_budget_bytes = 8_000_000_000,
     )
-    spec = PosetModules.FiltrationSpec(
+    spec = TamerOp.FiltrationSpec(
         kind=:rips,
         max_dim=1,
         axes=(collect(range(0.0, stop=2.0, length=24)),),
         knn=knn,
         nn_backend=:auto,
-        construction=PosetModules.ConstructionOptions(; sparsify=:knn, output_stage=:encoding_result, budget=budget),
+        construction=TamerOp.ConstructionOptions(; sparsify=:knn, output_stage=:encoding_result, budget=budget),
     )
 
     println("\n[probe] stage isolation  n=$(n), knn=$(knn)")
     module_auto = _bench("  stage=:module  cache=:auto",
-                         () -> PosetModules.encode(data, spec; degree=0, cache=:auto, stage=:module);
+                         () -> TamerOp.encode(data, spec; degree=0, cache=:auto, stage=:module);
                          reps=reps)
     full_auto = _bench("  stage=:encoding_result  cache=:auto",
-                       () -> PosetModules.encode(data, spec; degree=0, cache=:auto, stage=:encoding_result);
+                       () -> TamerOp.encode(data, spec; degree=0, cache=:auto, stage=:encoding_result);
                        reps=reps)
     fringe_auto = _bench("  stage=:fringe  cache=:auto",
-                         () -> PosetModules.encode(data, spec; degree=0, cache=:auto, stage=:fringe);
+                         () -> TamerOp.encode(data, spec; degree=0, cache=:auto, stage=:fringe);
                          reps=reps)
 
     sc = CM.SessionCache()
     module_sess = _bench("  stage=:module  cache=SessionCache()",
-                         () -> PosetModules.encode(data, spec; degree=0, cache=sc, stage=:module);
+                         () -> TamerOp.encode(data, spec; degree=0, cache=sc, stage=:module);
                          reps=reps)
     full_sess = _bench("  stage=:encoding_result  cache=SessionCache()",
-                       () -> PosetModules.encode(data, spec; degree=0, cache=sc, stage=:encoding_result);
+                       () -> TamerOp.encode(data, spec; degree=0, cache=sc, stage=:encoding_result);
                        reps=reps)
     fringe_sess = _bench("  stage=:fringe  cache=SessionCache()",
-                         () -> PosetModules.encode(data, spec; degree=0, cache=sc, stage=:fringe);
+                         () -> TamerOp.encode(data, spec; degree=0, cache=sc, stage=:fringe);
                          reps=reps)
 
     println("  auto: encoding_result/module ratio=", round(full_auto.med_ms / max(module_auto.med_ms, 1e-12), digits=3), "x")
@@ -1150,19 +1150,19 @@ end
 function _build_lazy_lowdim_h0_fixture(; quick::Bool)
     n = quick ? 90 : 220
     data = _point_cloud_fixture(n; seed=Int(0xD49C))
-    spec = PosetModules.FiltrationSpec(
+    spec = TamerOp.FiltrationSpec(
         kind=:rips,
         max_dim=1,
         axes=(collect(range(0.0, stop=2.0, length=24)),),
         knn=min(12, max(2, n - 1)),
         nn_backend=:auto,
-        construction=PosetModules.ConstructionOptions(;
+        construction=TamerOp.ConstructionOptions(;
             sparsify=:knn,
             output_stage=:graded_complex,
             budget=(max_simplices=2_000_000, max_edges=2_000_000, memory_budget_bytes=8_000_000_000),
         ),
     )
-    G = PosetModules.encode(data, spec; degree=0, cache=:auto, stage=:graded_complex)
+    G = TamerOp.encode(data, spec; degree=0, cache=:auto, stage=:graded_complex)
     axes = spec.params[:axes]
     P = DI.poset_from_axes(axes)
     mkL() = DI._lazy_cochain_complex_from_graded_complex(G, P, axes; field=CM.QQField())
@@ -1173,7 +1173,7 @@ function _build_lazy_diff_fixture(; quick::Bool)
     n = quick ? 28 : 44
     data = _point_cloud_fixture(n; seed=Int(0xD49D))
     vals = [sin(2.0 * pi * (i - 1) / max(n - 1, 1)) for i in 1:n]
-    spec = PosetModules.FiltrationSpec(
+    spec = TamerOp.FiltrationSpec(
         kind=:function_rips,
         max_dim=2,
         vertex_values=vals,
@@ -1182,13 +1182,13 @@ function _build_lazy_diff_fixture(; quick::Bool)
             collect(range(0.0, stop=2.0, length=14)),
             collect(range(-1.0, stop=1.0, length=11)),
         ),
-        construction=PosetModules.ConstructionOptions(;
+        construction=TamerOp.ConstructionOptions(;
             sparsify=:none,
             output_stage=:graded_complex,
             budget=(max_simplices=3_000_000, max_edges=3_000_000, memory_budget_bytes=8_000_000_000),
         ),
     )
-    G = PosetModules.encode(data, spec; degree=0, cache=:auto, stage=:graded_complex)
+    G = TamerOp.encode(data, spec; degree=0, cache=:auto, stage=:graded_complex)
     axes = spec.params[:axes]
     P = DI.poset_from_axes(axes)
     mkL() = DI._lazy_cochain_complex_from_graded_complex(G, P, axes; field=CM.QQField())
@@ -1279,13 +1279,13 @@ end
 function _run_structural_inclusion_probe(; reps::Int, quick::Bool)
     n = quick ? 90 : 220
     data = _point_cloud_fixture(n; seed=Int(0xD4A2))
-    spec = PosetModules.FiltrationSpec(
+    spec = TamerOp.FiltrationSpec(
         kind=:rips,
         max_dim=1,
         axes=(collect(range(0.0, stop=2.2, length=30)),),
         knn=min(16, max(2, n - 1)),
         nn_backend=:auto,
-        construction=PosetModules.ConstructionOptions(;
+        construction=TamerOp.ConstructionOptions(;
             sparsify=:knn,
             output_stage=:encoding_result,
             budget=(max_simplices=4_500_000, max_edges=4_000_000, memory_budget_bytes=8_000_000_000),
@@ -1302,7 +1302,7 @@ function _run_structural_inclusion_probe(; reps::Int, quick::Bool)
         DI._H0_UNIONFIND_MIN_TOTAL_ACTIVE_EDGES[] = 0
         structural = _bench("  encode(... structural inclusion maps)",
                             () -> begin
-                                PosetModules.encode(data, spec; degree=0, cache=:auto, stage=:encoding_result)
+                                TamerOp.encode(data, spec; degree=0, cache=:auto, stage=:encoding_result)
                             end;
                             reps=reps)
     finally
@@ -1319,19 +1319,19 @@ end
 function _run_term_materialization_probe(; reps::Int, quick::Bool)
     n = quick ? 120 : 260
     data = _point_cloud_fixture(n; seed=Int(0xD4A3))
-    spec = PosetModules.FiltrationSpec(
+    spec = TamerOp.FiltrationSpec(
         kind=:rips,
         max_dim=1,
         axes=(collect(range(0.0, stop=2.0, length=24)),),
         knn=min(12, max(2, n - 1)),
         nn_backend=:auto,
-        construction=PosetModules.ConstructionOptions(;
+        construction=TamerOp.ConstructionOptions(;
             sparsify=:knn,
             output_stage=:graded_complex,
             budget=(max_simplices=2_000_000, max_edges=2_000_000, memory_budget_bytes=8_000_000_000),
         ),
     )
-    G = PosetModules.encode(data, spec; degree=0, cache=:auto, stage=:graded_complex)
+    G = TamerOp.encode(data, spec; degree=0, cache=:auto, stage=:graded_complex)
     axes = spec.params[:axes]
     P = DI.poset_from_axes(axes)
     println("\n[probe] term materialization structural maps  n=$(n), max_dim=1")
@@ -1350,10 +1350,10 @@ end
 function _run_pointcloud_dense_stream_probe(; reps::Int, quick::Bool)
     n = quick ? 32 : 44
     data = _point_cloud_fixture(n; seed=Int(0xD4A4))
-    spec = PosetModules.FiltrationSpec(
+    spec = TamerOp.FiltrationSpec(
         kind=:rips,
         max_dim=2,
-        construction=PosetModules.ConstructionOptions(;
+        construction=TamerOp.ConstructionOptions(;
             sparsify=:none,
             output_stage=:graded_complex,
             budget=(max_simplices=2_000_000, max_edges=2_000_000, memory_budget_bytes=8_000_000_000),
@@ -1366,13 +1366,13 @@ function _run_pointcloud_dense_stream_probe(; reps::Int, quick::Bool)
         DI._POINTCLOUD_STREAM_DIST_NONSPARSE[] = true
         streamed = _bench("  encode(... streamed simplex distances)",
                           () -> begin
-                              PosetModules.encode(data, spec; degree=0, cache=:auto, stage=:graded_complex)
+                              TamerOp.encode(data, spec; degree=0, cache=:auto, stage=:graded_complex)
                           end;
                           reps=reps)
         DI._POINTCLOUD_STREAM_DIST_NONSPARSE[] = false
         packed = _bench("  encode(... packed pairwise fallback)",
                         () -> begin
-                            PosetModules.encode(data, spec; degree=0, cache=:auto, stage=:graded_complex)
+                            TamerOp.encode(data, spec; degree=0, cache=:auto, stage=:graded_complex)
                         end;
                         reps=reps)
     finally
@@ -1397,14 +1397,14 @@ function _run_pointcloud_lowdim_radius_stream_probe(; reps::Int, quick::Bool)
     function _run_dim_probe(d::Int)
         rng = MersenneTwister(Int(0xD4A4F + 31 * d))
         pts = [randn(rng, d) for _ in 1:n]
-        data = PosetModules.PointCloud(pts)
-        spec = PosetModules.FiltrationSpec(
+        data = TamerOp.PointCloud(pts)
+        spec = TamerOp.FiltrationSpec(
             kind=:rips_density,
             max_dim=1,
             radius=radius,
             density_k=density_k,
             nn_backend=:auto,
-            construction=PosetModules.ConstructionOptions(;
+            construction=TamerOp.ConstructionOptions(;
                 sparsify=:none,
                 output_stage=:simplex_tree,
                 budget=budget,
@@ -1415,11 +1415,11 @@ function _run_pointcloud_lowdim_radius_stream_probe(; reps::Int, quick::Bool)
         try
             DI._POINTCLOUD_LOWDIM_RADIUS_STREAMING[] = true
             streamed = _bench("  lowdim radius stream on  (d=$(d))",
-                              () -> PosetModules.encode(data, spec; degree=0, cache=:auto, stage=:simplex_tree);
+                              () -> TamerOp.encode(data, spec; degree=0, cache=:auto, stage=:simplex_tree);
                               reps=reps)
             DI._POINTCLOUD_LOWDIM_RADIUS_STREAMING[] = false
             dense = _bench("  lowdim radius stream off (d=$(d))",
-                           () -> PosetModules.encode(data, spec; degree=0, cache=:auto, stage=:simplex_tree);
+                           () -> TamerOp.encode(data, spec; degree=0, cache=:auto, stage=:simplex_tree);
                            reps=reps)
         finally
             DI._POINTCLOUD_LOWDIM_RADIUS_STREAMING[] = old_stream
@@ -1443,11 +1443,11 @@ end
 function _run_pointcloud_dim2_kernel_probe(; reps::Int, quick::Bool)
     n = quick ? 72 : 120
     data = _point_cloud_fixture(n; seed=Int(0xD4A4C))
-    spec = PosetModules.FiltrationSpec(
+    spec = TamerOp.FiltrationSpec(
         kind=:rips,
         max_dim=2,
         radius=0.36,
-        construction=PosetModules.ConstructionOptions(;
+        construction=TamerOp.ConstructionOptions(;
             sparsify=:none,
             collapse=:none,
             output_stage=:simplex_tree,
@@ -1461,13 +1461,13 @@ function _run_pointcloud_dim2_kernel_probe(; reps::Int, quick::Bool)
         DI._POINTCLOUD_DIM2_PACKED_KERNEL[] = true
         packed_on = _bench("  encode(... dim2 packed kernel ON)",
                            () -> begin
-                               PosetModules.encode(data, spec; degree=0, cache=:auto, stage=:simplex_tree)
+                               TamerOp.encode(data, spec; degree=0, cache=:auto, stage=:simplex_tree)
                            end;
                            reps=reps)
         DI._POINTCLOUD_DIM2_PACKED_KERNEL[] = false
         packed_off = _bench("  encode(... dim2 packed kernel OFF)",
                             () -> begin
-                                PosetModules.encode(data, spec; degree=0, cache=:auto, stage=:simplex_tree)
+                                TamerOp.encode(data, spec; degree=0, cache=:auto, stage=:simplex_tree)
                             end;
                             reps=reps)
     finally
@@ -1486,11 +1486,11 @@ end
 function _run_delaunay_cache_probe(; reps::Int, quick::Bool)
     n = quick ? 320 : 960
     data = _point_cloud_fixture(n; seed=Int(0xD4B0))
-    spec = PosetModules.FiltrationSpec(
+    spec = TamerOp.FiltrationSpec(
         kind=:alpha,
         max_dim=2,
         delaunay_backend=:auto,
-        construction=PosetModules.ConstructionOptions(;
+        construction=TamerOp.ConstructionOptions(;
             output_stage=:simplex_tree,
             budget=(max_simplices=4_000_000, max_edges=4_000_000, memory_budget_bytes=8_000_000_000),
         ),
@@ -1546,22 +1546,22 @@ function _run_delaunay_simplextree_fusion_probe(; reps::Int, quick::Bool)
     data = _point_cloud_fixture(n; seed=Int(0xD4B2))
     pts = data.points
     vvals = [p[1] + 2p[2] for p in pts]
-    aspec = PosetModules.FiltrationSpec(
+    aspec = TamerOp.FiltrationSpec(
         kind=:alpha,
         max_dim=2,
         delaunay_backend=:auto,
-        construction=PosetModules.ConstructionOptions(;
+        construction=TamerOp.ConstructionOptions(;
             output_stage=:simplex_tree,
             budget=(max_simplices=4_000_000, max_edges=4_000_000, memory_budget_bytes=8_000_000_000),
         ),
     )
-    dspec = PosetModules.FiltrationSpec(
+    dspec = TamerOp.FiltrationSpec(
         kind=:delaunay_lower_star,
         max_dim=2,
         delaunay_backend=:auto,
         vertex_values=vvals,
         simplex_agg=:max,
-        construction=PosetModules.ConstructionOptions(;
+        construction=TamerOp.ConstructionOptions(;
             output_stage=:simplex_tree,
             budget=(max_simplices=4_000_000, max_edges=4_000_000, memory_budget_bytes=8_000_000_000),
         ),
@@ -1587,7 +1587,7 @@ function _run_delaunay_simplextree_fusion_probe(; reps::Int, quick::Bool)
         end
         DI._materialize_point_cloud_dim012(n, packed.edges, packed.triangles, grades, aspec; return_simplex_tree=true)
     end
-    new_alpha = () -> PosetModules.encode(data, aspec; degree=0, stage=:simplex_tree)
+    new_alpha = () -> TamerOp.encode(data, aspec; degree=0, stage=:simplex_tree)
 
     old_delaunay = () -> begin
         packed = DI._packed_delaunay_simplices(pts, dspec; max_dim=2)
@@ -1611,7 +1611,7 @@ function _run_delaunay_simplextree_fusion_probe(; reps::Int, quick::Bool)
         end
         DI._materialize_point_cloud_dim012(n, packed.edges, packed.triangles, grades, dspec; return_simplex_tree=true)
     end
-    new_delaunay = () -> PosetModules.encode(data, dspec; degree=0, stage=:simplex_tree)
+    new_delaunay = () -> TamerOp.encode(data, dspec; degree=0, stage=:simplex_tree)
 
     println("\n[probe] Delaunay simplex-tree fused path (n=$(n))")
     alpha_old = _bench("  alpha simplex_tree old-emulated", old_alpha; reps=reps)
@@ -1710,38 +1710,38 @@ function _run_landmark_radius_probe(; reps::Int, quick::Bool)
     rng = MersenneTwister(Int(0xD4B6))
     landmarks = sort!(randperm(rng, n)[1:m])
 
-    spec_auto = PosetModules.FiltrationSpec(
+    spec_auto = TamerOp.FiltrationSpec(
         kind=:landmark_rips,
         max_dim=1,
         landmarks=landmarks,
         radius=radius,
-        construction=PosetModules.ConstructionOptions(;
+        construction=TamerOp.ConstructionOptions(;
             output_stage=:simplex_tree,
         ),
     )
-    spec_explicit = PosetModules.FiltrationSpec(
+    spec_explicit = TamerOp.FiltrationSpec(
         kind=:landmark_rips,
         max_dim=1,
         landmarks=landmarks,
         radius=radius,
-        construction=PosetModules.ConstructionOptions(;
+        construction=TamerOp.ConstructionOptions(;
             sparsify=:radius,
             output_stage=:simplex_tree,
         ),
     )
 
     # Contract parity: default landmark+radius normalization should match explicit sparse radius.
-    st_auto = PosetModules.encode(data, spec_auto; degree=0, stage=:simplex_tree)
-    st_explicit = PosetModules.encode(data, spec_explicit; degree=0, stage=:simplex_tree)
+    st_auto = TamerOp.encode(data, spec_auto; degree=0, stage=:simplex_tree)
+    st_explicit = TamerOp.encode(data, spec_explicit; degree=0, stage=:simplex_tree)
     DI.simplex_count(st_auto) == DI.simplex_count(st_explicit) ||
         error("landmark_radius_probe parity mismatch: normalized vs explicit sparse radius simplex counts differ.")
 
     println("\n[probe] landmark+radii normalization + subgraph cache (n=$(n), m=$(m), radius=$(radius))")
     auto = _bench("  landmark auto-normalized",
-                  () -> PosetModules.encode(data, spec_auto; degree=0, stage=:simplex_tree, cache=:auto);
+                  () -> TamerOp.encode(data, spec_auto; degree=0, stage=:simplex_tree, cache=:auto);
                   reps=reps)
     explicit = _bench("  landmark explicit sparse radius",
-                      () -> PosetModules.encode(data, spec_explicit; degree=0, stage=:simplex_tree, cache=:auto);
+                      () -> TamerOp.encode(data, spec_explicit; degree=0, stage=:simplex_tree, cache=:auto);
                       reps=reps)
     println("  auto/explicit time ratio=", round(auto.med_ms / max(explicit.med_ms, 1e-12), digits=3), "x")
 
@@ -1749,14 +1749,14 @@ function _run_landmark_radius_probe(; reps::Int, quick::Bool)
     miss = _bench("  landmark subgraph cache miss",
                   () -> begin
                       CM._clear_session_cache!(sc)
-                      PosetModules.encode(data, spec_auto; degree=0, stage=:simplex_tree, cache=sc)
+                      TamerOp.encode(data, spec_auto; degree=0, stage=:simplex_tree, cache=sc)
                       nothing
                   end;
                   reps=reps)
-    PosetModules.encode(data, spec_auto; degree=0, stage=:simplex_tree, cache=sc)
+    TamerOp.encode(data, spec_auto; degree=0, stage=:simplex_tree, cache=sc)
     hit = _bench("  landmark subgraph cache hit",
                  () -> begin
-                     PosetModules.encode(data, spec_auto; degree=0, stage=:simplex_tree, cache=sc)
+                     TamerOp.encode(data, spec_auto; degree=0, stage=:simplex_tree, cache=sc)
                      nothing
                  end;
                  reps=reps)
@@ -1777,26 +1777,26 @@ end
 function _run_cubical_2d_probe(; reps::Int, quick::Bool)
     side = quick ? 80 : 128
     data, mask = _image_fixture(side; seed=Int(0xD4C1))
-    spec_cub = PosetModules.FiltrationSpec(
+    spec_cub = TamerOp.FiltrationSpec(
         kind=:cubical,
-        construction=PosetModules.ConstructionOptions(; output_stage=:graded_complex),
+        construction=TamerOp.ConstructionOptions(; output_stage=:graded_complex),
     )
-    spec_bi = PosetModules.FiltrationSpec(
+    spec_bi = TamerOp.FiltrationSpec(
         kind=:image_distance_bifiltration,
         mask=mask,
-        construction=PosetModules.ConstructionOptions(; output_stage=:graded_complex),
+        construction=TamerOp.ConstructionOptions(; output_stage=:graded_complex),
     )
 
     old_fast = DI._CUBICAL_2D_FASTPATH[]
     fast_cub = slow_cub = fast_bi = slow_bi = nothing
     try
         DI._CUBICAL_2D_FASTPATH[] = false
-        G_cub_slow = PosetModules.encode(data, spec_cub; degree=0, stage=:graded_complex, cache=:auto)
-        G_bi_slow = PosetModules.encode(data, spec_bi; degree=0, stage=:graded_complex, cache=:auto)
+        G_cub_slow = TamerOp.encode(data, spec_cub; degree=0, stage=:graded_complex, cache=:auto)
+        G_bi_slow = TamerOp.encode(data, spec_bi; degree=0, stage=:graded_complex, cache=:auto)
 
         DI._CUBICAL_2D_FASTPATH[] = true
-        G_cub_fast = PosetModules.encode(data, spec_cub; degree=0, stage=:graded_complex, cache=:auto)
-        G_bi_fast = PosetModules.encode(data, spec_bi; degree=0, stage=:graded_complex, cache=:auto)
+        G_cub_fast = TamerOp.encode(data, spec_cub; degree=0, stage=:graded_complex, cache=:auto)
+        G_bi_fast = TamerOp.encode(data, spec_bi; degree=0, stage=:graded_complex, cache=:auto)
 
         (G_cub_fast.cells_by_dim == G_cub_slow.cells_by_dim &&
          G_cub_fast.boundaries == G_cub_slow.boundaries &&
@@ -1809,18 +1809,18 @@ function _run_cubical_2d_probe(; reps::Int, quick::Bool)
 
         DI._CUBICAL_2D_FASTPATH[] = true
         fast_cub = _bench("  cubical 2D fast path on",
-                          () -> PosetModules.encode(data, spec_cub; degree=0, stage=:graded_complex, cache=:auto);
+                          () -> TamerOp.encode(data, spec_cub; degree=0, stage=:graded_complex, cache=:auto);
                           reps=reps)
         fast_bi = _bench("  image_distance 2D fast path on",
-                         () -> PosetModules.encode(data, spec_bi; degree=0, stage=:graded_complex, cache=:auto);
+                         () -> TamerOp.encode(data, spec_bi; degree=0, stage=:graded_complex, cache=:auto);
                          reps=reps)
 
         DI._CUBICAL_2D_FASTPATH[] = false
         slow_cub = _bench("  cubical 2D fast path off (generic)",
-                          () -> PosetModules.encode(data, spec_cub; degree=0, stage=:graded_complex, cache=:auto);
+                          () -> TamerOp.encode(data, spec_cub; degree=0, stage=:graded_complex, cache=:auto);
                           reps=reps)
         slow_bi = _bench("  image_distance 2D fast path off (generic)",
-                         () -> PosetModules.encode(data, spec_bi; degree=0, stage=:graded_complex, cache=:auto);
+                         () -> TamerOp.encode(data, spec_bi; degree=0, stage=:graded_complex, cache=:auto);
                          reps=reps)
     finally
         DI._CUBICAL_2D_FASTPATH[] = old_fast
@@ -1850,21 +1850,21 @@ function _run_graph_clique_probe(; reps::Int, quick::Bool)
         rand(rng) <= (quick ? 0.23 : 0.19) && push!(edges, (i, j))
     end
     isempty(edges) && push!(edges, (1, 2))
-    data = PosetModules.GraphData(n, edges)
+    data = TamerOp.GraphData(n, edges)
     vertex_vals = [sin(0.13 * i) for i in 1:n]
     edge_weights = [1.0 + abs(cos(0.17 * i)) for i in 1:length(edges)]
-    cons = PosetModules.ConstructionOptions(;
+    cons = TamerOp.ConstructionOptions(;
         output_stage=:graded_complex,
         budget=(max_simplices=2_000_000, max_edges=500_000, memory_budget_bytes=8_000_000_000),
     )
-    spec_clique = PosetModules.FiltrationSpec(
+    spec_clique = TamerOp.FiltrationSpec(
         kind=:clique_lower_star,
         max_dim=2,
         vertex_values=vertex_vals,
         simplex_agg=:max,
         construction=cons,
     )
-    spec_w = PosetModules.FiltrationSpec(
+    spec_w = TamerOp.FiltrationSpec(
         kind=:graph_weight_threshold,
         lift=:clique,
         max_dim=2,
@@ -1878,25 +1878,25 @@ function _run_graph_clique_probe(; reps::Int, quick::Bool)
     try
         DI._GRAPH_CLIQUE_ENUM_MODE[] = :auto
         c_auto = _bench("  clique_lower_star (auto)",
-                        () -> PosetModules.encode(data, spec_clique; degree=0, cache=:auto, stage=:graded_complex);
+                        () -> TamerOp.encode(data, spec_clique; degree=0, cache=:auto, stage=:graded_complex);
                         reps=reps)
         w_auto = _bench("  graph_weight_threshold:lq (auto)",
-                        () -> PosetModules.encode(data, spec_w; degree=0, cache=:auto, stage=:graded_complex);
+                        () -> TamerOp.encode(data, spec_w; degree=0, cache=:auto, stage=:graded_complex);
                         reps=reps)
 
         DI._GRAPH_CLIQUE_ENUM_MODE[] = :intersection
         c_inter = _bench("  clique_lower_star (intersection)",
-                        () -> PosetModules.encode(data, spec_clique; degree=0, cache=:auto, stage=:graded_complex);
+                        () -> TamerOp.encode(data, spec_clique; degree=0, cache=:auto, stage=:graded_complex);
                         reps=reps)
         w_inter = _bench("  graph_weight_threshold:lq (intersection)",
-                        () -> PosetModules.encode(data, spec_w; degree=0, cache=:auto, stage=:graded_complex);
+                        () -> TamerOp.encode(data, spec_w; degree=0, cache=:auto, stage=:graded_complex);
                         reps=reps)
         DI._GRAPH_CLIQUE_ENUM_MODE[] = :combinations
         c_comb = _bench("  clique_lower_star (combinations)",
-                        () -> PosetModules.encode(data, spec_clique; degree=0, cache=:auto, stage=:graded_complex);
+                        () -> TamerOp.encode(data, spec_clique; degree=0, cache=:auto, stage=:graded_complex);
                         reps=reps)
         w_comb = _bench("  graph_weight_threshold:lq (combinations)",
-                        () -> PosetModules.encode(data, spec_w; degree=0, cache=:auto, stage=:graded_complex);
+                        () -> TamerOp.encode(data, spec_w; degree=0, cache=:auto, stage=:graded_complex);
                         reps=reps)
     finally
         DI._GRAPH_CLIQUE_ENUM_MODE[] = old
@@ -1930,30 +1930,30 @@ function _run_nn_backend_probe(; reps::Int, quick::Bool)
     d = quick ? 18 : 28
     rng = MersenneTwister(Int(0xD4A9))
     pts = [randn(rng, d) for _ in 1:n]
-    data = PosetModules.PointCloud(pts)
+    data = TamerOp.PointCloud(pts)
     k = min(12, max(2, n - 1))
     budget = (max_simplices=4_000_000, max_edges=4_000_000, memory_budget_bytes=8_000_000_000)
-    mk_spec(backend::Symbol; approx_candidates::Int=0) = PosetModules.FiltrationSpec(
+    mk_spec(backend::Symbol; approx_candidates::Int=0) = TamerOp.FiltrationSpec(
         kind=:rips,
         max_dim=1,
         knn=k,
         nn_backend=backend,
         nn_approx_candidates=approx_candidates,
-        construction=PosetModules.ConstructionOptions(; sparsify=:knn, output_stage=:graded_complex, budget=budget),
+        construction=TamerOp.ConstructionOptions(; sparsify=:knn, output_stage=:graded_complex, budget=budget),
     )
 
     println("\n[probe] nn backend speed/parity (kNN sparse graph)  n=$(n), d=$(d), k=$(k)")
     bf = _bench("  nn_backend=:bruteforce",
-                () -> PosetModules.encode(data, mk_spec(:bruteforce); degree=0, cache=:auto, stage=:graded_complex);
+                () -> TamerOp.encode(data, mk_spec(:bruteforce); degree=0, cache=:auto, stage=:graded_complex);
                 reps=reps)
     nn = _bench("  nn_backend=:nearestneighbors",
-                () -> PosetModules.encode(data, mk_spec(:nearestneighbors); degree=0, cache=:auto, stage=:graded_complex);
+                () -> TamerOp.encode(data, mk_spec(:nearestneighbors); degree=0, cache=:auto, stage=:graded_complex);
                 reps=reps)
     ap = _bench("  nn_backend=:approx",
-                () -> PosetModules.encode(data, mk_spec(:approx; approx_candidates=max(64, 4k)); degree=0, cache=:auto, stage=:graded_complex);
+                () -> TamerOp.encode(data, mk_spec(:approx; approx_candidates=max(64, 4k)); degree=0, cache=:auto, stage=:graded_complex);
                 reps=reps)
     au = _bench("  nn_backend=:auto",
-                () -> PosetModules.encode(data, mk_spec(:auto); degree=0, cache=:auto, stage=:graded_complex);
+                () -> TamerOp.encode(data, mk_spec(:auto); degree=0, cache=:auto, stage=:graded_complex);
                 reps=reps)
     println("  nearestneighbors/bruteforce time ratio=", round(nn.med_ms / max(bf.med_ms, 1e-12), digits=3), "x")
     println("  approx/bruteforce time ratio=", round(ap.med_ms / max(bf.med_ms, 1e-12), digits=3), "x")
@@ -1973,13 +1973,13 @@ end
 function _run_h0_chain_sweep_probe(; reps::Int, quick::Bool)
     n = quick ? 120 : 260
     data = _point_cloud_fixture(n; seed=Int(0xD4A6))
-    spec = PosetModules.FiltrationSpec(
+    spec = TamerOp.FiltrationSpec(
         kind=:rips,
         max_dim=1,
         axes=(collect(range(0.0, stop=2.4, length=36)),),
         knn=min(16, max(2, n - 1)),
         nn_backend=:auto,
-        construction=PosetModules.ConstructionOptions(;
+        construction=TamerOp.ConstructionOptions(;
             sparsify=:knn,
             output_stage=:encoding_result,
             budget=(max_simplices=5_000_000, max_edges=5_000_000, memory_budget_bytes=8_000_000_000),
@@ -1994,11 +1994,11 @@ function _run_h0_chain_sweep_probe(; reps::Int, quick::Bool)
     end
     isempty(g_edges) && push!(g_edges, (1, 2))
     g_w = [0.01 + rand(rng) for _ in 1:length(g_edges)]
-    g_data = PosetModules.GraphData(g_n, g_edges; weights=g_w)
-    g_spec = PosetModules.FiltrationSpec(
+    g_data = TamerOp.GraphData(g_n, g_edges; weights=g_w)
+    g_spec = TamerOp.FiltrationSpec(
         kind=:graph_weight_threshold,
         max_dim=1,
-        construction=PosetModules.ConstructionOptions(;
+        construction=TamerOp.ConstructionOptions(;
             output_stage=:encoding_result,
             budget=(max_simplices=5_000_000, max_edges=5_000_000, memory_budget_bytes=8_000_000_000),
         ),
@@ -2017,18 +2017,18 @@ function _run_h0_chain_sweep_probe(; reps::Int, quick::Bool)
 
         DI._H0_CHAIN_SWEEP_FASTPATH[] = true
         p_fast = _bench("  point rips d1 (chain-sweep on)",
-                        () -> PosetModules.encode(data, spec; degree=0, cache=:auto, stage=:encoding_result);
+                        () -> TamerOp.encode(data, spec; degree=0, cache=:auto, stage=:encoding_result);
                         reps=reps)
         g_fast = _bench("  graph weight-threshold d1 (chain-sweep on)",
-                        () -> PosetModules.encode(g_data, g_spec; degree=0, cache=:auto, stage=:encoding_result);
+                        () -> TamerOp.encode(g_data, g_spec; degree=0, cache=:auto, stage=:encoding_result);
                         reps=reps)
 
         DI._H0_CHAIN_SWEEP_FASTPATH[] = false
         p_base = _bench("  point rips d1 (chain-sweep off)",
-                        () -> PosetModules.encode(data, spec; degree=0, cache=:auto, stage=:encoding_result);
+                        () -> TamerOp.encode(data, spec; degree=0, cache=:auto, stage=:encoding_result);
                         reps=reps)
         g_base = _bench("  graph weight-threshold d1 (chain-sweep off)",
-                        () -> PosetModules.encode(g_data, g_spec; degree=0, cache=:auto, stage=:encoding_result);
+                        () -> TamerOp.encode(g_data, g_spec; degree=0, cache=:auto, stage=:encoding_result);
                         reps=reps)
     finally
         DI._H0_CHAIN_SWEEP_FASTPATH[] = old_chain
@@ -2053,19 +2053,19 @@ end
 function _run_h0_active_chain_incremental_probe(; reps::Int, quick::Bool)
     n = quick ? 110 : 260
     data = _point_cloud_fixture(n; seed=Int(0xD4AE))
-    spec_gc = PosetModules.FiltrationSpec(
+    spec_gc = TamerOp.FiltrationSpec(
         kind=:rips,
         max_dim=1,
         axes=(collect(range(0.0, stop=2.4, length=(quick ? 26 : 40))),),
         knn=min(16, max(2, n - 1)),
         nn_backend=:auto,
-        construction=PosetModules.ConstructionOptions(;
+        construction=TamerOp.ConstructionOptions(;
             sparsify=:knn,
             output_stage=:graded_complex,
             budget=(max_simplices=5_000_000, max_edges=5_000_000, memory_budget_bytes=8_000_000_000),
         ),
     )
-    G = PosetModules.encode(data, spec_gc; degree=0)
+    G = TamerOp.encode(data, spec_gc; degree=0)
     axes = spec_gc.params[:axes]
     P = DI.poset_from_axes(axes)
     println("\n[probe] H0 active-chain incremental union-find path")
@@ -2134,7 +2134,7 @@ function _run_t2_degree_local_probe(; reps::Int, quick::Bool)
     grades = vcat([Float64[0.0] for _ in verts],
                   [Float64[0.35] for _ in edges],
                   [Float64[0.75] for _ in triangles])
-    data = PosetModules.GradedComplex(cells, boundaries, grades)
+    data = TamerOp.GradedComplex(cells, boundaries, grades)
     axes = (collect(range(0.0, stop=1.0, length=(quick ? 24 : 40))),)
     P = DI.poset_from_axes(axes)
     println("\n[probe] degree-local t=2 fast path (graded fan complex)")
@@ -2185,12 +2185,12 @@ function _run_monotone_rank_probe(; reps::Int, quick::Bool)
     push!(I, n); push!(J, n); push!(V, -1)
     B = sparse(I, J, V, n, n)
     grades = [i <= n ? [0.0] : [0.5] for i in 1:(n + n)]
-    data = PosetModules.GradedComplex([cells0, cells1], [B], grades)
+    data = TamerOp.GradedComplex([cells0, cells1], [B], grades)
     axes = (collect(range(0.0, stop=1.0, length=(quick ? 64 : 220))),)
-    spec = PosetModules.FiltrationSpec(
+    spec = TamerOp.FiltrationSpec(
         kind=:graded,
         axes=axes,
-        construction=PosetModules.ConstructionOptions(;
+        construction=TamerOp.ConstructionOptions(;
             output_stage=:encoding_result,
             budget=(max_simplices=4_000_000, max_edges=4_000_000, memory_budget_bytes=8_000_000_000),
         ),
@@ -2201,11 +2201,11 @@ function _run_monotone_rank_probe(; reps::Int, quick::Bool)
     try
         DI._COHOMOLOGY_DIMS_MONOTONE_RANK_FASTPATH[] = true
         fast = _bench("  encode(:cohomology_dims,t=1) monotone-rank on",
-                      () -> PosetModules.encode(data, spec; degree=1, cache=:auto, stage=:cohomology_dims);
+                      () -> TamerOp.encode(data, spec; degree=1, cache=:auto, stage=:cohomology_dims);
                       reps=reps)
         DI._COHOMOLOGY_DIMS_MONOTONE_RANK_FASTPATH[] = false
         base = _bench("  encode(:cohomology_dims,t=1) monotone-rank off",
-                      () -> PosetModules.encode(data, spec; degree=1, cache=:auto, stage=:cohomology_dims);
+                      () -> TamerOp.encode(data, spec; degree=1, cache=:auto, stage=:cohomology_dims);
                       reps=reps)
     finally
         DI._COHOMOLOGY_DIMS_MONOTONE_RANK_FASTPATH[] = old_flag
@@ -2235,12 +2235,12 @@ function _run_monotone_incremental_probe(; reps::Int, quick::Bool)
     end
     B = sparse(I, J, V, n, n)
     grades = [i <= n ? [0.0] : [0.5] for i in 1:(n + n)]
-    data = PosetModules.GradedComplex([cells0, cells1], [B], grades)
+    data = TamerOp.GradedComplex([cells0, cells1], [B], grades)
     axes = (collect(range(0.0, stop=1.0, length=(quick ? 84 : 240))),)
-    spec = PosetModules.FiltrationSpec(
+    spec = TamerOp.FiltrationSpec(
         kind=:graded,
         axes=axes,
-        construction=PosetModules.ConstructionOptions(;
+        construction=TamerOp.ConstructionOptions(;
             output_stage=:encoding_result,
             budget=(max_simplices=4_000_000, max_edges=4_000_000, memory_budget_bytes=8_000_000_000),
         ),
@@ -2253,11 +2253,11 @@ function _run_monotone_incremental_probe(; reps::Int, quick::Bool)
         DI._COHOMOLOGY_DIMS_MONOTONE_RANK_FASTPATH[] = true
         DI._COHOMOLOGY_DIMS_MONOTONE_INCREMENTAL_RANK[] = true
         fast = _bench("  encode(:cohomology_dims,t=1) monotone-incremental on",
-                      () -> PosetModules.encode(data, spec; degree=1, cache=:auto, stage=:cohomology_dims);
+                      () -> TamerOp.encode(data, spec; degree=1, cache=:auto, stage=:cohomology_dims);
                       reps=reps)
         DI._COHOMOLOGY_DIMS_MONOTONE_INCREMENTAL_RANK[] = false
         base = _bench("  encode(:cohomology_dims,t=1) monotone-incremental off",
-                      () -> PosetModules.encode(data, spec; degree=1, cache=:auto, stage=:cohomology_dims);
+                      () -> TamerOp.encode(data, spec; degree=1, cache=:auto, stage=:cohomology_dims);
                       reps=reps)
     finally
         DI._COHOMOLOGY_DIMS_MONOTONE_RANK_FASTPATH[] = old_fast
@@ -2378,17 +2378,17 @@ function _run_degree_local_all_t_probe(; reps::Int, quick::Bool)
     grades = vcat([Float64[0.0] for _ in verts],
                   [Float64[0.35] for _ in edges],
                   [Float64[0.75] for _ in triangles])
-    data = PosetModules.GradedComplex(cells, boundaries, grades)
+    data = TamerOp.GradedComplex(cells, boundaries, grades)
     axes = (collect(range(0.0, stop=1.0, length=(quick ? 16 : 40))),)
-    spec = PosetModules.FiltrationSpec(
+    spec = TamerOp.FiltrationSpec(
         kind=:graded,
         axes=axes,
-        construction=PosetModules.ConstructionOptions(;
+        construction=TamerOp.ConstructionOptions(;
             output_stage=:encoding_result,
             budget=(max_simplices=4_000_000, max_edges=4_000_000, memory_budget_bytes=8_000_000_000),
         ),
     )
-    pipeline = PosetModules.PipelineOptions(field=CM.F2())
+    pipeline = TamerOp.PipelineOptions(field=CM.F2())
     println("\n[probe] degree-local all-t path (module, t=1)")
     old_local = DI._COHOMOLOGY_DEGREE_LOCAL_FASTPATH[]
     old_all_t = DI._COHOMOLOGY_DEGREE_LOCAL_ALL_T[]
@@ -2407,11 +2407,11 @@ function _run_degree_local_all_t_probe(; reps::Int, quick::Bool)
         DI._COHOMOLOGY_DEGREE_LOCAL_T1_MIN_TOTAL_ACTIVE_DIM2[] = typemax(Int)
         DI._COHOMOLOGY_DEGREE_LOCAL_ALL_T[] = true
         fast = _bench("  encode(:module,t=1) local-all-t on",
-                      () -> PosetModules.encode(data, spec; degree=1, cache=:auto, stage=:module, pipeline=pipeline);
+                      () -> TamerOp.encode(data, spec; degree=1, cache=:auto, stage=:module, pipeline=pipeline);
                       reps=reps)
         DI._COHOMOLOGY_DEGREE_LOCAL_ALL_T[] = false
         base = _bench("  encode(:module,t=1) local-all-t off",
-                      () -> PosetModules.encode(data, spec; degree=1, cache=:auto, stage=:module, pipeline=pipeline);
+                      () -> TamerOp.encode(data, spec; degree=1, cache=:auto, stage=:module, pipeline=pipeline);
                       reps=reps)
     finally
         DI._ENCODING_RESULT_LAZY_MODULE[] = old_lazy
@@ -2447,18 +2447,18 @@ function _run_encoding_result_lazy_probe(; reps::Int, quick::Bool)
     end
     B = sparse(I, J, V, n, n - 1)
     grades = vcat([Float64[0.0] for _ in 1:n], [Float64[0.45] for _ in 1:(n - 1)])
-    data = PosetModules.GradedComplex([cells0, cells1], [B], grades)
+    data = TamerOp.GradedComplex([cells0, cells1], [B], grades)
     axes = (collect(range(0.0, stop=1.0, length=(quick ? 14 : 32))),)
-    spec = PosetModules.FiltrationSpec(
+    spec = TamerOp.FiltrationSpec(
         kind=:graded,
         max_dim=1,
         axes=axes,
-        construction=PosetModules.ConstructionOptions(;
+        construction=TamerOp.ConstructionOptions(;
             output_stage=:encoding_result,
             budget=(max_simplices=6_000_000, max_edges=6_000_000, memory_budget_bytes=8_000_000_000),
         ),
     )
-    pipeline = PosetModules.PipelineOptions(field=CM.F2())
+    pipeline = TamerOp.PipelineOptions(field=CM.F2())
 
     println("\n[probe] encoding_result lazy module path")
     old_lazy = DI._ENCODING_RESULT_LAZY_MODULE[]
@@ -2467,23 +2467,23 @@ function _run_encoding_result_lazy_probe(; reps::Int, quick::Bool)
     try
         DI._ENCODING_RESULT_LAZY_MODULE[] = true
         on_encode = _bench("  encode(:encoding_result,t=1) lazy-module on",
-                           () -> PosetModules.encode(data, spec; degree=1, cache=:auto, stage=:encoding_result, pipeline=pipeline);
+                           () -> TamerOp.encode(data, spec; degree=1, cache=:auto, stage=:encoding_result, pipeline=pipeline);
                            reps=reps)
         on_force = _bench("  encode(:encoding_result,t=1)+pmodule lazy-module on",
                           () -> begin
-                              enc = PosetModules.encode(data, spec; degree=1, cache=:auto, stage=:encoding_result, pipeline=pipeline)
-                              PosetModules.Workflow.pmodule(enc)
+                              enc = TamerOp.encode(data, spec; degree=1, cache=:auto, stage=:encoding_result, pipeline=pipeline)
+                              TamerOp.Workflow.pmodule(enc)
                           end;
                           reps=reps)
 
         DI._ENCODING_RESULT_LAZY_MODULE[] = false
         off_encode = _bench("  encode(:encoding_result,t=1) lazy-module off",
-                            () -> PosetModules.encode(data, spec; degree=1, cache=:auto, stage=:encoding_result, pipeline=pipeline);
+                            () -> TamerOp.encode(data, spec; degree=1, cache=:auto, stage=:encoding_result, pipeline=pipeline);
                             reps=reps)
         off_force = _bench("  encode(:encoding_result,t=1)+pmodule lazy-module off",
                            () -> begin
-                               enc = PosetModules.encode(data, spec; degree=1, cache=:auto, stage=:encoding_result, pipeline=pipeline)
-                               PosetModules.Workflow.pmodule(enc)
+                               enc = TamerOp.encode(data, spec; degree=1, cache=:auto, stage=:encoding_result, pipeline=pipeline)
+                               TamerOp.Workflow.pmodule(enc)
                            end;
                            reps=reps)
     finally
@@ -2522,12 +2522,12 @@ function _run_structural_map_probe(; reps::Int, quick::Bool)
     push!(I, n); push!(J, n); push!(V, -1)
     B = sparse(I, J, V, n, n)
     grades = [i <= n ? [0.0] : [0.5] for i in 1:(n + n)]
-    data = PosetModules.GradedComplex([cells0, cells1], [B], grades)
+    data = TamerOp.GradedComplex([cells0, cells1], [B], grades)
     axes = (collect(range(0.0, stop=1.0, length=(quick ? 72 : 240))),)
-    spec = PosetModules.FiltrationSpec(
+    spec = TamerOp.FiltrationSpec(
         kind=:graded,
         axes=axes,
-        construction=PosetModules.ConstructionOptions(;
+        construction=TamerOp.ConstructionOptions(;
             output_stage=:encoding_result,
             budget=(max_simplices=4_000_000, max_edges=4_000_000, memory_budget_bytes=8_000_000_000),
         ),
@@ -2540,11 +2540,11 @@ function _run_structural_map_probe(; reps::Int, quick::Bool)
         DI._COHOMOLOGY_DIMS_MONOTONE_RANK_FASTPATH[] = true
         DI._COHOMOLOGY_DIMS_USE_DIRECT_RESTRICTED_RANK[] = true
         fast = _bench("  encode(:cohomology_dims,t=1) structural-direct on",
-                      () -> PosetModules.encode(data, spec; degree=1, cache=:auto, stage=:cohomology_dims);
+                      () -> TamerOp.encode(data, spec; degree=1, cache=:auto, stage=:cohomology_dims);
                       reps=reps)
         DI._COHOMOLOGY_DIMS_USE_DIRECT_RESTRICTED_RANK[] = false
         base = _bench("  encode(:cohomology_dims,t=1) structural-direct off",
-                      () -> PosetModules.encode(data, spec; degree=1, cache=:auto, stage=:cohomology_dims);
+                      () -> TamerOp.encode(data, spec; degree=1, cache=:auto, stage=:cohomology_dims);
                       reps=reps)
     finally
         DI._COHOMOLOGY_DIMS_MONOTONE_RANK_FASTPATH[] = old_mon
@@ -2579,13 +2579,13 @@ function _run_packed_edgelist_probe(; reps::Int, quick::Bool)
     edges = collect(keys(uniq))
     sort!(edges)
     vals = [sin(0.07 * i) + 0.01 * (i % 5) for i in 1:n]
-    data = PosetModules.GraphData(n, edges)
+    data = TamerOp.GraphData(n, edges)
     gate_on = DI._use_packed_edge_list_backend(n, length(edges), 3)
-    spec = PosetModules.FiltrationSpec(
+    spec = TamerOp.FiltrationSpec(
         kind=:clique_lower_star,
         max_dim=3,
         vertex_values=vals,
-        construction=PosetModules.ConstructionOptions(;
+        construction=TamerOp.ConstructionOptions(;
             output_stage=:graded_complex,
             budget=(max_simplices=8_000_000, max_edges=8_000_000, memory_budget_bytes=8_000_000_000),
         ),
@@ -2605,11 +2605,11 @@ function _run_packed_edgelist_probe(; reps::Int, quick::Bool)
         DI._clear_graph_backend_winner_cache!()
         DI._GRAPH_PACKED_EDGELIST_BACKEND[] = true
         fast = _bench("  encode(:graded_complex) packed-edgelist on",
-                      () -> PosetModules.encode(data, spec; degree=0, cache=:auto, stage=:graded_complex);
+                      () -> TamerOp.encode(data, spec; degree=0, cache=:auto, stage=:graded_complex);
                       reps=reps)
         DI._GRAPH_PACKED_EDGELIST_BACKEND[] = false
         base = _bench("  encode(:graded_complex) packed-edgelist off",
-                      () -> PosetModules.encode(data, spec; degree=0, cache=:auto, stage=:graded_complex);
+                      () -> TamerOp.encode(data, spec; degree=0, cache=:auto, stage=:graded_complex);
                       reps=reps)
 
         # Auto mode with winner-cache enabled (cold fill + warm measure).
@@ -2617,9 +2617,9 @@ function _run_packed_edgelist_probe(; reps::Int, quick::Bool)
         DI._GRAPH_BACKEND_WINNER_CACHE_ENABLED[] = true
         DI._GRAPH_BACKEND_WINNER_CACHE_PROBE[] = true
         DI._clear_graph_backend_winner_cache!()
-        PosetModules.encode(data, spec; degree=0, cache=:auto, stage=:graded_complex) # cold cache fill
+        TamerOp.encode(data, spec; degree=0, cache=:auto, stage=:graded_complex) # cold cache fill
         auto_warm = _bench("  encode(:graded_complex) packed-auto warm",
-                           () -> PosetModules.encode(data, spec; degree=0, cache=:auto, stage=:graded_complex);
+                           () -> TamerOp.encode(data, spec; degree=0, cache=:auto, stage=:graded_complex);
                            reps=reps)
     finally
         DI._GRAPH_PACKED_EDGELIST_BACKEND[] = old_flag
@@ -2641,13 +2641,13 @@ end
 function _run_dims_only_probe(; reps::Int, quick::Bool)
     n = quick ? 110 : 260
     data = _point_cloud_fixture(n; seed=Int(0xD4AF))
-    spec = PosetModules.FiltrationSpec(
+    spec = TamerOp.FiltrationSpec(
         kind=:rips,
         max_dim=1,
         axes=(collect(range(0.0, stop=2.4, length=(quick ? 28 : 40))),),
         knn=min(16, max(2, n - 1)),
         nn_backend=:auto,
-        construction=PosetModules.ConstructionOptions(;
+        construction=TamerOp.ConstructionOptions(;
             sparsify=:knn,
             output_stage=:encoding_result,
             budget=(max_simplices=5_000_000, max_edges=5_000_000, memory_budget_bytes=8_000_000_000),
@@ -2656,14 +2656,14 @@ function _run_dims_only_probe(; reps::Int, quick::Bool)
     println("\n[probe] dims-only invariant shortcut (encode full vs cohomology_dims)")
     full = _bench("  encode(:encoding_result) + restricted_hilbert",
                   () -> begin
-                      enc = PosetModules.encode(data, spec; degree=0, cache=:auto, stage=:encoding_result)
-                      PosetModules.Invariants.restricted_hilbert(enc.M)
+                      enc = TamerOp.encode(data, spec; degree=0, cache=:auto, stage=:encoding_result)
+                      TamerOp.Invariants.restricted_hilbert(enc.M)
                   end;
                   reps=reps)
     dims_only = _bench("  encode(:cohomology_dims) + restricted_hilbert(dims)",
                        () -> begin
-                           d = PosetModules.encode(data, spec; degree=0, cache=:auto, stage=:cohomology_dims)
-                           PosetModules.Invariants.restricted_hilbert(d.dims)
+                           d = TamerOp.encode(data, spec; degree=0, cache=:auto, stage=:cohomology_dims)
+                           TamerOp.Invariants.restricted_hilbert(d.dims)
                        end;
                        reps=reps)
     println("  dims-only/full time ratio=", round(dims_only.med_ms / max(full.med_ms, 1e-12), digits=3), "x")
@@ -2693,17 +2693,17 @@ function _run_solve_loop_probe(; reps::Int, quick::Bool)
     push!(I, n); push!(J, n); push!(V, -1)
     B = sparse(I, J, V, n, n)
     grades = [i <= n ? [0.0] : [0.5] for i in 1:(n + n)]
-    data = PosetModules.GradedComplex([cells0, cells1], [B], grades)
+    data = TamerOp.GradedComplex([cells0, cells1], [B], grades)
     axes = (collect(range(0.0, stop=1.0, length=(quick ? 20 : 30))),)
-    spec = PosetModules.FiltrationSpec(
+    spec = TamerOp.FiltrationSpec(
         kind=:graded,
         axes=axes,
-        construction=PosetModules.ConstructionOptions(;
+        construction=TamerOp.ConstructionOptions(;
             output_stage=:encoding_result,
             budget=(max_simplices=4_000_000, max_edges=4_000_000, memory_budget_bytes=8_000_000_000),
         ),
     )
-    pipeline = PosetModules.PipelineOptions(field=CM.F2())
+    pipeline = TamerOp.PipelineOptions(field=CM.F2())
     println("\n[probe] solve-loop checks in image/cokernel (generic H1 path)")
     old_h1 = DI._H1_COKERNEL_FASTPATH[]
     old_solve = AC._FAST_SOLVE_NO_CHECK[]
@@ -2712,11 +2712,11 @@ function _run_solve_loop_probe(; reps::Int, quick::Bool)
         DI._H1_COKERNEL_FASTPATH[] = false
         AC._FAST_SOLVE_NO_CHECK[] = true
         fast = _bench("  generic H1 with no RHS checks",
-                      () -> PosetModules.encode(data, spec; degree=1, cache=:auto, stage=:encoding_result, pipeline=pipeline);
+                      () -> TamerOp.encode(data, spec; degree=1, cache=:auto, stage=:encoding_result, pipeline=pipeline);
                       reps=reps)
         AC._FAST_SOLVE_NO_CHECK[] = false
         base = _bench("  generic H1 with RHS checks",
-                      () -> PosetModules.encode(data, spec; degree=1, cache=:auto, stage=:encoding_result, pipeline=pipeline);
+                      () -> TamerOp.encode(data, spec; degree=1, cache=:auto, stage=:encoding_result, pipeline=pipeline);
                       reps=reps)
     finally
         DI._H1_COKERNEL_FASTPATH[] = old_h1
@@ -2734,13 +2734,13 @@ end
 function _run_cache_hit_skip_lazy_probe(; reps::Int, quick::Bool)
     n = quick ? 90 : 220
     data = _point_cloud_fixture(n; seed=Int(0xD4A8))
-    spec = PosetModules.FiltrationSpec(
+    spec = TamerOp.FiltrationSpec(
         kind=:rips,
         max_dim=1,
         axes=(collect(range(0.0, stop=2.0, length=28)),),
         knn=min(16, max(2, n - 1)),
         nn_backend=:auto,
-        construction=PosetModules.ConstructionOptions(;
+        construction=TamerOp.ConstructionOptions(;
             sparsify=:knn,
             output_stage=:encoding_result,
             budget=(max_simplices=4_000_000, max_edges=4_000_000, memory_budget_bytes=8_000_000_000),
@@ -2761,16 +2761,16 @@ function _run_cache_hit_skip_lazy_probe(; reps::Int, quick::Bool)
 
         DI._INGESTION_SKIP_LAZY_ON_MODULE_CACHE_HIT[] = true
         sc_on = CM.SessionCache()
-        PosetModules.encode(data, spec; degree=0, cache=sc_on, stage=:encoding_result)
+        TamerOp.encode(data, spec; degree=0, cache=sc_on, stage=:encoding_result)
         skip_on = _bench("  cache hit with lazy skip",
-                         () -> PosetModules.encode(data, spec; degree=0, cache=sc_on, stage=:encoding_result);
+                         () -> TamerOp.encode(data, spec; degree=0, cache=sc_on, stage=:encoding_result);
                          reps=reps)
 
         DI._INGESTION_SKIP_LAZY_ON_MODULE_CACHE_HIT[] = false
         sc_off = CM.SessionCache()
-        PosetModules.encode(data, spec; degree=0, cache=sc_off, stage=:encoding_result)
+        TamerOp.encode(data, spec; degree=0, cache=sc_off, stage=:encoding_result)
         skip_off = _bench("  cache hit without lazy skip",
-                          () -> PosetModules.encode(data, spec; degree=0, cache=sc_off, stage=:encoding_result);
+                          () -> TamerOp.encode(data, spec; degree=0, cache=sc_off, stage=:encoding_result);
                           reps=reps)
     finally
         DI._INGESTION_SKIP_LAZY_ON_MODULE_CACHE_HIT[] = old_skip
@@ -2806,28 +2806,28 @@ function _run_h1_fastpath_probe(; reps::Int, quick::Bool)
     push!(I, n); push!(J, n); push!(V, -1)
     B = sparse(I, J, V, n, n)
     grades = [i <= n ? [0.0] : [0.5] for i in 1:(n + n)]
-    data = PosetModules.GradedComplex([cells0, cells1], [B], grades)
+    data = TamerOp.GradedComplex([cells0, cells1], [B], grades)
     axes = (collect(range(0.0, stop=1.0, length=(quick ? 20 : 30))),)
-    spec = PosetModules.FiltrationSpec(
+    spec = TamerOp.FiltrationSpec(
         kind=:graded,
         axes=axes,
-        construction=PosetModules.ConstructionOptions(;
+        construction=TamerOp.ConstructionOptions(;
             output_stage=:encoding_result,
             budget=(max_simplices=4_000_000, max_edges=4_000_000, memory_budget_bytes=8_000_000_000),
         ),
     )
-    pipeline = PosetModules.PipelineOptions(field=CM.F2())
+    pipeline = TamerOp.PipelineOptions(field=CM.F2())
     println("\n[probe] H1 cokernel fast path (degree=1, graded input, n=$(n))")
     old_h1 = DI._H1_COKERNEL_FASTPATH[]
     fast = base = nothing
     try
         DI._H1_COKERNEL_FASTPATH[] = true
         fast = _bench("  encode(... degree=1, h1 fastpath on)",
-                      () -> PosetModules.encode(data, spec; degree=1, cache=:auto, stage=:encoding_result, pipeline=pipeline);
+                      () -> TamerOp.encode(data, spec; degree=1, cache=:auto, stage=:encoding_result, pipeline=pipeline);
                       reps=reps)
         DI._H1_COKERNEL_FASTPATH[] = false
         base = _bench("  encode(... degree=1, h1 fastpath off)",
-                      () -> PosetModules.encode(data, spec; degree=1, cache=:auto, stage=:encoding_result, pipeline=pipeline);
+                      () -> TamerOp.encode(data, spec; degree=1, cache=:auto, stage=:encoding_result, pipeline=pipeline);
                       reps=reps)
     finally
         DI._H1_COKERNEL_FASTPATH[] = old_h1
@@ -2846,17 +2846,17 @@ function _run_plan_norm_cache_probe(; reps::Int, quick::Bool)
     nbatch = quick ? 12 : 36
     d = quick ? 3 : 5
     rng = MersenneTwister(Int(0xD4AA))
-    batch = Vector{PosetModules.PointCloud}(undef, nbatch)
+    batch = Vector{TamerOp.PointCloud}(undef, nbatch)
     for i in 1:nbatch
         pts = [randn(rng, d) .+ 0.02 * i for _ in 1:n]
-        batch[i] = PosetModules.PointCloud(pts)
+        batch[i] = TamerOp.PointCloud(pts)
     end
-    spec = PosetModules.FiltrationSpec(
+    spec = TamerOp.FiltrationSpec(
         kind=:rips,
         max_dim=1,
         knn=min(10, max(2, n - 1)),
         nn_backend=:auto,
-        construction=PosetModules.ConstructionOptions(;
+        construction=TamerOp.ConstructionOptions(;
             sparsify=:knn,
             output_stage=:simplex_tree,
             budget=(max_simplices=4_000_000, max_edges=4_000_000, memory_budget_bytes=8_000_000_000),

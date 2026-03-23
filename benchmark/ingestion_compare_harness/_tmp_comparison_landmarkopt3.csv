@@ -1,4 +1,0 @@
-case_id,regime,n_points,ambient_dim,max_dim,tamer_cold_ms,multipers_cold_ms,cold_slowdown_tamer_over_multipers,tamer_warm_median_ms,multipers_warm_median_ms,warm_slowdown_tamer_over_multipers,tamer_simplex_count,multipers_simplex_count
-landmark_n50000_d2_s11,landmark_parity,50000,2,1,8859.373271,1.47155299782753,6020.424194,0.935157,1.3980455114506185,0.668903,1976,1976
-landmark_n50000_d2_s17,landmark_parity,50000,2,1,0.906021,1.2373430072329938,0.732231,1.0727600000000002,1.4081480039749295,0.761823,2084,2084
-landmark_n50000_d8_s11,landmark_parity,50000,8,1,1.0192,1.5474900137633085,0.658615,0.9910410000000001,1.4650839730165899,0.676440,1968,1968

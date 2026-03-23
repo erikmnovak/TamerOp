@@ -3,18 +3,18 @@ using SparseArrays
 using Random
 using JSON3
 
-const IR = PosetModules.IndicatorResolutions
-const DI = PosetModules.DataIngestion
-const DFI = PosetModules.DataFileIO
-const SER = PosetModules.Serialization
-const FF = PosetModules.FiniteFringe
-const FZ = PosetModules.FlangeZn
-const PLB = PosetModules.PLBackend
-const MC = PosetModules.ModuleComplexes
-const MD = PosetModules.Modules
-const Inv = PosetModules.Invariants
-const FL = PosetModules.FieldLinAlg
-const AC = PosetModules.AbelianCategories
+const IR = TamerOp.IndicatorResolutions
+const DI = TamerOp.DataIngestion
+const DFI = TamerOp.DataFileIO
+const SER = TamerOp.Serialization
+const FF = TamerOp.FiniteFringe
+const FZ = TamerOp.FlangeZn
+const PLB = TamerOp.PLBackend
+const MC = TamerOp.ModuleComplexes
+const MD = TamerOp.Modules
+const Inv = TamerOp.Invariants
+const FL = TamerOp.FieldLinAlg
+const AC = TamerOp.AbelianCategories
 
 if !isdefined(@__MODULE__, :TestTriGradeFiltration)
 struct TestTriGradeFiltration{P<:NamedTuple} <: DI.AbstractFiltration
@@ -60,6 +60,10 @@ const _TEST_TRIGRADE_SCHEMA = (
 )
 end
 
+if !isdefined(@__MODULE__, :BadUXFiltration)
+struct BadUXFiltration <: DI.AbstractFiltration end
+end
+
 @inline _enc_module(enc::RES.EncodingResult) = DI.materialize_module(enc.M)
 @inline _enc_dims(enc::RES.EncodingResult) = DI.module_dims(enc.M)
 @inline _canon_simplex_tree(st::DI.SimplexTreeMulti) = sort([
@@ -71,31 +75,156 @@ with_fields(FIELDS_FULL) do field
 K = CM.coeff_type(field)
 @inline c(x) = CM.coerce(field, x)
 
+@testset "DataTypes packed storage constructors" begin
+    pts = [0.0 1.0; 2.0 3.0]
+    pc = DT.PointCloud(pts)
+    @test DT.point_matrix(pc) === pts
+    @test length(pc.points) == 2
+    @test pc.points[2] == [2.0, 3.0]
+
+    coords = [0.0 0.0; 1.0 0.5; 2.0 1.0]
+    edge_u = [1, 2]
+    edge_v = [2, 3]
+    weights = [1.0, 2.0]
+    g = DT.GraphData(3, edge_u, edge_v; coords=coords, weights=weights, copy=false)
+    @test DT.coord_matrix(g) === coords
+    @test DT.edge_columns(g)[1] === edge_u
+    @test DT.edge_columns(g)[2] === edge_v
+    @test collect(g.edges) == [(1, 2), (2, 3)]
+    @test g.coords[2] == [1.0, 0.5]
+
+    g2 = DT.GraphData(3, [(1, 2), (2, 3)]; coords=coords, weights=weights, copy=false)
+    @test DT.coord_matrix(g2) === coords
+    @test collect(g2.edges) == [(1, 2), (2, 3)]
+
+    verts = [0.0 0.0; 1.0 0.0; 1.0 1.0]
+    poly_points = [0.0 0.0; 1.0 0.0]
+    poly_offsets = [1, 3]
+    emb = DT.EmbeddedPlanarGraph2D(
+        verts,
+        [1, 2],
+        [2, 3];
+        polyline_offsets=poly_offsets,
+        polyline_points=poly_points,
+        bbox=(0.0, 1.0, 0.0, 1.0),
+        copy=false,
+    )
+    @test DT.vertex_matrix(emb) === verts
+    @test DT.edge_columns(emb)[1] == [1, 2]
+    @test DT.edge_columns(emb)[2] == [2, 3]
+    @test emb.vertices[3] == [1.0, 1.0]
+    @test collect(emb.edges) == [(1, 2), (2, 3)]
+    @test emb.polylines !== nothing
+    @test emb.polylines[1][1] == [0.0, 0.0]
+    @test emb.polylines[1][2] == [1.0, 0.0]
+
+    cells = [Int[10, 11], Int[20]]
+    boundaries = [spzeros(Int, 2, 1)]
+    grades = [(0.0,), (1.0,), (2.0,)]
+    gc = DT.GradedComplex(cells, boundaries, grades)
+    @test getfield(gc, :cell_ids) == [10, 11, 20]
+    @test getfield(gc, :dim_offsets) == [1, 3, 4]
+    @test collect(gc.cells_by_dim[1]) == [10, 11]
+    @test collect(gc.cells_by_dim[2]) == [20]
+    @test collect(gc.cell_dims) == [0, 0, 1]
+    gc2 = DT.GradedComplex(gc.cells_by_dim, gc.boundaries, gc.grades; cell_dims=gc.cell_dims)
+    @test gc2.grades == gc.grades
+    @test collect(gc2.cell_dims) == [0, 0, 1]
+
+    multi_grades = [[(0.0, 0.0)], [(1.0, 1.0)], [(2.0, 2.0), (2.5, 3.0)]]
+    mgc = DT.MultiCriticalGradedComplex(cells, boundaries, multi_grades)
+    @test getfield(mgc, :cell_ids) == [10, 11, 20]
+    @test getfield(mgc, :dim_offsets) == [1, 3, 4]
+    @test getfield(mgc, :grade_offsets) == [1, 2, 3, 5]
+    @test collect(mgc.grades[3]) == [(2.0, 2.0), (2.5, 3.0)]
+    @test collect(mgc.cell_dims) == [0, 0, 1]
+    mgc2 = DT.MultiCriticalGradedComplex(mgc.cells_by_dim, mgc.boundaries, mgc.grades; cell_dims=mgc.cell_dims)
+    @test collect(mgc2.grades[3]) == [(2.0, 2.0), (2.5, 3.0)]
+
+    dup_multi = [[(0.0, 0.0)], [(1.0, 1.0)], [(2.0, 2.0), (2.0, 2.0)]]
+    @test_throws ErrorException DT.MultiCriticalGradedComplex(cells, boundaries, dup_multi)
+end
+
+@testset "Data pipeline: packed-matrix brute-force point-cloud builder parity" begin
+    pts = TamerOp.PointCloud([
+        [0.0, 0.0],
+        [0.5, 0.1],
+        [1.0, 0.0],
+        [1.6, 0.4],
+        [2.0, 0.1],
+        [2.6, 0.5],
+    ])
+    rows = pts.points
+    mat = DT.point_matrix(pts)
+
+    e_knn_rows, d_knn_rows, k_knn_rows = DI._point_cloud_knn_graph(rows, 2; backend=:bruteforce, approx_candidates=0)
+    e_knn_mat, d_knn_mat, k_knn_mat = DI._point_cloud_knn_graph(mat, 2; backend=:bruteforce, approx_candidates=0)
+    @test e_knn_mat == e_knn_rows
+    @test isapprox(d_knn_mat, d_knn_rows; atol=1e-12, rtol=1e-12)
+    @test isapprox(k_knn_mat, k_knn_rows; atol=1e-12, rtol=1e-12)
+
+    e_rad_rows, d_rad_rows = DI._point_cloud_radius_graph(rows, 0.8; backend=:bruteforce, approx_candidates=0)
+    e_rad_mat, d_rad_mat = DI._point_cloud_radius_graph(mat, 0.8; backend=:bruteforce, approx_candidates=0)
+    @test e_rad_mat == e_rad_rows
+    @test isapprox(d_rad_mat, d_rad_rows; atol=1e-12, rtol=1e-12)
+
+    e_idx_rows, d_idx_rows = DI._point_cloud_edges_within_radius_indexed(rows, [1, 3, 4, 6], 1.3)
+    e_idx_mat, d_idx_mat = DI._point_cloud_edges_within_radius_indexed(mat, [1, 3, 4, 6], 1.3)
+    @test e_idx_mat == e_idx_rows
+    @test isapprox(d_idx_mat, d_idx_rows; atol=1e-12, rtol=1e-12)
+
+    spec_knn = TamerOp.FiltrationSpec(
+        kind=:rips,
+        knn=2,
+        nn_backend=:bruteforce,
+        construction=OPT.ConstructionOptions(; sparsify=:knn, output_stage=:simplex_tree),
+    )
+    construction_knn = DI._construction_from_params(spec_knn.params)
+    sparse_rows = DI._point_cloud_sparsify_edge_driven(rows, spec_knn, construction_knn)
+    sparse_mat = DI._point_cloud_sparsify_edge_driven(mat, spec_knn, construction_knn)
+    @test sparse_mat[1] == sparse_rows[1]
+    @test isapprox(sparse_mat[2], sparse_rows[2]; atol=1e-12, rtol=1e-12)
+    @test isapprox(sparse_mat[3], sparse_rows[3]; atol=1e-12, rtol=1e-12)
+
+    spec_lm = TamerOp.FiltrationSpec(kind=:landmark_rips, radius=1.3, nn_backend=:bruteforce)
+    ec = CM.EncodingCache()
+    packed_rows = DI._landmark_radius_subgraph_cached(rows, [1, 3, 4, 6], 1.3, spec_lm; cache=ec)
+    packed_mat = DI._landmark_radius_subgraph_cached(mat, [1, 3, 4, 6], 1.3, spec_lm; cache=ec)
+    @test packed_mat === packed_rows
+    @test packed_mat.edges == e_idx_mat
+    @test isapprox(packed_mat.dists, d_idx_mat; atol=1e-12, rtol=1e-12)
+end
+
 @testset "Data pipeline: JSON round-trips" begin
     mktemp() do path, io
         close(io)
-        data = PosetModules.PointCloud([[0.0], [1.0]])
+        data = TamerOp.PointCloud([[0.0], [1.0]])
         SER.save_dataset_json(path, data)
         obj = JSON3.read(read(path, String))
+        @test obj["layout"] == SER._DATASET_COLUMN_LAYOUT
         @test haskey(obj, "points_flat")
         @test !haskey(obj, "points")
+        @test Vector{Float64}(obj["points_flat"]) == collect(vec(DT.point_matrix(data)))
         data2 = SER.load_dataset_json(path)
         @test length(data2.points) == 2
         @test data2.points[2][1] == 1.0
     end
 
     mktempdir() do dir
-        data = PosetModules.PointCloud([[0.0], [1.0], [2.0]])
+        data = TamerOp.PointCloud([[0.0], [1.0], [2.0]])
         compact_path = joinpath(dir, "compact.json")
         pretty_path = joinpath(dir, "pretty.json")
-        SER.save_dataset_json(compact_path, data; pretty=false)
-        SER.save_dataset_json(pretty_path, data; pretty=true)
+        SER.save_dataset_json(compact_path, data; profile=:compact)
+        SER.save_dataset_json(pretty_path, data; profile=:debug)
         @test filesize(compact_path) < filesize(pretty_path)
+        @test SER.inspect_json(compact_path).profile_hint == :compact
+        @test SER.inspect_json(pretty_path).profile_hint == :debug
+        @test SER.load_dataset_json(compact_path; validation=:strict).points == SER.load_dataset_json(compact_path; validation=:trusted).points
     end
 
     mktemp() do path, io
         close(io)
-        data = PosetModules.ImageNd([0.0 1.0; 2.0 3.0])
+        data = TamerOp.ImageNd([0.0 1.0; 2.0 3.0])
         SER.save_dataset_json(path, data)
         data2 = SER.load_dataset_json(path)
         @test size(data2.data) == (2, 2)
@@ -104,12 +233,14 @@ K = CM.coeff_type(field)
 
     mktemp() do path, io
         close(io)
-        data = PosetModules.GraphData(3, [(1, 2), (2, 3)]; coords=[[0.0], [1.0], [2.0]], weights=[1.0, 2.0])
+        data = TamerOp.GraphData(3, [(1, 2), (2, 3)]; coords=[[0.0], [1.0], [2.0]], weights=[1.0, 2.0])
         SER.save_dataset_json(path, data)
         obj = JSON3.read(read(path, String))
+        @test obj["layout"] == SER._DATASET_COLUMN_LAYOUT
         @test haskey(obj, "edges_u")
         @test haskey(obj, "edges_v")
         @test !haskey(obj, "edges")
+        @test Vector{Float64}(obj["coords_flat"]) == collect(vec(DT.coord_matrix(data)))
         data2 = SER.load_dataset_json(path)
         @test data2.n == 3
         @test length(data2.edges) == 2
@@ -119,22 +250,30 @@ K = CM.coeff_type(field)
     mktemp() do path, io
         close(io)
         write(path, "{\"kind\":\"PointCloud\",\"points\":[[0.0,1.0],[2.0,3.0]]}")
-        data2 = SER.load_dataset_json(path)
-        @test length(data2.points) == 2
-        @test data2.points[1] == [0.0, 1.0]
+        @test_throws ErrorException SER.load_dataset_json(path)
+    end
+
+    mktemp() do path, io
+        close(io)
+        write(path, "{\"kind\":\"PointCloud\",\"layout\":\"columnar_v1\",\"n\":2,\"d\":2,\"points_flat\":[0.0,1.0,2.0,3.0]}")
+        @test_throws ErrorException SER.load_dataset_json(path)
     end
 
     mktemp() do path, io
         close(io)
         write(path, "{\"kind\":\"GraphData\",\"n\":3,\"edges\":[[1,2],[2,3]],\"coords\":null,\"weights\":null}")
-        data2 = SER.load_dataset_json(path)
-        @test data2.n == 3
-        @test data2.edges == [(1, 2), (2, 3)]
+        @test_throws ErrorException SER.load_dataset_json(path)
     end
 
     mktemp() do path, io
         close(io)
-        data = PosetModules.EmbeddedPlanarGraph2D([[0.0, 0.0], [1.0, 0.0]], [(1, 2)])
+        write(path, "{\"kind\":\"GraphData\",\"layout\":\"columnar_v1\",\"n\":3,\"edges_u\":[1,2],\"edges_v\":[2,3],\"coords_dim\":null,\"coords_flat\":null,\"weights\":null}")
+        @test_throws ErrorException SER.load_dataset_json(path)
+    end
+
+    mktemp() do path, io
+        close(io)
+        data = TamerOp.EmbeddedPlanarGraph2D([[0.0, 0.0], [1.0, 0.0]], [(1, 2)])
         SER.save_dataset_json(path, data)
         data2 = SER.load_dataset_json(path)
         @test length(data2.vertices) == 2
@@ -146,7 +285,7 @@ K = CM.coeff_type(field)
         cells = [Int[1]]
         boundaries = SparseMatrixCSC{Int,Int}[]
         grades = [Float64[0.0]]
-        data = PosetModules.GradedComplex(cells, boundaries, grades)
+        data = TamerOp.GradedComplex(cells, boundaries, grades)
         SER.save_dataset_json(path, data)
         data2 = SER.load_dataset_json(path)
         @test length(data2.cells_by_dim) == 1
@@ -162,23 +301,23 @@ K = CM.coeff_type(field)
             [Float64[0.0, 0.0]],
             [Float64[1.0, 0.0], Float64[0.0, 1.0]],
         ]
-        data = PosetModules.MultiCriticalGradedComplex(cells, boundaries, grades)
+        data = TamerOp.MultiCriticalGradedComplex(cells, boundaries, grades)
         SER.save_dataset_json(path, data)
         data2 = SER.load_dataset_json(path)
-        @test data2 isa PosetModules.MultiCriticalGradedComplex
+        @test data2 isa TamerOp.MultiCriticalGradedComplex
         @test length(data2.grades) == 3
         @test length(data2.grades[3]) == 2
     end
 
     mktemp() do path, io
         close(io)
-        data = PosetModules.PointCloud([[0.0], [1.0]])
-        spec = PosetModules.FiltrationSpec(
+        data = TamerOp.PointCloud([[0.0], [1.0]])
+        spec = TamerOp.FiltrationSpec(
             kind=:rips,
             max_dim=1,
-            construction=PosetModules.ConstructionOptions(; output_stage=:simplex_tree),
+            construction=TamerOp.ConstructionOptions(; output_stage=:simplex_tree),
         )
-        st = PosetModules.encode(data, spec; degree=0)
+        st = TamerOp.encode(data, spec; degree=0)
         @test st isa DI.SimplexTreeMulti
         SER.save_dataset_json(path, st)
         st2 = SER.load_dataset_json(path)
@@ -189,26 +328,32 @@ K = CM.coeff_type(field)
 
     mktemp() do path, io
         close(io)
-        data = PosetModules.PointCloud([[0.0], [1.0]])
-        spec = PosetModules.FiltrationSpec(kind=:rips, max_dim=1, axes=([0.0, 1.0],))
+        data = TamerOp.PointCloud([[0.0], [1.0]])
+        spec = TamerOp.FiltrationSpec(kind=:rips, max_dim=1, axes=([0.0, 1.0],))
         SER.save_pipeline_json(path, data, spec; degree=1)
         data2, spec2, degree2, popts = SER.load_pipeline_json(path)
         @test length(data2.points) == 2
         @test spec2.kind == :rips
         @test spec2.params[:max_dim] == 1
         @test degree2 == 1
-        @test popts isa PosetModules.PipelineOptions
+        @test popts isa TamerOp.PipelineOptions
         @test popts.axes_policy == :encoding
         @test popts.poset_kind == :signature
+
+        data3, spec3, degree3, popts3 = SER.load_pipeline_json(path; validation=:trusted)
+        @test data3.points == data2.points
+        @test spec3.kind == spec2.kind
+        @test degree3 == degree2
+        @test popts3 == popts
     end
 
     mktemp() do path, io
         close(io)
-        data = PosetModules.PointCloud([[0.0], [1.0], [2.0]])
-        spec = PosetModules.FiltrationSpec(
+        data = TamerOp.PointCloud([[0.0], [1.0], [2.0]])
+        spec = TamerOp.FiltrationSpec(
             kind=:rips,
             max_dim=1,
-            construction=PosetModules.ConstructionOptions(;
+            construction=TamerOp.ConstructionOptions(;
                 sparsify=:knn,
                 collapse=:none,
                 output_stage=:encoding_result,
@@ -226,10 +371,10 @@ K = CM.coeff_type(field)
 
     mktemp() do path, io
         close(io)
-        data = PosetModules.PointCloud([[0.0], [1.0]])
+        data = TamerOp.PointCloud([[0.0], [1.0]])
         filt = DI.RipsFiltration(
             max_dim=1,
-            construction=PosetModules.ConstructionOptions(
+            construction=TamerOp.ConstructionOptions(
                 ;
                 sparsify=:knn,
                 collapse=:none,
@@ -237,7 +382,7 @@ K = CM.coeff_type(field)
                 budget=(max_simplices=nothing, max_edges=16, memory_budget_bytes=1_000_000),
             ),
         )
-        popts = PosetModules.PipelineOptions(;
+        popts = TamerOp.PipelineOptions(;
             orientation=(1,),
             axes_policy=:coarsen,
             axis_kind=:zn,
@@ -258,7 +403,7 @@ K = CM.coeff_type(field)
         b = get(cons, "budget", get(cons, :budget, nothing))
         @test get(b, "max_edges", get(b, :max_edges, nothing)) == 16
         @test degree2 == 1
-        @test popts2 isa PosetModules.PipelineOptions
+        @test popts2 isa TamerOp.PipelineOptions
         @test popts2.orientation == (1,)
         @test popts2.axes_policy == :coarsen
         @test popts2.axis_kind == :zn
@@ -269,8 +414,8 @@ K = CM.coeff_type(field)
 
     mktemp() do path, io
         close(io)
-        data = PosetModules.GraphData(3, [(1, 2), (2, 3)])
-        spec = PosetModules.FiltrationSpec(kind=:graph_lower_star, vertex_grades=[[0.0, 0.0], [1.0, 0.0], [1.0, 1.0]])
+        data = TamerOp.GraphData(3, [(1, 2), (2, 3)])
+        spec = TamerOp.FiltrationSpec(kind=:graph_lower_star, vertex_grades=[[0.0, 0.0], [1.0, 0.0], [1.0, 1.0]])
         SER.save_pipeline_json(path, data, spec; degree=0)
         _, spec2, degree2, popts = SER.load_pipeline_json(path)
         @test spec2.kind == :graph_lower_star
@@ -279,11 +424,181 @@ K = CM.coeff_type(field)
         @test popts.axes_policy == :encoding
     end
 
+    @testset "Serialization artifact summaries and validation" begin
+        mktempdir() do dir
+            dataset_path = joinpath(dir, "dataset.json")
+            pipeline_path = joinpath(dir, "pipeline.json")
+
+            data = TamerOp.PointCloud([[0.0], [1.0]])
+            spec = TamerOp.FiltrationSpec(kind=:rips, max_dim=1, axes=([0.0, 1.0],))
+
+            SER.save_dataset_json(dataset_path, data)
+            dataset_info = SER.inspect_json(dataset_path)
+            @test dataset_info isa SER.JSONArtifactSummary
+            @test dataset_info.path == dataset_path
+            @test SER.artifact_kind(dataset_info) == "PointCloud"
+            @test SER.schema_version(dataset_info) === nothing
+            @test SER.artifact_field(dataset_info) === nothing
+            @test SER.artifact_poset_kind(dataset_info) === nothing
+            @test SER.artifact_path(dataset_info) == dataset_path
+            @test SER.artifact_profile_hint(dataset_info) == :compact
+            @test SER.artifact_data_kind(dataset_info) == "PointCloud"
+            @test SER.has_encoding_map(dataset_info) === nothing
+            @test SER.has_dense_leq(dataset_info) === nothing
+            @test SER.artifact_size_bytes(dataset_info) isa Integer
+            @test SER.json_artifact_summary(dataset_path).kind == "PointCloud"
+            @test SER.dataset_json_summary(dataset_path).kind == "PointCloud"
+            @test TamerOp.describe(dataset_info).path == dataset_path
+            @test occursin("JSONArtifactSummary", sprint(show, MIME"text/plain"(), dataset_info))
+
+            dataset_report = SER.check_dataset_json(dataset_path)
+            @test dataset_report.valid
+            @test dataset_report.summary isa SER.JSONArtifactSummary
+            @test dataset_report.artifact_kind == "PointCloud"
+            dataset_validation = SER.serialization_validation_summary(dataset_report)
+            @test dataset_validation isa SER.SerializationValidationSummary
+            @test TamerOp.describe(dataset_validation).valid
+            @test occursin("SerializationValidationSummary", sprint(show, MIME"text/plain"(), dataset_validation))
+
+            SER.save_pipeline_json(pipeline_path, data, spec; degree=1)
+            pipeline_info = SER.pipeline_json_summary(pipeline_path)
+            @test pipeline_info isa SER.JSONArtifactSummary
+            @test SER.artifact_kind(pipeline_info) == "PipelineJSON"
+            @test SER.artifact_path(pipeline_info) == pipeline_path
+            @test SER.artifact_data_kind(pipeline_info) == "PointCloud"
+            @test pipeline_info.data_kind == "PointCloud"
+            @test SER.check_pipeline_json(pipeline_path).valid
+
+            meta = SER.feature_schema_header(format=:npz)
+            meta_info = SER.feature_metadata_summary(meta)
+            @test meta_info isa SER.JSONArtifactSummary
+            @test SER.artifact_kind(meta_info) == "features"
+            @test SER.schema_version(meta_info) == string(SER.TAMER_FEATURE_SCHEMA_VERSION)
+            @test meta_info.format == "npz"
+            @test SER.check_feature_metadata_json(meta).valid
+
+            @test TOA.JSONArtifactSummary === SER.JSONArtifactSummary
+            @test TOA.SerializationValidationSummary === SER.SerializationValidationSummary
+            @test TOA.artifact_kind === SER.artifact_kind
+            @test TOA.schema_version === SER.schema_version
+            @test TOA.artifact_field === SER.artifact_field
+            @test TOA.artifact_poset_kind === SER.artifact_poset_kind
+            @test TOA.artifact_path === SER.artifact_path
+            @test TOA.artifact_profile_hint === SER.artifact_profile_hint
+            @test TOA.artifact_data_kind === SER.artifact_data_kind
+            @test TOA.has_encoding_map === SER.has_encoding_map
+            @test TOA.has_dense_leq === SER.has_dense_leq
+            @test TOA.artifact_size_bytes === SER.artifact_size_bytes
+            @test TOA.json_artifact_summary === SER.json_artifact_summary
+            @test TOA.dataset_json_summary === SER.dataset_json_summary
+            @test TOA.pipeline_json_summary === SER.pipeline_json_summary
+            @test TOA.feature_metadata_summary === SER.feature_metadata_summary
+            @test TOA.check_feature_metadata_json === SER.check_feature_metadata_json
+            @test TOA.serialization_validation_summary === SER.serialization_validation_summary
+            @test TOA.check_dataset_json === SER.check_dataset_json
+            @test TOA.check_pipeline_json === SER.check_pipeline_json
+
+            @test SER.check_json_save_profile(:compact).valid
+            @test SER.check_json_save_profile(:compact).normalized == (pretty=false,)
+            @test SER.check_json_save_profile(:debug).normalized == (pretty=true,)
+            @test !SER.check_json_save_profile(:portable).valid
+            @test !SER.check_json_save_profile(:bad).valid
+            @test_throws ArgumentError SER.check_json_save_profile(:portable; throw=true)
+            @test_throws ArgumentError SER.check_json_save_profile(:bad; throw=true)
+
+            @test SER.check_encoding_save_profile(:compact).valid
+            @test SER.check_encoding_save_profile(:compact).normalized == (include_pi=true, include_leq=:auto, pretty=false)
+            @test !SER.check_encoding_save_profile(:bad).valid
+            @test_throws ArgumentError SER.check_encoding_save_profile(:bad; throw=true)
+
+            @test SER.check_include_leq_option(:auto).valid
+            @test SER.check_include_leq_option(true).valid
+            @test !SER.check_include_leq_option(:bad).valid
+            @test_throws ArgumentError SER.check_include_leq_option(:bad; throw=true)
+
+            @test SER.check_serialization_validation_mode(:strict).valid
+            @test SER.check_serialization_validation_mode(:strict).normalized === true
+            @test !SER.check_serialization_validation_mode(:bad).valid
+            @test_throws ArgumentError SER.check_serialization_validation_mode(:bad; throw=true)
+
+            @test SER.check_encoding_output_mode(:fringe).valid
+            @test SER.check_encoding_output_mode(:fringe).normalized === :fringe
+            @test !SER.check_encoding_output_mode(:bad).valid
+            @test_throws ArgumentError SER.check_encoding_output_mode(:bad; throw=true)
+
+            @test TOA.check_json_save_profile === SER.check_json_save_profile
+            @test TOA.check_encoding_save_profile === SER.check_encoding_save_profile
+            @test TOA.check_include_leq_option === SER.check_include_leq_option
+            @test TOA.check_serialization_validation_mode === SER.check_serialization_validation_mode
+            @test TOA.check_encoding_output_mode === SER.check_encoding_output_mode
+        end
+
+        mktemp() do path, io
+            close(io)
+            write(path, JSON3.write(Dict("metadata" => SER.feature_schema_header(format=:npz))))
+            report = SER.check_feature_metadata_json(path)
+            @test report.valid
+            @test report.summary isa SER.JSONArtifactSummary
+        end
+
+        @test !SER.check_feature_metadata_json(Dict("kind" => "features")).valid
+        @test_throws ArgumentError SER.check_feature_metadata_json(Dict("kind" => "features"); throw=true)
+
+        mktemp() do path, io
+            close(io)
+            write(path, "{}")
+            report = SER.check_dataset_json(path)
+            @test !report.valid
+            @test !isempty(report.issues)
+            @test_throws ArgumentError SER.check_dataset_json(path; throw=true)
+            @test_throws ArgumentError SER.dataset_json_summary(path)
+        end
+
+        mktemp() do path, io
+            close(io)
+            data = TamerOp.PointCloud([[0.0], [1.0]])
+            spec = TamerOp.FiltrationSpec(kind=:rips, max_dim=1, axes=([0.0, 1.0],))
+            SER.save_pipeline_json(path, data, spec; degree=1)
+            raw = read(path, String)
+            write(path, replace(raw, "\"schema_version\":2" => "\"schema_version\":0"))
+            report = SER.check_pipeline_json(path)
+            @test !report.valid
+            @test any(issue -> occursin("schema_version", issue), report.issues)
+            @test_throws ArgumentError SER.check_pipeline_json(path; throw=true)
+        end
+
+        mktemp() do path, io
+            close(io)
+            data = TamerOp.PointCloud([[0.0], [1.0]])
+            spec = TamerOp.FiltrationSpec(kind=:rips, max_dim=1, axes=([0.0, 1.0],))
+            SER.save_pipeline_json(path, data, spec; degree=1)
+            obj = JSON3.read(read(path, String))
+            hacked = Dict{String,Any}(String(k) => v for (k, v) in pairs(obj))
+            pop!(hacked, "pipeline_options", nothing)
+            hacked["schema_version"] = 0
+            write(path, JSON3.write(hacked))
+            @test_throws ErrorException SER.load_pipeline_json(path; validation=:strict)
+            _, spec_rt, degree_rt, popts_rt = SER.load_pipeline_json(path; validation=:trusted)
+            @test spec_rt.kind == :rips
+            @test degree_rt == 1
+            @test popts_rt.axes_policy == :encoding
+            @test popts_rt.poset_kind == :signature
+        end
+
+        mktemp() do path, io
+            close(io)
+            data = TamerOp.PointCloud([[0.0], [1.0]])
+            @test_throws ArgumentError SER.save_dataset_json(path, data; profile=:portable)
+            spec = TamerOp.FiltrationSpec(kind=:rips, max_dim=1, axes=([0.0, 1.0],))
+            @test_throws ArgumentError SER.save_pipeline_json(path, data, spec; profile=:portable)
+        end
+    end
+
     mktemp() do path, io
         close(io)
-        data = PosetModules.PointCloud([[0.0], [1.0]])
-        spec = PosetModules.FiltrationSpec(kind=:rips, max_dim=1, axes=([0.0, 1.0],))
-        enc = PosetModules.encode(data, spec; degree=0)
+        data = TamerOp.PointCloud([[0.0], [1.0]])
+        spec = TamerOp.FiltrationSpec(kind=:rips, max_dim=1, axes=([0.0, 1.0],))
+        enc = TamerOp.encode(data, spec; degree=0)
         SER.save_encoding_json(path, enc)
         H2, pi2 = SER.load_encoding_json(path; output=:fringe_with_pi)
         @test FF.nvertices(H2.P) == FF.nvertices(enc.P)
@@ -299,7 +614,7 @@ K = CM.coeff_type(field)
         flats = [FZ.IndFlat(F, [0]; id=:F)]
         injectives = [FZ.IndInj(F, [0]; id=:E)]
         FG = FZ.Flange{K}(1, flats, injectives, [c(1)]; field=field)
-        enc = PosetModules.encode(FG; backend=:zn)
+        enc = TamerOp.encode(FG; backend=:zn)
         @test enc.pi isa EC.CompiledEncoding
         @test enc.pi.meta isa CM.EncodingCache
         SER.save_encoding_json(path, enc; include_pi=false)
@@ -321,7 +636,7 @@ K = CM.coeff_type(field)
         close(io)
         Ups = [PLB.BoxUpset([0.0, 0.0])]
         Downs = [PLB.BoxDownset([1.0, 1.0])]
-        enc = PosetModules.encode(Ups, Downs; backend=:pl_backend)
+        enc = TamerOp.encode(Ups, Downs; backend=:pl_backend)
         @test enc.pi isa EC.CompiledEncoding
         @test enc.pi.meta isa CM.EncodingCache
         SER.save_encoding_json(path, enc.P, enc.H, enc.pi)
@@ -345,13 +660,13 @@ K = CM.coeff_type(field)
             BitVector([false]),
             BitVector([false]),
         ]
-        P = PosetModules.ZnEncoding.SignaturePoset(sig_y, sig_z)
+        P = TamerOp.ZnEncoding.SignaturePoset(sig_y, sig_z)
         U = FF.upset_closure(P, trues(FF.nvertices(P)))
         D = FF.downset_closure(P, trues(FF.nvertices(P)))
         H = FF.FringeModule{K}(P, [U], [D], reshape([c(1)], 1, 1); field=field)
         SER.save_encoding_json(path, H)
         obj = JSON3.read(read(path, String))
-        @test Int(obj["schema_version"]) == PosetModules.Serialization.ENCODING_SCHEMA_VERSION
+        @test Int(obj["schema_version"]) == TamerOp.Serialization.ENCODING_SCHEMA_VERSION
         @test obj["U"]["kind"] == "packed_words_v1"
         @test obj["D"]["kind"] == "packed_words_v1"
         @test obj["phi"]["kind"] == "qq_chunks_v1" || obj["phi"]["kind"] == "fp_flat_v1" || obj["phi"]["kind"] == "real_flat_v1"
@@ -359,15 +674,15 @@ K = CM.coeff_type(field)
         @test obj["poset"]["sig_z"]["kind"] == "packed_words_v1"
         @test !haskey(obj["poset"], "leq")
         H2 = SER.load_encoding_json(path; output=:fringe)
-        @test H2.P isa PosetModules.ZnEncoding.SignaturePoset
-        @test H2.P.sig_y isa PosetModules.ZnEncoding.PackedSignatureRows
-        @test H2.P.sig_z isa PosetModules.ZnEncoding.PackedSignatureRows
+        @test H2.P isa TamerOp.ZnEncoding.SignaturePoset
+        @test H2.P.sig_y isa TamerOp.ZnEncoding.PackedSignatureRows
+        @test H2.P.sig_z isa TamerOp.ZnEncoding.PackedSignatureRows
         @test FF.nvertices(H2.P) == FF.nvertices(P)
         @test FF.leq_matrix(H2.P) == FF.leq_matrix(P)
 
         SER.save_encoding_json(path, H; include_leq=false)
         H2 = SER.load_encoding_json(path; output=:fringe)
-        @test H2.P isa PosetModules.ZnEncoding.SignaturePoset
+        @test H2.P isa TamerOp.ZnEncoding.SignaturePoset
         @test FF.nvertices(H2.P) == FF.nvertices(P)
         @test FF.leq_matrix(H2.P) == FF.leq_matrix(P)
     end
@@ -393,12 +708,12 @@ K = CM.coeff_type(field)
         injectives = [FZ.IndInj(F, [1]; id=:E)]
         FG = FZ.Flange{K}(1, flats, injectives, [c(1)]; field=field)
 
-        out_tuple = PosetModules.encode((FG, FG); backend=:zn)
-        out_vec = PosetModules.encode(FZ.Flange{K}[FG, FG]; backend=:zn)
+        out_tuple = TamerOp.encode((FG, FG); backend=:zn)
+        out_vec = TamerOp.encode(FZ.Flange{K}[FG, FG]; backend=:zn)
         @test length(out_tuple) == 2
         @test length(out_vec) == 2
-        @test_throws MethodError PosetModules.encode(FG, FG; backend=:zn)
-        @test_throws MethodError PosetModules.encode(FG, FG, FG; backend=:zn)
+        @test_throws MethodError TamerOp.encode(FG, FG; backend=:zn)
+        @test_throws MethodError TamerOp.encode(FG, FG, FG; backend=:zn)
     end
 end
 
@@ -407,31 +722,47 @@ end
         pc_path = joinpath(dir, "points.csv")
         write(pc_path, "x,y,z\n0.0,1.0,2.0\n1.0,2.0,3.0\n2.0,3.0,4.0\n")
 
-        opts = PosetModules.DataFileOptions(; cols=(:x, :z), header=true)
-        data = PosetModules.load_data(pc_path; kind=:point_cloud, opts=opts)
-        @test data isa PosetModules.PointCloud
+        opts = TamerOp.DataFileOptions(; cols=(:x, :z), header=true)
+        data = TamerOp.load_data(pc_path; kind=:point_cloud, opts=opts)
+        @test data isa TamerOp.PointCloud
         @test length(data.points) == 3
         @test data.points[2] == [1.0, 3.0]
-        @test_throws ArgumentError PosetModules.load_data(pc_path; kind=:point_cloud, opts=opts, max_dim=1)
+        @test_throws ArgumentError TamerOp.load_data(pc_path; kind=:point_cloud, opts=opts, max_dim=1)
 
-        info = PosetModules.inspect_data_file(pc_path)
+        info = TamerOp.inspect_data_file(pc_path)
+        @test info isa DFI.DataFileInspectionSummary
         @test info.format == :csv
         @test :point_cloud in info.candidate_kinds
         @test info.ncols == 3
+        @test DFI.kind(info) == :table
+        @test DFI.is_table_file(info)
+        @test !DFI.is_dataset_json(info)
+        @test DFI.is_ambiguous(info)
+        @test DFI.requires_explicit_kind(info)
+        @test DFI.suggested_kind(info) === nothing
+        @test DFI.resolved_format(info) == :csv
+        @test DFI.resolved_kind(info) === nothing
+        @test DFI.columns(info) == (:x, :y, :z)
+        @test length(DFI.sample_rows(info)) == 3
+        @test DFI.detail(info) isa DFI.DelimitedTableInspection
+        @test describe(info).kind == :data_file_inspection
+        @test describe(DFI.detail(info)).kind == :delimited_table_inspection
+        @test DFI.data_file_summary(info).format == :csv
+        @test occursin("DataFileInspectionSummary", sprint(show, info))
     end
 
     mktempdir() do dir
         g_path = joinpath(dir, "graph.tsv")
         write(g_path, "u\tv\tw\n1\t2\t1.5\n2\t3\t2.5\n")
 
-        opts = PosetModules.DataFileOptions(;
+        opts = TamerOp.DataFileOptions(;
             header=true,
             u_col=:u,
             v_col=:v,
             weight_col=:w,
         )
-        g = PosetModules.load_data(g_path; kind=:graph, format=:tsv, opts=opts)
-        @test g isa PosetModules.GraphData
+        g = TamerOp.load_data(g_path; kind=:graph, format=:tsv, opts=opts)
+        @test g isa TamerOp.GraphData
         @test g.n == 3
         @test g.edges == [(1, 2), (2, 3)]
         @test g.weights == [1.5, 2.5]
@@ -440,8 +771,8 @@ end
     mktempdir() do dir
         g_path = joinpath(dir, "graph_no_header.csv")
         write(g_path, "1,2\n2,4\n")
-        g = PosetModules.load_data(g_path; kind=:graph, format=:csv)
-        @test g isa PosetModules.GraphData
+        g = TamerOp.load_data(g_path; kind=:graph, format=:csv)
+        @test g isa TamerOp.GraphData
         @test g.edges == [(1, 2), (2, 4)]
         @test g.n == 4
     end
@@ -449,8 +780,8 @@ end
     mktempdir() do dir
         img_path = joinpath(dir, "img.txt")
         write(img_path, "0 1 2\n3 4 5\n")
-        img = PosetModules.load_data(img_path; kind=:image, format=:txt)
-        @test img isa PosetModules.ImageNd
+        img = TamerOp.load_data(img_path; kind=:image, format=:txt)
+        @test img isa TamerOp.ImageNd
         @test size(img.data) == (2, 3)
         @test img.data[2, 3] == 5.0
     end
@@ -458,20 +789,119 @@ end
     mktempdir() do dir
         d_path = joinpath(dir, "dist.csv")
         write(d_path, "0,1,2\n1,0,3\n2,3,0\n")
-        G = PosetModules.load_data(
+        G = TamerOp.load_data(
             d_path;
             kind=:distance_matrix,
             format=:csv,
             max_dim=1,
-            construction=PosetModules.ConstructionOptions(),
+            construction=TamerOp.ConstructionOptions(),
         )
-        @test G isa PosetModules.GradedComplex
+        @test G isa TamerOp.GradedComplex
     end
 
     mktempdir() do dir
         bad_path = joinpath(dir, "ambiguous.csv")
         write(bad_path, "1,2\n3,4\n")
-        @test_throws ArgumentError PosetModules.load_data(bad_path)
+        @test_throws ArgumentError TamerOp.load_data(bad_path)
+    end
+end
+
+@testset "Data pipeline: DataFileIO summaries and validators" begin
+    mktempdir() do dir
+        pc_path = joinpath(dir, "points.csv")
+        write(pc_path, "x,y,z\n0.0,1.0,2.0\n1.0,2.0,3.0\n2.0,3.0,4.0\n")
+        g_path = joinpath(dir, "graph.tsv")
+        write(g_path, "u\tv\tw\n1\t2\t1.5\n2\t3\t2.5\n")
+        nonsquare_path = joinpath(dir, "nonsquare.csv")
+        write(nonsquare_path, "0,1,2\n1,0,3\n")
+        ragged_path = joinpath(dir, "ragged.csv")
+        write(ragged_path, "1,2\n3\n")
+        json_path = joinpath(dir, "pts.json")
+        TamerOp.save_dataset_json(json_path, TamerOp.PointCloud([[0.0], [1.0], [2.0]]))
+        weird_path = joinpath(dir, "data.weird")
+        write(weird_path, "1,2,3\n")
+
+        info_json = TamerOp.inspect_data_file(json_path)
+        @test info_json isa DFI.DataFileInspectionSummary
+        @test DFI.is_dataset_json(info_json)
+        @test !DFI.is_table_file(info_json)
+        @test DFI.detail(info_json) isa DFI.DatasetFileInspection
+        @test DFI.resolved_kind(info_json) == :point_cloud
+        @test !DFI.is_ambiguous(info_json)
+        @test !DFI.requires_explicit_kind(info_json)
+        @test DFI.suggested_kind(info_json) == :point_cloud
+        @test hasproperty(describe(info_json), :schema_version)
+        @test isnothing(DFI.schema_version(info_json))
+        @test describe(DFI.detail(info_json)).kind == :dataset_file_inspection
+
+        file_ok = DFI.check_data_file(pc_path)
+        @test file_ok isa DFI.DataFileValidationSummary
+        @test DFI.ok(file_ok)
+        @test DFI.validation_kind(file_ok) == :data_file_validation
+        @test isempty(DFI.issues(file_ok))
+        @test DFI.inspection(file_ok) isa DFI.DataFileInspectionSummary
+        @test file_ok.candidate_kinds == (:point_cloud, :graph, :image, :distance_matrix)
+        @test occursin("DataFileValidationSummary", sprint(show, file_ok))
+        @test DFI.data_file_validation_summary(file_ok) === file_ok
+        @test DFI.data_file_validation_summary(pc_path).ok
+
+        file_bad = DFI.check_data_file(ragged_path)
+        @test !DFI.ok(file_bad)
+        @test !isempty(DFI.issues(file_bad))
+        @test_throws ArgumentError DFI.check_data_file(ragged_path; throw=true)
+
+        file_fmt_bad = DFI.check_data_file(weird_path)
+        @test !file_fmt_bad.ok
+        @test occursin("could not infer format", first(DFI.issues(file_fmt_bad)))
+
+        col_ok = DFI.check_table_columns(g_path; kind=:graph, format=:tsv,
+                                         opts=TamerOp.DataFileOptions(; header=true, u_col=:u, v_col=:v, weight_col=:w))
+        @test col_ok isa DFI.TableColumnValidationSummary
+        @test DFI.ok(col_ok)
+        @test DFI.validation_kind(col_ok) == :table_column_validation
+        @test DFI.resolved_columns(col_ok) == (; u=:u, v=:v, weight=:w)
+        @test describe(col_ok).kind == :table_column_validation
+        @test DFI.table_column_validation_summary(col_ok) === col_ok
+
+        col_bad = DFI.check_table_columns(g_path; kind=:graph, format=:tsv,
+                                          opts=TamerOp.DataFileOptions(; header=true, u_col=:src, v_col=:dst))
+        @test !DFI.ok(col_bad)
+        @test occursin("not found", first(DFI.issues(col_bad)))
+        @test_throws ArgumentError DFI.check_table_columns(g_path; kind=:graph, format=:tsv,
+                                                           opts=TamerOp.DataFileOptions(; header=true, u_col=:src, v_col=:dst),
+                                                           throw=true)
+
+        dist_bad = DFI.check_table_columns(nonsquare_path; kind=:distance_matrix, format=:csv)
+        @test !dist_bad.ok
+        @test occursin("n x n", first(DFI.issues(dist_bad)))
+
+        load_bad = DFI.check_load_data(pc_path)
+        @test load_bad isa DFI.LoadDataValidationSummary
+        @test !DFI.ok(load_bad)
+        @test occursin("kind=:auto is ambiguous", first(DFI.issues(load_bad)))
+
+        load_ok = DFI.check_load_data(pc_path; kind=:point_cloud,
+                                      opts=TamerOp.DataFileOptions(; header=true, cols=(:x, :y)))
+        @test DFI.ok(load_ok)
+        @test DFI.validation_kind(load_ok) == :load_data_validation
+        @test DFI.inspection(load_ok) isa DFI.DataFileInspectionSummary
+        @test DFI.resolved_columns(load_ok) == (; coords=(:x, :y))
+        @test occursin("LoadDataValidationSummary", sprint(show, load_ok))
+        @test DFI.load_data_validation_summary(load_ok) === load_ok
+
+        @test TOA.DataFileInspectionSummary === DFI.DataFileInspectionSummary
+        @test TOA.DelimitedTableInspection === DFI.DelimitedTableInspection
+        @test TOA.DatasetFileInspection === DFI.DatasetFileInspection
+        @test TOA.DataFileValidationSummary === DFI.DataFileValidationSummary
+        @test TOA.LoadDataValidationSummary === DFI.LoadDataValidationSummary
+        @test TOA.TableColumnValidationSummary === DFI.TableColumnValidationSummary
+        @test TOA.data_file_summary === DFI.data_file_summary
+        @test TOA.data_file_validation_summary === DFI.data_file_validation_summary
+        @test TOA.load_data_validation_summary === DFI.load_data_validation_summary
+        @test TOA.table_column_validation_summary === DFI.table_column_validation_summary
+        @test TOA.check_data_file === DFI.check_data_file
+        @test TOA.check_load_data === DFI.check_load_data
+        @test TOA.check_table_columns === DFI.check_table_columns
     end
 end
 
@@ -479,23 +909,23 @@ end
     mktempdir() do dir
         pc_path = joinpath(dir, "pts.csv")
         write(pc_path, "x,y\n0.0,0.0\n1.0,0.0\n0.0,1.0\n")
-        spec = PosetModules.FiltrationSpec(kind=:rips, max_dim=1)
-        opts = PosetModules.DataFileOptions(; header=true, cols=(:x, :y))
-        enc_path = PosetModules.encode(pc_path, spec; kind=:point_cloud, file_opts=opts, degree=0)
-        enc_mem = PosetModules.encode(PosetModules.PointCloud([[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]]), spec; degree=0)
+        spec = TamerOp.FiltrationSpec(kind=:rips, max_dim=1)
+        opts = TamerOp.DataFileOptions(; header=true, cols=(:x, :y))
+        enc_path = TamerOp.encode(pc_path, spec; kind=:point_cloud, file_opts=opts, degree=0)
+        enc_mem = TamerOp.encode(TamerOp.PointCloud([[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]]), spec; degree=0)
         @test enc_path isa RES.EncodingResult
         @test enc_mem isa RES.EncodingResult
         @test FF.nvertices(enc_path.P) == FF.nvertices(enc_mem.P)
-        @test PosetModules.Results.module_dims(PosetModules.Results.materialize_module(enc_path.M)) ==
-              PosetModules.Results.module_dims(PosetModules.Results.materialize_module(enc_mem.M))
+        @test TamerOp.Results.module_dims(TamerOp.Results.materialize_module(enc_path.M)) ==
+              TamerOp.Results.module_dims(TamerOp.Results.materialize_module(enc_mem.M))
     end
 
     mktempdir() do dir
         json_path = joinpath(dir, "pts.json")
-        data = PosetModules.PointCloud([[0.0], [1.0], [2.0]])
-        PosetModules.save_dataset_json(json_path, data)
-        spec = PosetModules.FiltrationSpec(kind=:rips, max_dim=1)
-        enc = PosetModules.encode(json_path, spec; degree=0)
+        data = TamerOp.PointCloud([[0.0], [1.0], [2.0]])
+        TamerOp.save_dataset_json(json_path, data)
+        spec = TamerOp.FiltrationSpec(kind=:rips, max_dim=1)
+        enc = TamerOp.encode(json_path, spec; degree=0)
         @test enc isa RES.EncodingResult
         @test FF.nvertices(enc.P) > 0
     end
@@ -522,24 +952,24 @@ end
     cells = [Int[1, 2]]
     boundaries = SparseMatrixCSC{Int,Int}[]
     grades = [Float64[1.0], Float64[2.0]]
-    G = PosetModules.GradedComplex(cells, boundaries, grades)
+    G = TamerOp.GradedComplex(cells, boundaries, grades)
 
-    spec_auto = PosetModules.FiltrationSpec(kind=:graded, orientation=(-1,))
-    enc_auto = PosetModules.encode(G, spec_auto; degree=0)
+    spec_auto = TamerOp.FiltrationSpec(kind=:graded, orientation=(-1,))
+    enc_auto = TamerOp.encode(G, spec_auto; degree=0)
     axes_auto = EC.axes_from_encoding(enc_auto.pi)
     @test axes_auto == (Float64[-2.0, -1.0],)
 
     # Explicit axes must remain unchanged even with negative orientation.
     explicit_axes = (Float64[-3.0, -2.0, -1.0],)
-    spec_explicit = PosetModules.FiltrationSpec(kind=:graded, orientation=(-1,), axes=explicit_axes)
-    enc_explicit = PosetModules.encode(G, spec_explicit; degree=0)
+    spec_explicit = TamerOp.FiltrationSpec(kind=:graded, orientation=(-1,), axes=explicit_axes)
+    enc_explicit = TamerOp.encode(G, spec_explicit; degree=0)
     @test EC.axes_from_encoding(enc_explicit.pi) == explicit_axes
 end
 
 @testset "Data pipeline: point cloud auto axes honor orientation" begin
-    data = PosetModules.PointCloud([[0.0], [1.0]])
-    spec = PosetModules.FiltrationSpec(kind=:rips, max_dim=1, orientation=(-1,))
-    enc = PosetModules.encode(data, spec; degree=0)
+    data = TamerOp.PointCloud([[0.0], [1.0]])
+    spec = TamerOp.FiltrationSpec(kind=:rips, max_dim=1, orientation=(-1,))
+    enc = TamerOp.encode(data, spec; degree=0)
     ax = EC.axes_from_encoding(enc.pi)[1]
     @test minimum(ax) <= 0.0
     @test maximum(ax) <= 0.0
@@ -554,11 +984,11 @@ end
         [3.0, 0.0],
         [3.0, 1.0],
     ]
-    data = PosetModules.PointCloud(pts)
-    spec = PosetModules.FiltrationSpec(
+    data = TamerOp.PointCloud(pts)
+    spec = TamerOp.FiltrationSpec(
         kind=:rips,
         max_dim=2,
-        construction=PosetModules.ConstructionOptions(;
+        construction=TamerOp.ConstructionOptions(;
             sparsify=:none,
             collapse=:none,
             output_stage=:simplex_tree,
@@ -570,10 +1000,10 @@ end
     st_fast = nothing
     try
         DI._POINTCLOUD_DIM2_PACKED_KERNEL[] = false
-        st_base = PosetModules.encode(data, spec; degree=0)
+        st_base = TamerOp.encode(data, spec; degree=0)
 
         DI._POINTCLOUD_DIM2_PACKED_KERNEL[] = true
-        st_fast = PosetModules.encode(data, spec; degree=0)
+        st_fast = TamerOp.encode(data, spec; degree=0)
     finally
         DI._POINTCLOUD_DIM2_PACKED_KERNEL[] = old_dim2
     end
@@ -585,17 +1015,17 @@ end
     @test st_fast.simplex_vertices == st_base.simplex_vertices
     @test st_fast.grade_data == st_base.grade_data
 
-    spec_radius = PosetModules.FiltrationSpec(
+    spec_radius = TamerOp.FiltrationSpec(
         kind=:rips,
         max_dim=2,
         radius=1.5,
-        construction=PosetModules.ConstructionOptions(;
+        construction=TamerOp.ConstructionOptions(;
             sparsify=:none,
             collapse=:none,
             output_stage=:simplex_tree,
         ),
     )
-    st_radius = PosetModules.encode(data, spec_radius; degree=0)
+    st_radius = TamerOp.encode(data, spec_radius; degree=0)
     edge_lo = st_fast.dim_offsets[2]
     edge_hi = st_fast.dim_offsets[3] - 1
     edge_lo_r = st_radius.dim_offsets[2]
@@ -610,17 +1040,17 @@ end
         @test g[1] >= 0.0
     end
 
-    spec_radius_d1 = PosetModules.FiltrationSpec(
+    spec_radius_d1 = TamerOp.FiltrationSpec(
         kind=:rips,
         max_dim=1,
         radius=1.1,
-        construction=PosetModules.ConstructionOptions(;
+        construction=TamerOp.ConstructionOptions(;
             sparsify=:none,
             collapse=:none,
             output_stage=:simplex_tree,
         ),
     )
-    st_radius_d1 = PosetModules.encode(data, spec_radius_d1; degree=0)
+    st_radius_d1 = TamerOp.encode(data, spec_radius_d1; degree=0)
     edge_lo_d1 = st_radius_d1.dim_offsets[2]
     edge_hi_d1 = st_radius_d1.dim_offsets[3] - 1
     @test (edge_hi_d1 - edge_lo_d1 + 1) < 15
@@ -695,7 +1125,7 @@ end
             path;
             max_dim=1,
             radius=1.0,
-            construction=PosetModules.ConstructionOptions(; sparsify=:radius, budget=(nothing, 4, nothing)),
+            construction=TamerOp.ConstructionOptions(; sparsify=:radius, budget=(nothing, 4, nothing)),
         )
         @test length(G.grades) == 3
         @test_throws MethodError SER.load_ripser_distance(path; max_dim=1, sparse_rips=true, radius=1.0)
@@ -713,7 +1143,7 @@ end
         @test_throws Exception SER.load_ripser_lower_distance(
             path;
             max_dim=1,
-            construction=PosetModules.ConstructionOptions(; collapse=:acyclic),
+            construction=TamerOp.ConstructionOptions(; collapse=:acyclic),
         )
     end
 
@@ -886,80 +1316,78 @@ end
         @test_throws Exception SER.load_pipeline_json(path)
     end
 
-    data = PosetModules.PointCloud([[0.0], [1.0]])
-    spec = PosetModules.FiltrationSpec(kind=:rips, max_dim=1, axes=([1.0, 0.0],))
-    @test_throws Exception PosetModules.encode(data, spec; degree=0)
+    data = TamerOp.PointCloud([[0.0], [1.0]])
+    spec = TamerOp.FiltrationSpec(kind=:rips, max_dim=1, axes=([1.0, 0.0],))
+    @test_throws Exception TamerOp.encode(data, spec; degree=0)
 
     cells = [Int[1]]
     boundaries = SparseMatrixCSC{Int,Int}[]
     grades = [Float64[0.0], Float64[1.0]]
-    G = PosetModules.GradedComplex(cells, boundaries, grades)
-    spec = PosetModules.FiltrationSpec(kind=:graded, axes=([0.0, 1.0],))
-    @test_throws Exception PosetModules.encode(G, spec; degree=0)
+    @test_throws Exception TamerOp.GradedComplex(cells, boundaries, grades)
 
-    data = PosetModules.PointCloud([[0.0], [1.0]])
-    spec = PosetModules.FiltrationSpec(kind=:rips, max_dim=1, axes=([0.0, 1.5],))
-    enc = PosetModules.encode(data, spec; degree=0)
+    data = TamerOp.PointCloud([[0.0], [1.0]])
+    spec = TamerOp.FiltrationSpec(kind=:rips, max_dim=1, axes=([0.0, 1.5],))
+    enc = TamerOp.encode(data, spec; degree=0)
     @test FF.nvertices(enc.P) > 0
 
-    spec = PosetModules.FiltrationSpec(kind=:rips, max_dim=1, axes=([0, 1],), axis_kind=:rn)
-    @test_throws Exception PosetModules.encode(data, spec; degree=0)
+    spec = TamerOp.FiltrationSpec(kind=:rips, max_dim=1, axes=([0, 1],), axis_kind=:rn)
+    @test_throws Exception TamerOp.encode(data, spec; degree=0)
 
-    spec = PosetModules.FiltrationSpec(kind=:rips, max_dim=1, axes=([0.0, 1.0],), axis_kind=:zn)
-    @test_throws Exception PosetModules.encode(data, spec; degree=0)
+    spec = TamerOp.FiltrationSpec(kind=:rips, max_dim=1, axes=([0.0, 1.0],), axis_kind=:zn)
+    @test_throws Exception TamerOp.encode(data, spec; degree=0)
 end
 
 @testset "Data pipeline: quantization + coarsen axes" begin
     cells = [Int[1], Int[]]
     boundaries = SparseMatrixCSC{Int,Int}[]
     grades = [Float64[0.05]]
-    G = PosetModules.GradedComplex(cells, boundaries, grades)
-    spec = PosetModules.FiltrationSpec(kind=:graded, eps=0.1)
-    enc = PosetModules.encode(G, spec; degree=0)
+    G = TamerOp.GradedComplex(cells, boundaries, grades)
+    spec = TamerOp.FiltrationSpec(kind=:graded, eps=0.1)
+    enc = TamerOp.encode(G, spec; degree=0)
     @test EC.axes_from_encoding(enc.pi)[1] == [0.0]
 
-    data = PosetModules.PointCloud([[0.0], [1.0], [2.0], [3.0]])
-    spec = PosetModules.FiltrationSpec(kind=:rips, max_dim=1, axes_policy=:coarsen, max_axis_len=2)
-    enc = PosetModules.encode(data, spec; degree=0)
+    data = TamerOp.PointCloud([[0.0], [1.0], [2.0], [3.0]])
+    spec = TamerOp.FiltrationSpec(kind=:rips, max_dim=1, axes_policy=:coarsen, max_axis_len=2)
+    enc = TamerOp.encode(data, spec; degree=0)
     @test length(EC.axes_from_encoding(enc.pi)[1]) == 2
 end
 
 @testset "Data pipeline: session cache reuse" begin
-    data = PosetModules.PointCloud([[0.0], [1.0]])
-    spec = PosetModules.FiltrationSpec(kind=:rips, max_dim=1, axes=([0.0, 1.0],))
+    data = TamerOp.PointCloud([[0.0], [1.0]])
+    spec = TamerOp.FiltrationSpec(kind=:rips, max_dim=1, axes=([0.0, 1.0],))
     sc = CM.SessionCache()
-    enc1 = PosetModules.encode(data, spec; degree=0, cache=sc)
-    enc2 = PosetModules.encode(data, spec; degree=0, cache=sc)
+    enc1 = TamerOp.encode(data, spec; degree=0, cache=sc)
+    enc2 = TamerOp.encode(data, spec; degree=0, cache=sc)
     @test enc1.P === enc2.P
     @test typeof(enc1.M) === typeof(enc2.M)
     @test DI.module_dims(enc1.M) == DI.module_dims(enc2.M)
     @test enc1.H === enc2.H
 
-    enc_deg1 = PosetModules.encode(data, spec; degree=1, cache=sc)
+    enc_deg1 = TamerOp.encode(data, spec; degree=1, cache=sc)
     @test enc_deg1.M !== enc1.M
 
     CM._clear_session_cache!(sc)
-    enc3 = PosetModules.encode(data, spec; degree=0, cache=sc)
+    enc3 = TamerOp.encode(data, spec; degree=0, cache=sc)
     @test enc3.P !== enc1.P
 end
 
 @testset "Data pipeline: point cloud guardrails + landmark_rips" begin
-    data = PosetModules.PointCloud([[0.0], [1.0], [2.0], [3.0]])
-    spec = PosetModules.FiltrationSpec(
+    data = TamerOp.PointCloud([[0.0], [1.0], [2.0], [3.0]])
+    spec = TamerOp.FiltrationSpec(
         kind=:rips,
         max_dim=2,
-        construction=PosetModules.ConstructionOptions(; budget=(5, nothing, nothing)),
+        construction=TamerOp.ConstructionOptions(; budget=(5, nothing, nothing)),
     )
-    @test_throws Exception PosetModules.encode(data, spec; degree=0)
+    @test_throws Exception TamerOp.encode(data, spec; degree=0)
 
-    data_big = PosetModules.PointCloud([[Float64(i)] for i in 1:180])
-    spec_precheck = PosetModules.FiltrationSpec(
+    data_big = TamerOp.PointCloud([[Float64(i)] for i in 1:180])
+    spec_precheck = TamerOp.FiltrationSpec(
         kind=:rips,
         max_dim=3,
-        construction=PosetModules.ConstructionOptions(; budget=(15_000, nothing, nothing)),
+        construction=TamerOp.ConstructionOptions(; budget=(15_000, nothing, nothing)),
     )
     err = try
-        PosetModules.encode(data_big, spec_precheck; degree=0)
+        TamerOp.encode(data_big, spec_precheck; degree=0)
         nothing
     catch e
         e
@@ -967,14 +1395,14 @@ end
     @test err isa ArgumentError
     @test occursin("before enumeration", sprint(showerror, err))
 
-    spec_rhomboid_precheck = PosetModules.FiltrationSpec(
+    spec_rhomboid_precheck = TamerOp.FiltrationSpec(
         kind=:rhomboid,
         max_dim=3,
         vertex_values=fill(0.0, length(data_big.points)),
-        construction=PosetModules.ConstructionOptions(; budget=(15_000, nothing, nothing)),
+        construction=TamerOp.ConstructionOptions(; budget=(15_000, nothing, nothing)),
     )
     err = try
-        PosetModules.encode(data_big, spec_rhomboid_precheck; degree=0)
+        TamerOp.encode(data_big, spec_rhomboid_precheck; degree=0)
         nothing
     catch e
         e
@@ -982,48 +1410,48 @@ end
     @test err isa ArgumentError
     @test occursin("before enumeration", sprint(showerror, err))
 
-    spec = PosetModules.FiltrationSpec(
+    spec = TamerOp.FiltrationSpec(
         kind=:rips,
         max_dim=1,
         radius=1.1,
-        construction=PosetModules.ConstructionOptions(; sparsify=:radius),
+        construction=TamerOp.ConstructionOptions(; sparsify=:radius),
     )
-    enc = PosetModules.encode(data, spec; degree=0)
+    enc = TamerOp.encode(data, spec; degree=0)
     @test FF.nvertices(enc.P) > 0
 
-    spec = PosetModules.FiltrationSpec(kind=:landmark_rips, max_dim=1, landmarks=[1, 3])
-    enc = PosetModules.encode(data, spec; degree=0)
+    spec = TamerOp.FiltrationSpec(kind=:landmark_rips, max_dim=1, landmarks=[1, 3])
+    enc = TamerOp.encode(data, spec; degree=0)
     @test FF.nvertices(enc.P) > 0
 
     # landmark_rips must preserve radius/knn backend knobs through FiltrationSpec
     # -> typed filtration -> FiltrationSpec round-trips.
-    spec_lm_radius = PosetModules.FiltrationSpec(
+    spec_lm_radius = TamerOp.FiltrationSpec(
         kind=:landmark_rips,
         max_dim=1,
         landmarks=[1, 2, 3],
         radius=0.6,
         nn_backend=:auto,
-        construction=PosetModules.ConstructionOptions(; output_stage=:simplex_tree),
+        construction=TamerOp.ConstructionOptions(; output_stage=:simplex_tree),
     )
     typed_lm = DI.to_filtration(spec_lm_radius)
     roundtrip_lm = DI._filtration_spec(typed_lm)
     @test get(roundtrip_lm.params, :radius, nothing) == 0.6
     @test get(roundtrip_lm.params, :nn_backend, nothing) == :auto
 
-    st_lm = PosetModules.encode(data, spec_lm_radius; degree=0, stage=:simplex_tree)
+    st_lm = TamerOp.encode(data, spec_lm_radius; degree=0, stage=:simplex_tree)
     lm_points = [data.points[i] for i in [1, 2, 3]]
     lm_edges_expected, _ = DI._point_cloud_edges_within_radius(lm_points, 0.6)
     @test count(==(1), st_lm.simplex_dims) == length(lm_edges_expected)
 
     # landmark+radii should normalize to sparse radius construction by default.
-    spec_lm_radius_explicit = PosetModules.FiltrationSpec(
+    spec_lm_radius_explicit = TamerOp.FiltrationSpec(
         kind=:landmark_rips,
         max_dim=1,
         landmarks=[1, 2, 3],
         radius=0.6,
-        construction=PosetModules.ConstructionOptions(; sparsify=:radius, output_stage=:simplex_tree),
+        construction=TamerOp.ConstructionOptions(; sparsify=:radius, output_stage=:simplex_tree),
     )
-    st_lm_explicit = PosetModules.encode(data, spec_lm_radius_explicit; degree=0, stage=:simplex_tree)
+    st_lm_explicit = TamerOp.encode(data, spec_lm_radius_explicit; degree=0, stage=:simplex_tree)
     @test _canon_simplex_tree(st_lm) == _canon_simplex_tree(st_lm_explicit)
 
     # landmark subgraph cache (session-level geometry cache) should reuse packed edge lists.
@@ -1033,149 +1461,285 @@ end
     @test packed1 === packed2
     @test length(packed1.edges) == length(lm_edges_expected)
 
-    spec = PosetModules.FiltrationSpec(
+    spec = TamerOp.FiltrationSpec(
         kind=:rips,
         max_dim=1,
         knn=2,
-        construction=PosetModules.ConstructionOptions(; sparsify=:knn, budget=(nothing, 8, nothing)),
+        construction=TamerOp.ConstructionOptions(; sparsify=:knn, budget=(nothing, 8, nothing)),
     )
-    enc = PosetModules.encode(data, spec; degree=0)
+    enc = TamerOp.encode(data, spec; degree=0)
     @test FF.nvertices(enc.P) > 0
 
-    spec = PosetModules.FiltrationSpec(
+    spec = TamerOp.FiltrationSpec(
         kind=:rips,
         max_dim=1,
-        construction=PosetModules.ConstructionOptions(; budget=(nothing, 1, nothing)),
+        construction=TamerOp.ConstructionOptions(; budget=(nothing, 1, nothing)),
     )
-    @test_throws Exception PosetModules.encode(data, spec; degree=0)
+    @test_throws Exception TamerOp.encode(data, spec; degree=0)
 end
 
 @testset "Data pipeline: estimate_ingestion preflight" begin
-    data = PosetModules.PointCloud([[0.0], [1.0], [2.0], [3.0]])
-    spec = PosetModules.FiltrationSpec(kind=:rips, max_dim=2, axes=([0.0, 1.0],))
+    data = TamerOp.PointCloud([[0.0], [1.0], [2.0], [3.0]])
+    spec = TamerOp.FiltrationSpec(kind=:rips, max_dim=2, axes=([0.0, 1.0],))
     est = DI.estimate_ingestion(data, spec)
-    @test est.n_cells_est == big(14)  # C(4,1)+C(4,2)+C(4,3)
-    @test est.cell_counts_by_dim == BigInt[4, 6, 4]
-    @test est.axis_sizes == (2,)
-    @test est.poset_size == big(2)
-    @test est.nnz_est == big(24)
-    @test est.dense_bytes_est == big(192)
+    @test DI.estimated_cells(est) == big(14)  # C(4,1)+C(4,2)+C(4,3)
+    @test DI.cell_counts_by_dim(est) == BigInt[4, 6, 4]
+    @test DI.estimated_axis_sizes(est) == (2,)
+    @test DI.estimated_poset_size(est) == big(2)
+    @test DI.estimated_nnz(est) == big(24)
+    @test DI.estimated_dense_bytes(est) == big(192)
 
     est_warn = DI.estimate_ingestion(data,
-                                               PosetModules.FiltrationSpec(
+                                               TamerOp.FiltrationSpec(
                                                    kind=:rips,
                                                    max_dim=2,
                                                    construction=(budget=(max_simplices=5, max_edges=nothing, memory_budget_bytes=nothing),),
                                                );
                                                poset_threshold=1)
-    @test !isempty(est_warn.warnings)
-    @test any(occursin("max_simplices", w) for w in est_warn.warnings)
-    @test any(occursin("|P|", w) || occursin("axis_sizes unavailable", w) for w in est_warn.warnings)
+    @test !isempty(DI.estimate_warnings(est_warn))
+    @test any(occursin("max_simplices", w) for w in DI.estimate_warnings(est_warn))
+    @test any(occursin("|P|", w) || occursin("axis_sizes unavailable", w) for w in DI.estimate_warnings(est_warn))
 
     est_edges = DI.estimate_ingestion(
         data,
-        PosetModules.FiltrationSpec(kind=:rips, max_dim=1,
+        TamerOp.FiltrationSpec(kind=:rips, max_dim=1,
                                     construction=(budget=(max_simplices=nothing, max_edges=2, memory_budget_bytes=nothing),)),
     )
-    @test any(occursin("max_edges", w) for w in est_edges.warnings)
+    @test any(occursin("max_edges", w) for w in DI.estimate_warnings(est_edges))
 
     @test_throws ArgumentError DI.estimate_ingestion(
         data,
-        PosetModules.FiltrationSpec(kind=:delaunay_lower_star, max_dim=2, highdim_policy=:error);
+        TamerOp.FiltrationSpec(kind=:delaunay_lower_star, max_dim=2, highdim_policy=:error);
         strict=true,
     )
 end
 
-@testset "Data pipeline: construction contract is strict" begin
-    data = PosetModules.PointCloud([[0.0], [1.0], [2.0]])
-    bad = PosetModules.FiltrationSpec(kind=:rips, max_dim=1, sparse_rips=true, radius=1.0)
-    @test_throws ArgumentError PosetModules.encode(data, bad; degree=0)
+@testset "Data pipeline: serialization fast-load parity" begin
+    function _pointcloud_from_flat_rowmajor(n::Int, d::Int, flat::Vector{Float64})
+        length(flat) == n * d || error("PointCloud points_flat length mismatch.")
+        pts = Matrix{Float64}(undef, n, d)
+        t = 1
+        @inbounds for i in 1:n, j in 1:d
+            pts[i, j] = flat[t]
+            t += 1
+        end
+        return DT.PointCloud(pts; copy=false)
+    end
 
-    @test_throws ErrorException PosetModules.ConstructionOptions(; sparsify=:approx)
-    @test_throws ErrorException PosetModules.ConstructionOptions(; collapse=:legacy)
-    @test PosetModules.ConstructionOptions(; output_stage=:simplex_tree).output_stage == :simplex_tree
-    @test_throws ErrorException PosetModules.ConstructionOptions(; output_stage=:raw)
+    function _coords_from_flat_rowmajor(n::Int, d::Int, flat::Vector{Float64})
+        d >= 0 || error("GraphData coords_dim must be nonnegative.")
+        d == 0 && return Matrix{Float64}(undef, n, 0)
+        length(flat) == n * d || error("GraphData coords_flat length mismatch.")
+        out = Matrix{Float64}(undef, n, d)
+        t = 1
+        @inbounds for i in 1:n, j in 1:d
+            out[i, j] = flat[t]
+            t += 1
+        end
+        return out
+    end
+
+    function _load_dataset_json_baseline(path::AbstractString)
+        raw = read(path, String)
+        kind_hdr = JSON3.read(raw, NamedTuple{(:kind,),Tuple{String}})
+        kind = kind_hdr.kind
+        if kind == "PointCloud"
+            obj = JSON3.read(raw, SER._PointCloudColumnarJSON)
+            return _pointcloud_from_flat_rowmajor(obj.n, obj.d, obj.points_flat)
+        end
+        if kind == "GraphData"
+            obj = JSON3.read(raw, SER._GraphDataColumnarJSON)
+            coords = if obj.coords_dim === nothing || obj.coords_flat === nothing
+                nothing
+            else
+                _coords_from_flat_rowmajor(obj.n, obj.coords_dim, obj.coords_flat)
+            end
+            return DT.GraphData(obj.n, obj.edges_u, obj.edges_v;
+                                coords=coords,
+                                weights=obj.weights,
+                                T=Float64,
+                                copy=false)
+        end
+        return SER._dataset_from_obj(JSON3.read(raw))
+    end
+
+    function _load_encoding_json_strict_baseline(path::AbstractString)
+        raw = read(path, String)
+        obj = JSON3.read(raw, SER._FiniteEncodingFringeJSONV1)
+        obj.kind == "FiniteEncodingFringe" || error("Unsupported encoding JSON kind: $(obj.kind)")
+        obj.schema_version == SER.ENCODING_SCHEMA_VERSION ||
+            error("Unsupported encoding JSON schema_version: $(obj.schema_version)")
+        P = SER._parse_poset_from_typed(obj.poset)
+        n = FF.nvertices(P)
+        Umasks = SER._decode_masks(obj.U, "U", n)
+        Dmasks = SER._decode_masks(obj.D, "D", n)
+        U = SER._build_upsets(P, Umasks, true)
+        D = SER._build_downsets(P, Dmasks, true)
+        saved_field = SER._field_from_typed(obj.coeff_field)
+        m = length(D)
+        k = length(U)
+        Phi = SER._decode_phi(obj.phi, saved_field, saved_field, m, k)
+        H = FF.FringeModule{CM.coeff_type(saved_field)}(P, U, D, Phi; field=saved_field)
+        obj.pi === nothing && error("baseline strict load requires stored pi.")
+        return H, SER._pi_from_typed(P, obj.pi)
+    end
+
+    mktemp() do path, io
+        close(io)
+        data = TamerOp.PointCloud([[0.0, 1.0], [2.0, 3.0], [4.0, 5.0]])
+        old_path = path * "_old"
+        SER._json_write(old_path, Dict("kind" => "PointCloud",
+                                       "layout" => "columnar_v1",
+                                       "n" => size(DT.point_matrix(data), 1),
+                                       "d" => size(DT.point_matrix(data), 2),
+                                       "points_flat" => begin
+                                           flat = Float64[]
+                                           pts = DT.point_matrix(data)
+                                           @inbounds for i in axes(pts, 1), j in axes(pts, 2)
+                                               push!(flat, pts[i, j])
+                                           end
+                                           flat
+                                       end); pretty=false)
+        SER.save_dataset_json(path, data)
+        new_data = SER.load_dataset_json(path)
+        old_data = _load_dataset_json_baseline(old_path)
+        @test new_data.coords == old_data.coords
+    end
+
+    mktemp() do path, io
+        close(io)
+        data = TamerOp.GraphData(4, [(1, 2), (2, 3), (3, 4)];
+                                      coords=[[0.0], [1.0], [2.0], [3.0]],
+                                      weights=[1.0, 2.0, 3.0])
+        old_path = path * "_old"
+        coords = DT.coord_matrix(data)
+        coords_flat = Float64[]
+        @inbounds for i in axes(coords, 1), j in axes(coords, 2)
+            push!(coords_flat, coords[i, j])
+        end
+        SER._json_write(old_path, Dict("kind" => "GraphData",
+                                       "layout" => "columnar_v1",
+                                       "n" => data.n,
+                                       "edges_u" => collect(DT.edge_columns(data)[1]),
+                                       "edges_v" => collect(DT.edge_columns(data)[2]),
+                                       "coords_dim" => size(coords, 2),
+                                       "coords_flat" => coords_flat,
+                                       "weights" => data.weights === nothing ? nothing : collect(data.weights));
+                        pretty=false)
+        SER.save_dataset_json(path, data)
+        new_data = SER.load_dataset_json(path)
+        old_data = _load_dataset_json_baseline(old_path)
+        @test new_data.edge_u == old_data.edge_u
+        @test new_data.edge_v == old_data.edge_v
+        @test new_data.coord_matrix == old_data.coord_matrix
+        @test new_data.weights == old_data.weights
+    end
+
+    mktemp() do path, io
+        close(io)
+        data = TamerOp.PointCloud([[0.0], [1.0]])
+        spec = TamerOp.FiltrationSpec(kind=:rips, max_dim=1, axes=([0.0, 1.0],))
+        enc = TamerOp.encode(data, spec; degree=0)
+        SER.save_encoding_json(path, enc)
+        H_new, pi_new = SER.load_encoding_json(path; output=:fringe_with_pi, validation=:strict)
+        H_old, pi_old = _load_encoding_json_strict_baseline(path)
+        @test H_new.phi == H_old.phi
+        @test [U.mask for U in H_new.U] == [U.mask for U in H_old.U]
+        @test [D.mask for D in H_new.D] == [D.mask for D in H_old.D]
+        @test EC.axes_from_encoding(pi_new) == EC.axes_from_encoding(pi_old)
+    end
+end
+
+@testset "Data pipeline: construction contract is strict" begin
+    data = TamerOp.PointCloud([[0.0], [1.0], [2.0]])
+    bad = TamerOp.FiltrationSpec(kind=:rips, max_dim=1, sparse_rips=true, radius=1.0)
+    @test_throws ArgumentError TamerOp.encode(data, bad; degree=0)
+
+    @test_throws ArgumentError TamerOp.ConstructionOptions(; sparsify=:approx)
+    @test_throws ArgumentError TamerOp.ConstructionOptions(; collapse=:legacy)
+    @test TamerOp.ConstructionOptions(; output_stage=:simplex_tree).output_stage == :simplex_tree
+    @test_throws ArgumentError TamerOp.ConstructionOptions(; output_stage=:raw)
 end
 
 @testset "Data pipeline: point-cloud sparse large-n contract" begin
     n = 5_001
-    data = PosetModules.PointCloud([[Float64(i)] for i in 1:n])
-    dense_spec = PosetModules.FiltrationSpec(kind=:rips, max_dim=1)
-    @test_throws ArgumentError PosetModules.encode(data, dense_spec; degree=0)
+    data = TamerOp.PointCloud([[Float64(i)] for i in 1:n])
+    dense_spec = TamerOp.FiltrationSpec(kind=:rips, max_dim=1)
+    @test_throws ArgumentError TamerOp.encode(data, dense_spec; degree=0)
 end
 
 @testset "Data pipeline: edge-driven sparse point-cloud path" begin
-    data = PosetModules.PointCloud([[0.0], [1.0], [2.0], [3.0]])
-    dense = PosetModules.FiltrationSpec(
+    data = TamerOp.PointCloud([[0.0], [1.0], [2.0], [3.0]])
+    dense = TamerOp.FiltrationSpec(
         kind=:rips,
         max_dim=1,
-        construction=PosetModules.ConstructionOptions(; output_stage=:graded_complex),
+        construction=TamerOp.ConstructionOptions(; output_stage=:graded_complex),
     )
-    sparse_radius = PosetModules.FiltrationSpec(
+    sparse_radius = TamerOp.FiltrationSpec(
         kind=:rips,
         max_dim=1,
         radius=10.0,
-        construction=PosetModules.ConstructionOptions(;
+        construction=TamerOp.ConstructionOptions(;
             sparsify=:radius,
             output_stage=:graded_complex,
             budget=(max_simplices=nothing, max_edges=32, memory_budget_bytes=nothing),
         ),
     )
-    G_dense = PosetModules.encode(data, dense; degree=0)
-    G_sparse = PosetModules.encode(data, sparse_radius; degree=0)
-    @test G_dense isa PosetModules.GradedComplex
-    @test G_sparse isa PosetModules.GradedComplex
+    G_dense = TamerOp.encode(data, dense; degree=0)
+    G_sparse = TamerOp.encode(data, sparse_radius; degree=0)
+    @test G_dense isa TamerOp.GradedComplex
+    @test G_sparse isa TamerOp.GradedComplex
     @test G_dense.cells_by_dim == G_sparse.cells_by_dim
     @test G_dense.grades == G_sparse.grades
 end
 
 @testset "Data pipeline: NN backend contract for sparse point-cloud path" begin
-    data = PosetModules.PointCloud([[0.0], [0.5], [1.5], [3.0], [4.5]])
-    spec_auto = PosetModules.FiltrationSpec(
+    data = TamerOp.PointCloud([[0.0], [0.5], [1.5], [3.0], [4.5]])
+    spec_auto = TamerOp.FiltrationSpec(
         kind=:rips,
         max_dim=1,
         knn=2,
         nn_backend=:auto,
-        construction=PosetModules.ConstructionOptions(; sparsify=:knn, output_stage=:graded_complex),
+        construction=TamerOp.ConstructionOptions(; sparsify=:knn, output_stage=:graded_complex),
     )
-    spec_nn = PosetModules.FiltrationSpec(
+    spec_nn = TamerOp.FiltrationSpec(
         kind=:rips,
         max_dim=1,
         knn=2,
         nn_backend=:nearestneighbors,
-        construction=PosetModules.ConstructionOptions(; sparsify=:knn, output_stage=:graded_complex),
+        construction=TamerOp.ConstructionOptions(; sparsify=:knn, output_stage=:graded_complex),
     )
-    spec_apx = PosetModules.FiltrationSpec(
+    spec_apx = TamerOp.FiltrationSpec(
         kind=:rips,
         max_dim=1,
         knn=2,
         nn_backend=:approx,
         nn_approx_candidates=8,
-        construction=PosetModules.ConstructionOptions(; sparsify=:knn, output_stage=:graded_complex),
+        construction=TamerOp.ConstructionOptions(; sparsify=:knn, output_stage=:graded_complex),
     )
     if DI._have_pointcloud_nn_backend()
         @test DI._pointcloud_nn_backend(spec_auto) == :auto
-        G_auto = PosetModules.encode(data, spec_auto; degree=0)
-        G_nn = PosetModules.encode(data, spec_nn; degree=0)
+        G_auto = TamerOp.encode(data, spec_auto; degree=0)
+        G_nn = TamerOp.encode(data, spec_nn; degree=0)
         @test G_auto.cells_by_dim == G_nn.cells_by_dim
         @test G_auto.grades == G_nn.grades
-        @test PosetModules.encode(data, spec_nn; degree=0) isa PosetModules.GradedComplex
-        @test PosetModules.encode(data, spec_apx; degree=0) isa PosetModules.GradedComplex
+        @test TamerOp.encode(data, spec_nn; degree=0) isa TamerOp.GradedComplex
+        @test TamerOp.encode(data, spec_apx; degree=0) isa TamerOp.GradedComplex
     else
         @test DI._pointcloud_nn_backend(spec_auto) == :bruteforce
-        spec_brute = PosetModules.FiltrationSpec(
+        spec_brute = TamerOp.FiltrationSpec(
             kind=:rips,
             max_dim=1,
             knn=2,
             nn_backend=:bruteforce,
-            construction=PosetModules.ConstructionOptions(; sparsify=:knn, output_stage=:graded_complex),
+            construction=TamerOp.ConstructionOptions(; sparsify=:knn, output_stage=:graded_complex),
         )
-        G_auto = PosetModules.encode(data, spec_auto; degree=0)
-        G_brute = PosetModules.encode(data, spec_brute; degree=0)
+        G_auto = TamerOp.encode(data, spec_auto; degree=0)
+        G_brute = TamerOp.encode(data, spec_brute; degree=0)
         @test G_auto.cells_by_dim == G_brute.cells_by_dim
         @test G_auto.grades == G_brute.grades
-        @test_throws ArgumentError PosetModules.encode(data, spec_nn; degree=0)
-        @test_throws ArgumentError PosetModules.encode(data, spec_apx; degree=0)
+        @test_throws ArgumentError TamerOp.encode(data, spec_nn; degree=0)
+        @test_throws ArgumentError TamerOp.encode(data, spec_apx; degree=0)
     end
 end
 
@@ -1200,7 +1764,7 @@ end
 end
 
 @testset "Data pipeline: Delaunay backend contract/parity + cache" begin
-    pts = PosetModules.PointCloud([
+    pts = TamerOp.PointCloud([
         [0.0, 0.0],
         [1.0, 0.0],
         [0.0, 1.0],
@@ -1208,39 +1772,39 @@ end
         [0.25, 0.55],
         [0.65, 0.25],
     ])
-    construction = PosetModules.ConstructionOptions(; output_stage=:graded_complex)
-    spec_auto = PosetModules.FiltrationSpec(kind=:alpha, max_dim=2, delaunay_backend=:auto, construction=construction)
-    spec_naive = PosetModules.FiltrationSpec(kind=:alpha, max_dim=2, delaunay_backend=:naive, construction=construction)
-    spec_fast = PosetModules.FiltrationSpec(kind=:alpha, max_dim=2, delaunay_backend=:fast, construction=construction)
+    construction = TamerOp.ConstructionOptions(; output_stage=:graded_complex)
+    spec_auto = TamerOp.FiltrationSpec(kind=:alpha, max_dim=2, delaunay_backend=:auto, construction=construction)
+    spec_naive = TamerOp.FiltrationSpec(kind=:alpha, max_dim=2, delaunay_backend=:naive, construction=construction)
+    spec_fast = TamerOp.FiltrationSpec(kind=:alpha, max_dim=2, delaunay_backend=:fast, construction=construction)
 
     @test_throws ArgumentError DI._pointcloud_delaunay_backend(
-        PosetModules.FiltrationSpec(kind=:alpha, max_dim=2, delaunay_backend=:bad),
+        TamerOp.FiltrationSpec(kind=:alpha, max_dim=2, delaunay_backend=:bad),
     )
 
     auto_backend = DI._pointcloud_delaunay_backend(spec_auto)
     if auto_backend == :fast
-        spec_fast_st = PosetModules.FiltrationSpec(
+        spec_fast_st = TamerOp.FiltrationSpec(
             kind=:alpha,
             max_dim=2,
             delaunay_backend=:fast,
-            construction=PosetModules.ConstructionOptions(; output_stage=:simplex_tree),
+            construction=TamerOp.ConstructionOptions(; output_stage=:simplex_tree),
         )
-        spec_naive_st = PosetModules.FiltrationSpec(
+        spec_naive_st = TamerOp.FiltrationSpec(
             kind=:alpha,
             max_dim=2,
             delaunay_backend=:naive,
-            construction=PosetModules.ConstructionOptions(; output_stage=:simplex_tree),
+            construction=TamerOp.ConstructionOptions(; output_stage=:simplex_tree),
         )
-        st_fast = PosetModules.encode(pts, spec_fast_st; degree=0)
-        st_naive = PosetModules.encode(pts, spec_naive_st; degree=0)
+        st_fast = TamerOp.encode(pts, spec_fast_st; degree=0)
+        st_naive = TamerOp.encode(pts, spec_naive_st; degree=0)
         @test _canon_simplex_tree(st_fast) == _canon_simplex_tree(st_naive)
     else
         @test auto_backend == :naive
-        G_auto = PosetModules.encode(pts, spec_auto; degree=0)
-        G_naive = PosetModules.encode(pts, spec_naive; degree=0)
+        G_auto = TamerOp.encode(pts, spec_auto; degree=0)
+        G_naive = TamerOp.encode(pts, spec_naive; degree=0)
         @test G_auto.cells_by_dim == G_naive.cells_by_dim
         @test G_auto.grades == G_naive.grades
-        @test_throws ArgumentError PosetModules.encode(pts, spec_fast; degree=0)
+        @test_throws ArgumentError TamerOp.encode(pts, spec_fast; degree=0)
     end
 
     old_cache = DI._POINTCLOUD_DELAUNAY_CACHE_ENABLED[]
@@ -1262,15 +1826,15 @@ end
         @test e1 === e2
         @test e2.edge_boundary === b1
         @test e2.tri_boundary === b2
-        G1 = PosetModules.encode(pts, spec_naive; degree=0, stage=:graded_complex)
-        G2 = PosetModules.encode(pts, spec_naive; degree=0, stage=:graded_complex)
+        G1 = TamerOp.encode(pts, spec_naive; degree=0, stage=:graded_complex)
+        G2 = TamerOp.encode(pts, spec_naive; degree=0, stage=:graded_complex)
         @test G1.boundaries[1] === G2.boundaries[1]
         @test G1.boundaries[2] === G2.boundaries[2]
-        PosetModules.encode(pts, spec_naive; degree=0)
+        TamerOp.encode(pts, spec_naive; degree=0)
         n1 = lock(DI._POINTCLOUD_DELAUNAY_CACHE_LOCK) do
             length(DI._POINTCLOUD_DELAUNAY_CACHE)
         end
-        PosetModules.encode(pts, spec_naive; degree=0)
+        TamerOp.encode(pts, spec_naive; degree=0)
         n2 = lock(DI._POINTCLOUD_DELAUNAY_CACHE_LOCK) do
             length(DI._POINTCLOUD_DELAUNAY_CACHE)
         end
@@ -1283,7 +1847,7 @@ end
 end
 
 @testset "Data pipeline: Delaunay packed materialization preserves max_dim" begin
-    pts = PosetModules.PointCloud([
+    pts = TamerOp.PointCloud([
         [0.0, 0.0],
         [1.0, 0.0],
         [0.0, 1.0],
@@ -1292,16 +1856,60 @@ end
         [0.65, 0.25],
     ])
     for md in (0, 1, 2)
-        spec = PosetModules.FiltrationSpec(
+        spec = TamerOp.FiltrationSpec(
             kind=:alpha,
             max_dim=md,
-            construction=PosetModules.ConstructionOptions(; output_stage=:graded_complex),
+            construction=TamerOp.ConstructionOptions(; output_stage=:graded_complex),
         )
-        G = PosetModules.encode(pts, spec; degree=0)
-        @test G isa PosetModules.GradedComplex
+        G = TamerOp.encode(pts, spec; degree=0)
+        @test G isa TamerOp.GradedComplex
         @test length(G.cells_by_dim) == md + 1
         @test length(G.boundaries) == md
     end
+end
+
+@testset "Data pipeline: alpha uses true squared-radius edge grades" begin
+    pts = TamerOp.PointCloud([
+        [0.0, 0.0],
+        [2.0, 0.0],
+        [0.5, 0.1],
+    ])
+    spec = TamerOp.FiltrationSpec(
+        kind=:alpha,
+        max_dim=2,
+        delaunay_backend=:naive,
+        construction=TamerOp.ConstructionOptions(; output_stage=:simplex_tree),
+    )
+
+    packed = DI._packed_delaunay_simplices(pts.points, spec; max_dim=2)
+    @test packed.edges == [(1, 2), (1, 3), (2, 3)]
+    @test packed.triangles == [(1, 2, 3)]
+
+    edge_alpha_sq = DI._alpha_edge_grades_sq(pts.points, packed)
+    tri_alpha_sq = packed.tri_radius[1]^2
+
+    half_sq_long = DI._euclidean_distance(pts.points[1], pts.points[2])^2 / 4
+    half_sq_short1 = DI._euclidean_distance(pts.points[1], pts.points[3])^2 / 4
+    half_sq_short2 = DI._euclidean_distance(pts.points[2], pts.points[3])^2 / 4
+
+    @test isapprox(edge_alpha_sq[1], tri_alpha_sq; atol=1e-10, rtol=0.0)
+    @test edge_alpha_sq[1] > half_sq_long
+    @test isapprox(edge_alpha_sq[2], half_sq_short1; atol=1e-10, rtol=0.0)
+    @test isapprox(edge_alpha_sq[3], half_sq_short2; atol=1e-10, rtol=0.0)
+
+    st = TamerOp.encode(pts, spec; degree=0, stage=:simplex_tree)
+    grade_map = Dict(
+        Tuple(collect(DI.simplex_vertices(st, i))) => first(first(collect(DI.simplex_grades(st, i))))
+        for i in 1:DI.simplex_count(st)
+    )
+
+    @test grade_map[(1,)] == 0.0
+    @test grade_map[(2,)] == 0.0
+    @test grade_map[(3,)] == 0.0
+    @test isapprox(grade_map[(1, 2)], tri_alpha_sq; atol=1e-10, rtol=0.0)
+    @test isapprox(grade_map[(1, 3)], half_sq_short1; atol=1e-10, rtol=0.0)
+    @test isapprox(grade_map[(2, 3)], half_sq_short2; atol=1e-10, rtol=0.0)
+    @test isapprox(grade_map[(1, 2, 3)], tri_alpha_sq; atol=1e-10, rtol=0.0)
 end
 
 @testset "Data pipeline: Delaunay packed simplices are canonical/unique" begin
@@ -1311,8 +1919,8 @@ end
     end
 
     rng = Random.MersenneTwister(0xD4B4)
-    pts = PosetModules.PointCloud([randn(rng, 2) for _ in 1:128])
-    spec = PosetModules.FiltrationSpec(kind=:alpha, max_dim=2, delaunay_backend=:fast)
+    pts = TamerOp.PointCloud([randn(rng, 2) for _ in 1:128])
+    spec = TamerOp.FiltrationSpec(kind=:alpha, max_dim=2, delaunay_backend=:fast)
     packed = DI._packed_delaunay_simplices(pts.points, spec; max_dim=2)
 
     @test length(packed.edge_radius) == length(packed.edges)
@@ -1324,13 +1932,13 @@ end
 end
 
 @testset "Data pipeline: construction output_stage routing" begin
-    data = PosetModules.PointCloud([[0.0], [1.0]])
+    data = TamerOp.PointCloud([[0.0], [1.0]])
 
     filt_st = DI.RipsFiltration(
         max_dim=1,
-        construction=PosetModules.ConstructionOptions(; output_stage=:simplex_tree),
+        construction=TamerOp.ConstructionOptions(; output_stage=:simplex_tree),
     )
-    ST = PosetModules.encode(data, filt_st; degree=0)
+    ST = TamerOp.encode(data, filt_st; degree=0)
     @test ST isa DI.SimplexTreeMulti
     @test DI.simplex_count(ST) == 3
     @test DI.max_simplex_dim(ST) == 1
@@ -1341,16 +1949,16 @@ end
 
     filt_gc = DI.RipsFiltration(
         max_dim=1,
-        construction=PosetModules.ConstructionOptions(; output_stage=:graded_complex),
+        construction=TamerOp.ConstructionOptions(; output_stage=:graded_complex),
     )
-    G = PosetModules.encode(data, filt_gc; degree=0)
-    @test G isa PosetModules.GradedComplex
+    G = TamerOp.encode(data, filt_gc; degree=0)
+    @test G isa TamerOp.GradedComplex
 
     filt_cc = DI.RipsFiltration(
         max_dim=1,
-        construction=PosetModules.ConstructionOptions(; output_stage=:cochain),
+        construction=TamerOp.ConstructionOptions(; output_stage=:cochain),
     )
-    C = PosetModules.encode(data, filt_cc; degree=0)
+    C = TamerOp.encode(data, filt_cc; degree=0)
     @test C isa MC.ModuleCochainComplex
     for (u, v) in FF.cover_edges(C.terms[1].Q)
         @test C.terms[1].edge_maps[u, v] isa AbstractMatrix
@@ -1359,41 +1967,41 @@ end
 
     filt_mod = DI.RipsFiltration(
         max_dim=1,
-        construction=PosetModules.ConstructionOptions(; output_stage=:module),
+        construction=TamerOp.ConstructionOptions(; output_stage=:module),
     )
-    M = PosetModules.encode(data, filt_mod; degree=0)
+    M = TamerOp.encode(data, filt_mod; degree=0)
     @test M isa MD.PModule
 
-    spec_mod = PosetModules.FiltrationSpec(
+    spec_mod = TamerOp.FiltrationSpec(
         kind=:rips,
         max_dim=1,
         construction=(sparsify=:none, collapse=:none, output_stage=:module,
                       budget=(max_simplices=nothing, max_edges=nothing, memory_budget_bytes=nothing)),
     )
-    M2 = PosetModules.encode(data, spec_mod; degree=0)
+    M2 = TamerOp.encode(data, spec_mod; degree=0)
     @test M2 isa MD.PModule
 end
 
 @testset "Data pipeline: simplex-tree stage rejects non-simplicial cubical ingestion" begin
-    img = PosetModules.ImageNd([0.0 1.0; 2.0 3.0])
-    spec = PosetModules.FiltrationSpec(
+    img = TamerOp.ImageNd([0.0 1.0; 2.0 3.0])
+    spec = TamerOp.FiltrationSpec(
         kind=:lower_star,
-        construction=PosetModules.ConstructionOptions(; output_stage=:simplex_tree),
+        construction=TamerOp.ConstructionOptions(; output_stage=:simplex_tree),
     )
-    @test_throws ArgumentError PosetModules.encode(img, spec; degree=0)
+    @test_throws ArgumentError TamerOp.encode(img, spec; degree=0)
 end
 
 @testset "Data pipeline: flange emission (Zn)" begin
-    data = PosetModules.PointCloud([[0.0], [1.0]])
-    spec = PosetModules.FiltrationSpec(kind=:rips, max_dim=1, axes=([0, 1],), axis_kind=:zn)
-    FG = PosetModules.encode(data, spec; degree=0, stage=:flange)
+    data = TamerOp.PointCloud([[0.0], [1.0]])
+    spec = TamerOp.FiltrationSpec(kind=:rips, max_dim=1, axes=([0, 1],), axis_kind=:zn)
+    FG = TamerOp.encode(data, spec; degree=0, stage=:flange)
     @test FG.n == 1
 
-    spec = PosetModules.FiltrationSpec(kind=:rips, max_dim=1, axes=([0.0, 1.0],), axis_kind=:rn)
-    @test_throws Exception PosetModules.encode(data, spec; degree=0, stage=:flange)
+    spec = TamerOp.FiltrationSpec(kind=:rips, max_dim=1, axes=([0.0, 1.0],), axis_kind=:rn)
+    @test_throws Exception TamerOp.encode(data, spec; degree=0, stage=:flange)
 
-    spec = PosetModules.FiltrationSpec(kind=:rips, max_dim=1, axes=([0.0, 1.0],))
-    @test_throws Exception PosetModules.encode(data, spec; degree=0, stage=:flange)
+    spec = TamerOp.FiltrationSpec(kind=:rips, max_dim=1, axes=([0.0, 1.0],))
+    @test_throws Exception TamerOp.encode(data, spec; degree=0, stage=:flange)
 end
 
 @testset "Data pipeline: graded complex escape hatch" begin
@@ -1401,9 +2009,9 @@ end
     cells = [Int[1]]
     boundaries = SparseMatrixCSC{Int,Int}[]
     grades = [Float64[0.0]]
-    G = PosetModules.GradedComplex(cells, boundaries, grades)
-    spec = PosetModules.FiltrationSpec(kind=:graded, axes=([0.0, 1.0],))
-    enc = PosetModules.encode(G, spec; degree=0)
+    G = TamerOp.GradedComplex(cells, boundaries, grades)
+    spec = TamerOp.FiltrationSpec(kind=:graded, axes=([0.0, 1.0],))
+    enc = TamerOp.encode(G, spec; degree=0)
     @test DI.module_dims(enc.M) == [1, 1]
 
     # single edge between two vertices
@@ -1411,8 +2019,8 @@ end
     B1 = sparse([1, 2], [1, 1], [1, -1], 2, 1)
     boundaries = [B1]
     grades = [Float64[0.0], Float64[0.0], Float64[1.0]]
-    G = PosetModules.GradedComplex(cells, boundaries, grades)
-    enc = PosetModules.encode(G, spec; degree=0)
+    G = TamerOp.GradedComplex(cells, boundaries, grades)
+    enc = TamerOp.encode(G, spec; degree=0)
     @test DI.module_dims(enc.M) == [2, 1]
     ri = Inv.rank_invariant(DI.materialize_module(enc.M), OPT.InvariantOptions(); store_zeros=true)
     @test ri[(1, 2)] == 1
@@ -1427,65 +2035,65 @@ end
     grades = [Float64[0.0], Float64[0.0], Float64[0.0],
               Float64[1.0], Float64[1.0], Float64[1.0],
               Float64[2.0]]
-    G = PosetModules.GradedComplex(cells, boundaries, grades)
-    spec2 = PosetModules.FiltrationSpec(kind=:graded, axes=([0.0, 1.0, 2.0],))
-    enc1 = PosetModules.encode(G, spec2; degree=1)
+    G = TamerOp.GradedComplex(cells, boundaries, grades)
+    spec2 = TamerOp.FiltrationSpec(kind=:graded, axes=([0.0, 1.0, 2.0],))
+    enc1 = TamerOp.encode(G, spec2; degree=1)
     @test DI.module_dims(enc1.M) == [0, 1, 0]
 end
 
 @testset "Data pipeline: simplex-tree escape hatch" begin
-    data = PosetModules.PointCloud([[0.0], [1.0], [2.0]])
-    spec_st = PosetModules.FiltrationSpec(
+    data = TamerOp.PointCloud([[0.0], [1.0], [2.0]])
+    spec_st = TamerOp.FiltrationSpec(
         kind=:rips,
         max_dim=1,
-        construction=PosetModules.ConstructionOptions(; output_stage=:simplex_tree),
+        construction=TamerOp.ConstructionOptions(; output_stage=:simplex_tree),
     )
-    st = PosetModules.encode(data, spec_st; degree=0)
+    st = TamerOp.encode(data, spec_st; degree=0)
     @test st isa DI.SimplexTreeMulti
     @test DI.simplex_count(st) == 6
     @test DI.max_simplex_dim(st) == 1
 
-    spec_enc = PosetModules.FiltrationSpec(kind=:rips, axes=([0.0, 1.0, 2.0],))
-    enc = PosetModules.encode(st, spec_enc; degree=0)
+    spec_enc = TamerOp.FiltrationSpec(kind=:rips, axes=([0.0, 1.0, 2.0],))
+    enc = TamerOp.encode(st, spec_enc; degree=0)
     @test enc isa RES.EncodingResult
     @test DI.module_dims(enc.M) == [3, 1, 1]
 end
 
 @testset "Data pipeline: simplex-tree cochain/module parity" begin
-    data = PosetModules.PointCloud([[0.0], [1.0], [2.0]])
-    st = PosetModules.encode(
+    data = TamerOp.PointCloud([[0.0], [1.0], [2.0]])
+    st = TamerOp.encode(
         data,
-        PosetModules.FiltrationSpec(
+        TamerOp.FiltrationSpec(
             kind=:rips,
             max_dim=1,
-            construction=PosetModules.ConstructionOptions(; output_stage=:simplex_tree),
+            construction=TamerOp.ConstructionOptions(; output_stage=:simplex_tree),
         );
         degree=0,
     )
     @test st isa DI.SimplexTreeMulti
 
-    spec_mod = PosetModules.FiltrationSpec(
+    spec_mod = TamerOp.FiltrationSpec(
         kind=:rips,
         max_dim=1,
         axes=([0.0, 1.0, 2.0],),
-        construction=PosetModules.ConstructionOptions(; output_stage=:module),
+        construction=TamerOp.ConstructionOptions(; output_stage=:module),
     )
-    M_raw = PosetModules.encode(data, spec_mod; degree=0)
-    M_tree = PosetModules.encode(st, spec_mod; degree=0)
+    M_raw = TamerOp.encode(data, spec_mod; degree=0)
+    M_tree = TamerOp.encode(st, spec_mod; degree=0)
     @test M_tree isa MD.PModule
     @test M_tree.dims == M_raw.dims
     for (u, v) in FF.cover_edges(M_raw.Q)
         @test Array(M_tree.edge_maps[u, v]) == Array(M_raw.edge_maps[u, v])
     end
 
-    spec_cc = PosetModules.FiltrationSpec(
+    spec_cc = TamerOp.FiltrationSpec(
         kind=:rips,
         max_dim=1,
         axes=([0.0, 1.0, 2.0],),
-        construction=PosetModules.ConstructionOptions(; output_stage=:cochain),
+        construction=TamerOp.ConstructionOptions(; output_stage=:cochain),
     )
-    C_raw = PosetModules.encode(data, spec_cc; degree=0)
-    C_tree = PosetModules.encode(st, spec_cc; degree=0)
+    C_raw = TamerOp.encode(data, spec_cc; degree=0)
+    C_tree = TamerOp.encode(st, spec_cc; degree=0)
     @test C_tree isa MC.ModuleCochainComplex
     @test length(C_tree.terms) == length(C_raw.terms)
     @test C_tree.terms[1].dims == C_raw.terms[1].dims
@@ -1494,23 +2102,26 @@ end
 end
 
 @testset "Data pipeline: lazy default parity vs explicit cochain" begin
-    data = PosetModules.PointCloud([[0.0], [1.0], [2.0]])
-    spec_default = PosetModules.FiltrationSpec(kind=:rips, max_dim=1, axes=([0.0, 1.0, 2.0],))
-    enc_lazy = PosetModules.encode(data, spec_default; degree=0)
+    data = TamerOp.PointCloud([[0.0], [1.0], [2.0]])
+    spec_default = TamerOp.FiltrationSpec(kind=:rips, max_dim=1, axes=([0.0, 1.0, 2.0],))
+    enc_lazy = TamerOp.encode(data, spec_default; degree=0)
 
-    spec_cochain = PosetModules.FiltrationSpec(
+    spec_cochain = TamerOp.FiltrationSpec(
         kind=:rips,
         max_dim=1,
         axes=([0.0, 1.0, 2.0],),
-        construction=PosetModules.ConstructionOptions(; output_stage=:cochain),
+        construction=TamerOp.ConstructionOptions(; output_stage=:cochain),
     )
-    C_full = PosetModules.encode(data, spec_cochain; degree=0)
+    C_full = TamerOp.encode(data, spec_cochain; degree=0)
     M_full = MC.cohomology_module(C_full, 0)
 
     M_lazy = _enc_module(enc_lazy)
     @test M_lazy.dims == M_full.dims
     for (u, v) in FF.cover_edges(M_lazy.Q)
-        @test Array(M_lazy.edge_maps[u, v]) == Array(M_full.edge_maps[u, v])
+        A_lazy = Array(M_lazy.edge_maps[u, v])
+        A_full = Array(M_full.edge_maps[u, v])
+        @test size(A_lazy) == size(A_full)
+        @test TamerOp.FieldLinAlg.rank(M_lazy.field, A_lazy) == TamerOp.FieldLinAlg.rank(M_full.field, A_full)
     end
 end
 
@@ -1518,10 +2129,10 @@ end
     cells = [Int[1, 2], Int[1]]
     boundaries = [sparse([1, 2], [1, 1], [1, -1], 2, 1)]
     grades = [Float64[0.0], Float64[0.0], Float64[1.0]]
-    G = PosetModules.GradedComplex(cells, boundaries, grades)
+    G = TamerOp.GradedComplex(cells, boundaries, grades)
 
-    spec_default = PosetModules.FiltrationSpec(kind=:graded, axes=([0.0, 1.0],))
-    enc_lazy = PosetModules.encode(G, spec_default; degree=0)
+    spec_default = TamerOp.FiltrationSpec(kind=:graded, axes=([0.0, 1.0],))
+    enc_lazy = TamerOp.encode(G, spec_default; degree=0)
     axes = ([0.0, 1.0],)
     P = DI.poset_from_axes(axes)
     C_full = DI.cochain_complex_from_graded_complex(G, P, axes; field=CM.QQField())
@@ -1530,19 +2141,22 @@ end
     M_lazy = _enc_module(enc_lazy)
     @test M_lazy.dims == M_full.dims
     for (u, v) in FF.cover_edges(M_lazy.Q)
-        @test Array(M_lazy.edge_maps[u, v]) == Array(M_full.edge_maps[u, v])
+        A_lazy = Array(M_lazy.edge_maps[u, v])
+        A_full = Array(M_full.edge_maps[u, v])
+        @test size(A_lazy) == size(A_full)
+        @test TamerOp.FieldLinAlg.rank(M_lazy.field, A_lazy) == TamerOp.FieldLinAlg.rank(M_full.field, A_full)
     end
 end
 
 @testset "Data pipeline: low-dim H0 fast path parity" begin
-    data = PosetModules.PointCloud([[0.0], [0.4], [0.9], [1.3]])
-    spec_gc = PosetModules.FiltrationSpec(
+    data = TamerOp.PointCloud([[0.0], [0.4], [0.9], [1.3]])
+    spec_gc = TamerOp.FiltrationSpec(
         kind=:rips,
         max_dim=1,
         axes=([0.0, 0.5, 1.0, 1.5],),
         construction=OPT.ConstructionOptions(; output_stage=:graded_complex),
     )
-    G = PosetModules.encode(data, spec_gc; degree=0)
+    G = TamerOp.encode(data, spec_gc; degree=0)
     axes = spec_gc.params[:axes]
     P = DI.poset_from_axes(axes)
 
@@ -1552,14 +2166,15 @@ end
     M_generic = DI._cohomology_module_from_lazy_generic(L_generic, 0)
     @test M_fast.dims == M_generic.dims
     for (u, v) in FF.cover_edges(M_fast.Q)
-        @test Array(M_fast.edge_maps[u, v]) == Array(M_generic.edge_maps[u, v])
+        @test FL.rank(CM.QQField(), M_fast.edge_maps[u, v]) ==
+              FL.rank(CM.QQField(), M_generic.edge_maps[u, v])
     end
 
     # Non-edge boundary columns still agree with the generic local cohomology path.
     cells_bad = [Int[1, 2], Int[1]]
     boundaries_bad = [sparse([1], [1], [1], 2, 1)]
     grades_bad = [Float64[0.0], Float64[0.0], Float64[1.0]]
-    G_bad = PosetModules.GradedComplex(cells_bad, boundaries_bad, grades_bad)
+    G_bad = TamerOp.GradedComplex(cells_bad, boundaries_bad, grades_bad)
     axes_bad = ([0.0, 1.0],)
     P_bad = DI.poset_from_axes(axes_bad)
     L_bad = DI._lazy_cochain_complex_from_graded_complex(G_bad, P_bad, axes_bad; field=CM.QQField())
@@ -1568,19 +2183,20 @@ end
     M_bad_generic = DI._cohomology_module_from_lazy_generic(L_bad_generic, 0)
     @test M_bad.dims == M_bad_generic.dims
     for (u, v) in FF.cover_edges(M_bad.Q)
-        @test Array(M_bad.edge_maps[u, v]) == Array(M_bad_generic.edge_maps[u, v])
+        @test FL.rank(CM.QQField(), M_bad.edge_maps[u, v]) ==
+              FL.rank(CM.QQField(), M_bad_generic.edge_maps[u, v])
     end
 end
 
 @testset "Data pipeline: H0 kernel path parity for max_dim>1" begin
-    data = PosetModules.PointCloud([[0.0], [0.25], [0.5], [0.75], [1.0]])
-    spec_gc = PosetModules.FiltrationSpec(
+    data = TamerOp.PointCloud([[0.0], [0.25], [0.5], [0.75], [1.0]])
+    spec_gc = TamerOp.FiltrationSpec(
         kind=:rips,
         max_dim=2,
         axes=([0.0, 0.4, 0.8, 1.2],),
         construction=OPT.ConstructionOptions(; output_stage=:graded_complex),
     )
-    G = PosetModules.encode(data, spec_gc; degree=0)
+    G = TamerOp.encode(data, spec_gc; degree=0)
     axes = spec_gc.params[:axes]
     P = DI.poset_from_axes(axes)
 
@@ -1599,7 +2215,8 @@ end
         M_generic = DI._cohomology_module_from_lazy_generic(L_generic, 0)
         @test M_fast.dims == M_generic.dims
         for (u, v) in FF.cover_edges(M_fast.Q)
-            @test Array(M_fast.edge_maps[u, v]) == Array(M_generic.edge_maps[u, v])
+            @test FL.rank(CM.QQField(), M_fast.edge_maps[u, v]) ==
+                  FL.rank(CM.QQField(), M_generic.edge_maps[u, v])
         end
     finally
         DI._H0_CHAIN_SWEEP_FASTPATH[] = old_chain
@@ -1629,7 +2246,7 @@ end
     B = sparse(I, J, V, n, n)
 
     grades = [i <= n ? [0.0] : [0.5] for i in 1:(n + n)]
-    G = PosetModules.GradedComplex([cells0, cells1], [B], grades)
+    G = TamerOp.GradedComplex([cells0, cells1], [B], grades)
     axes = (collect(range(0.0, stop=1.0, length=20)),)
     P = DI.poset_from_axes(axes)
 
@@ -1645,8 +2262,8 @@ end
 
         @test M_fast.dims == M_generic.dims
         for (u, v) in FF.cover_edges(M_fast.Q)
-            @test PosetModules.FieldLinAlg.rank(CM.F2(), M_fast.edge_maps[u, v]) ==
-                  PosetModules.FieldLinAlg.rank(CM.F2(), M_generic.edge_maps[u, v])
+            @test TamerOp.FieldLinAlg.rank(CM.F2(), M_fast.edge_maps[u, v]) ==
+                  TamerOp.FieldLinAlg.rank(CM.F2(), M_generic.edge_maps[u, v])
         end
     finally
         DI._H1_COKERNEL_FASTPATH[] = old_h1
@@ -1671,7 +2288,7 @@ end
     push!(I, n); push!(J, n); push!(V, -1)
     B = sparse(I, J, V, n, n)
     grades = [i <= n ? [0.0] : [0.5] for i in 1:(n + n)]
-    G = PosetModules.GradedComplex([cells0, cells1], [B], grades)
+    G = TamerOp.GradedComplex([cells0, cells1], [B], grades)
     axes = (collect(range(0.0, stop=1.0, length=20)),)
     P = DI.poset_from_axes(axes)
 
@@ -1708,14 +2325,14 @@ end
         DI._H0_UNIONFIND_MIN_POS_VERTICES[] = 0
         DI._H0_UNIONFIND_MIN_TOTAL_ACTIVE_VERTICES[] = 0
         DI._H0_UNIONFIND_MIN_TOTAL_ACTIVE_EDGES[] = 0
-        data = PosetModules.PointCloud([[0.0], [0.3], [0.8], [1.1], [1.6], [2.0]])
-        spec_gc = PosetModules.FiltrationSpec(
+        data = TamerOp.PointCloud([[0.0], [0.3], [0.8], [1.1], [1.6], [2.0]])
+        spec_gc = TamerOp.FiltrationSpec(
             kind=:rips,
             max_dim=1,
             axes=([0.0, 0.4, 0.8, 1.2, 1.6, 2.0],),
             construction=OPT.ConstructionOptions(; output_stage=:graded_complex),
         )
-        G = PosetModules.encode(data, spec_gc; degree=0)
+        G = TamerOp.encode(data, spec_gc; degree=0)
         axes = spec_gc.params[:axes]
         P = DI.poset_from_axes(axes)
 
@@ -1729,7 +2346,8 @@ end
 
         @test M_fast.dims == M_base.dims
         for (u, v) in FF.cover_edges(M_fast.Q)
-            @test Array(M_fast.edge_maps[u, v]) == Array(M_base.edge_maps[u, v])
+            @test FL.rank(CM.F2(), M_fast.edge_maps[u, v]) ==
+                  FL.rank(CM.F2(), M_base.edge_maps[u, v])
         end
     finally
         DI._H0_ACTIVE_CHAIN_INCREMENTAL[] = old_inc
@@ -1778,7 +2396,7 @@ end
     grades = vcat([Float64[0.0] for _ in verts],
                   [Float64[0.4] for _ in edges],
                   [Float64[0.8] for _ in triangles])
-    G = PosetModules.GradedComplex(cells, boundaries, grades)
+    G = TamerOp.GradedComplex(cells, boundaries, grades)
     axes = (collect(range(0.0, stop=1.0, length=20)),)
     P = DI.poset_from_axes(axes)
 
@@ -1822,7 +2440,7 @@ end
     grades = vcat([Float64[0.0] for _ in verts],
                   [Float64[0.4] for _ in edges],
                   [Float64[0.8] for _ in triangles])
-    G = PosetModules.GradedComplex(cells, boundaries, grades)
+    G = TamerOp.GradedComplex(cells, boundaries, grades)
     axes = (collect(range(0.0, stop=1.0, length=28)),)
     P = DI.poset_from_axes(axes)
 
@@ -1875,7 +2493,7 @@ end
     cells = [collect(verts), collect(1:length(edges))]
     boundaries = [B1]
     grades = vcat([Float64[0.0] for _ in verts], [Float64[0.5] for _ in edges])
-    G = PosetModules.GradedComplex(cells, boundaries, grades)
+    G = TamerOp.GradedComplex(cells, boundaries, grades)
     axes = (collect(range(0.0, stop=1.0, length=80)),)
     P = DI.poset_from_axes(axes)
 
@@ -1909,7 +2527,7 @@ end
     cells = [collect(verts), collect(1:length(edges))]
     boundaries = [B1]
     grades = vcat([Float64[0.0] for _ in verts], [Float64[0.4] for _ in edges])
-    G = PosetModules.GradedComplex(cells, boundaries, grades)
+    G = TamerOp.GradedComplex(cells, boundaries, grades)
     axes = (collect(range(0.0, stop=1.0, length=96)),)
     P = DI.poset_from_axes(axes)
 
@@ -1966,7 +2584,7 @@ end
         (5, 6), (6, 7), (7, 8), (6, 8),
         (2, 4), (2, 5),
     ]
-    spec = PosetModules.FiltrationSpec(
+    spec = TamerOp.FiltrationSpec(
         kind=:clique_lower_star,
         max_dim=3,
         construction=OPT.ConstructionOptions(; collapse=:none, sparsify=:none),
@@ -2029,13 +2647,13 @@ end
         @test normalize_tris(tris_base) == sort([Tuple(sort(c)) for c in c3_base])
 
         # End-to-end clique_lower_star max_dim=2 parity across enum modes.
-        data = PosetModules.GraphData(
+        data = TamerOp.GraphData(
             n,
             edges;
             coords=[[Float64(i), Float64(mod(i, 3))] for i in 1:n],
         )
         vals = [Float64(i) / n for i in 1:n]
-        spec2 = PosetModules.FiltrationSpec(
+        spec2 = TamerOp.FiltrationSpec(
             kind=:clique_lower_star,
             max_dim=2,
             vertex_values=vals,
@@ -2043,9 +2661,9 @@ end
             construction=OPT.ConstructionOptions(; collapse=:none, sparsify=:none),
         )
         DI._GRAPH_CLIQUE_ENUM_MODE[] = :intersection
-        st_inter = PosetModules.encode(data, spec2; degree=0, cache=:auto, stage=:simplex_tree)
+        st_inter = TamerOp.encode(data, spec2; degree=0, cache=:auto, stage=:simplex_tree)
         DI._GRAPH_CLIQUE_ENUM_MODE[] = :combinations
-        st_comb = PosetModules.encode(data, spec2; degree=0, cache=:auto, stage=:simplex_tree)
+        st_comb = TamerOp.encode(data, spec2; degree=0, cache=:auto, stage=:simplex_tree)
         @test _canon_simplex_tree(st_inter) == _canon_simplex_tree(st_comb)
     finally
         DI._GRAPH_PACKED_EDGELIST_BACKEND[] = old_flag
@@ -2056,16 +2674,16 @@ end
 end
 
 @testset "Data pipeline: cohomology_dims stage parity + invariant shortcut" begin
-    data = PosetModules.PointCloud([[0.0], [0.3], [0.8], [1.1], [1.6], [2.0]])
-    spec = PosetModules.FiltrationSpec(
+    data = TamerOp.PointCloud([[0.0], [0.3], [0.8], [1.1], [1.6], [2.0]])
+    spec = TamerOp.FiltrationSpec(
         kind=:rips,
         max_dim=1,
         axes=([0.0, 0.4, 0.8, 1.2, 1.6, 2.0],),
         construction=OPT.ConstructionOptions(; output_stage=:encoding_result),
     )
-    d = PosetModules.encode(data, spec; degree=0, stage=:cohomology_dims, cache=:auto)
-    M = PosetModules.encode(data, spec; degree=0, stage=:module, cache=:auto)
-    enc = PosetModules.encode(data, spec; degree=0, stage=:encoding_result, cache=:auto)
+    d = TamerOp.encode(data, spec; degree=0, stage=:cohomology_dims, cache=:auto)
+    M = TamerOp.encode(data, spec; degree=0, stage=:module, cache=:auto)
+    enc = TamerOp.encode(data, spec; degree=0, stage=:encoding_result, cache=:auto)
 
     @test d isa RES.CohomologyDimsResult
     @test FF.nvertices(d.P) == FF.nvertices(M.Q)
@@ -2075,26 +2693,163 @@ end
     @test d.dims == M.dims
 
     h_mod = Inv.restricted_hilbert(M)
-    h_dims = PosetModules.restricted_hilbert(d)
+    h_dims = TamerOp.restricted_hilbert(d)
     @test h_mod == h_dims
 
     # Same dims-only invariant should work on both result types.
-    h_enc = PosetModules.invariant(enc; which=:restricted_hilbert).value
-    h_cdr = PosetModules.invariant(d; which=:restricted_hilbert).value
+    h_enc = TamerOp.invariant(enc; which=:restricted_hilbert).value
+    h_cdr = TamerOp.invariant(d; which=:restricted_hilbert).value
     @test h_cdr == h_enc
 
     e_opts = OPT.InvariantOptions(; axes=([0.0, 0.8, 1.6],), axes_policy=:as_given, threads=false)
-    e_enc = PosetModules.invariant(enc; which=:euler_surface, opts=e_opts).value
-    e_cdr = PosetModules.invariant(d; which=:euler_surface, opts=e_opts).value
+    e_enc = TamerOp.invariant(enc; which=:euler_surface, opts=e_opts).value
+    e_cdr = TamerOp.invariant(d; which=:euler_surface, opts=e_opts).value
     @test e_cdr == e_enc
 
     # Unsupported invariants fail cleanly on dims-only objects.
-    @test_throws ErrorException PosetModules.invariant(d; which=:rank_invariant)
+    @test_throws ErrorException TamerOp.invariant(d; which=:rank_invariant)
+end
+
+@testset "Data pipeline: encoded_complex stage exact Euler route" begin
+    data = TamerOp.PointCloud([[0.0], [0.3], [0.8], [1.1], [1.6], [2.0]])
+    spec = TamerOp.FiltrationSpec(
+        kind=:rips,
+        max_dim=1,
+        axes=([0.0, 0.4, 0.8, 1.2, 1.6, 2.0],),
+        construction=OPT.ConstructionOptions(; output_stage=:encoding_result),
+    )
+    enc_complex = TamerOp.encode(data, spec; degree=0, stage=:encoded_complex, cache=:auto)
+    C = TamerOp.encode(data, spec; degree=0, stage=:cochain, cache=:auto)
+    d = TamerOp.encode(data, spec; degree=0, stage=:cohomology_dims, cache=:auto)
+
+    @test enc_complex isa RES.EncodedComplexResult
+    @test TO.describe(enc_complex).kind == :encoded_complex_result
+    @test TO.encoding_complex(enc_complex) isa DI.LazyModuleCochainComplex
+    @test MC.describe(RES._materialize_complex(TO.encoding_complex(enc_complex))).degree_range == MC.describe(C).degree_range
+    @test TO.encoding_map(enc_complex) isa EC.CompiledEncoding
+    @test FF.nvertices(TO.encoding_poset(enc_complex)) == FF.nvertices(d.P)
+    for u in 1:FF.nvertices(d.P), v in 1:FF.nvertices(d.P)
+        @test FF.leq(TO.encoding_poset(enc_complex), u, v) == FF.leq(d.P, u, v)
+    end
+
+    e_opts = OPT.InvariantOptions(; axes=([0.0, 0.8, 1.6],), axes_policy=:as_given, threads=false)
+    e_direct = SM.euler_signed_measure(TO.encoding_complex(enc_complex), TO.encoding_map(enc_complex), e_opts)
+    e_workflow = TamerOp.euler_signed_measure(enc_complex; opts=e_opts)
+    e_invariant = TamerOp.invariant(enc_complex; which=:euler_signed_measure, opts=e_opts).value
+    @test Base.axes(e_workflow) == Base.axes(e_direct)
+    @test SM.support_indices(e_workflow) == SM.support_indices(e_direct)
+    @test SM.weights(e_workflow) == SM.weights(e_direct)
+    @test SM.support_indices(e_invariant) == SM.support_indices(e_direct)
+    @test SM.weights(e_invariant) == SM.weights(e_direct)
+
+    s_direct = SM.euler_surface(TO.encoding_complex(enc_complex), TO.encoding_map(enc_complex), e_opts)
+    s_workflow = TamerOp.euler_surface(enc_complex; opts=e_opts)
+    s_invariant = TamerOp.invariant(enc_complex; which=:euler_surface, opts=e_opts).value
+    @test s_workflow == s_direct
+    @test s_invariant == s_direct
+end
+
+@testset "Data pipeline: lazy 1D Euler bypasses active lists" begin
+    data = TamerOp.PointCloud([[0.0], [0.3], [0.8], [1.1], [1.6], [2.0]])
+    spec = TamerOp.FiltrationSpec(
+        kind=:rips,
+        max_dim=1,
+        axes=([0.0, 0.4, 0.8, 1.2, 1.6, 2.0],),
+        construction=OPT.ConstructionOptions(; output_stage=:encoding_result),
+    )
+    enc_complex = TamerOp.encode(data, spec; degree=0, stage=:encoded_complex, cache=:auto)
+    lazy = TO.encoding_complex(enc_complex)
+    e_opts = OPT.InvariantOptions(; axes=([0.0, 0.8, 1.6],), axes_policy=:as_given, threads=false)
+
+    @test all(isnothing, lazy.active_by_dim)
+    pm = TamerOp.euler_signed_measure(enc_complex; opts=e_opts)
+    @test all(isnothing, lazy.active_by_dim)
+
+    surf = SM.surface_from_point_signed_measure(pm)
+    @test surf == TamerOp.euler_surface(enc_complex; opts=e_opts)
+end
+
+@testset "Data pipeline: lazy 1D Euler direct measure path on encoding axes" begin
+    data = TamerOp.PointCloud([
+        [0.0, 0.0],
+        [1.0, 0.1],
+        [0.2, 0.95],
+        [1.1, 0.85],
+        [0.55, 0.42],
+    ])
+    spec = TamerOp.FiltrationSpec(
+        kind=:alpha,
+        max_dim=2,
+        construction=OPT.ConstructionOptions(; output_stage=:encoding_result),
+    )
+    enc_complex = TamerOp.encode(data, spec; degree=0, stage=:encoded_complex, cache=:auto)
+    lazy = TO.encoding_complex(enc_complex)
+    e_opts = OPT.InvariantOptions(; threads=false)
+
+    @test all(isnothing, lazy.active_by_dim)
+    pm = TamerOp.euler_signed_measure(enc_complex; opts=e_opts)
+    @test all(isnothing, lazy.active_by_dim)
+
+    surf = TamerOp.euler_surface(enc_complex; opts=e_opts)
+    @test SM.surface_from_point_signed_measure(pm) == surf
+end
+
+@testset "Data pipeline: lazy 2D Euler direct measure path on encoding axes" begin
+    data = TamerOp.PointCloud([
+        [0.0, 0.0],
+        [0.8, 0.2],
+        [1.6, 0.6],
+        [2.2, 0.4],
+    ])
+    spec = TamerOp.FiltrationSpec(
+        kind=:rips_lowerstar,
+        max_dim=1,
+        radius=2.5,
+        coord=1,
+        construction=OPT.ConstructionOptions(; output_stage=:encoding_result),
+    )
+    enc_complex = TamerOp.encode(data, spec; degree=0, stage=:encoded_complex, cache=:auto)
+    lazy = TO.encoding_complex(enc_complex)
+    e_opts = OPT.InvariantOptions(; threads=false)
+
+    @test lazy.vertex_idxs === nothing
+    @test TO.encoding_map(enc_complex).reps === nothing
+    enc_cached = RES._encoding_with_session_cache(enc_complex, CM.SessionCache())
+    @test TO.encoding_map(enc_cached).reps === nothing
+    @test all(isnothing, lazy.active_by_dim)
+    pm = TamerOp.euler_signed_measure(enc_complex; opts=e_opts)
+    @test lazy.vertex_idxs === nothing
+    @test all(isnothing, lazy.active_by_dim)
+
+    surf = TamerOp.euler_surface(enc_complex; opts=e_opts)
+    @test SM.surface_from_point_signed_measure(pm) == surf
+end
+
+@testset "Data pipeline: lazy 2D active-list fallback materializes vertex indices on demand" begin
+    data = TamerOp.PointCloud([
+        [0.0, 0.0],
+        [0.8, 0.2],
+        [1.6, 0.6],
+        [2.2, 0.4],
+    ])
+    spec = TamerOp.FiltrationSpec(
+        kind=:rips_codensity,
+        max_dim=1,
+        radius=2.5,
+        dtm_mass=0.5,
+        construction=OPT.ConstructionOptions(; output_stage=:encoding_result),
+    )
+    enc_complex = TamerOp.encode(data, spec; degree=0, stage=:encoded_complex, cache=:auto)
+    lazy = TO.encoding_complex(enc_complex)
+
+    @test lazy.vertex_idxs === nothing
+    _ = RES._materialize_complex(lazy)
+    @test lazy.vertex_idxs !== nothing
 end
 
 @testset "Data pipeline: encoding_result lazy module parity" begin
-    data = PosetModules.PointCloud([[0.0], [0.25], [0.7], [1.1], [1.6], [2.0]])
-    spec = PosetModules.FiltrationSpec(
+    data = TamerOp.PointCloud([[0.0], [0.25], [0.7], [1.1], [1.6], [2.0]])
+    spec = TamerOp.FiltrationSpec(
         kind=:rips,
         max_dim=2,
         construction=OPT.ConstructionOptions(; output_stage=:encoding_result),
@@ -2102,25 +2857,25 @@ end
     old_lazy = DI._ENCODING_RESULT_LAZY_MODULE[]
     try
         DI._ENCODING_RESULT_LAZY_MODULE[] = true
-        enc_lazy = PosetModules.encode(data, spec; degree=1, stage=:encoding_result, cache=:auto)
+        enc_lazy = TamerOp.encode(data, spec; degree=1, stage=:encoding_result, cache=:auto)
         @test enc_lazy isa RES.EncodingResult
         @test enc_lazy.M isa DI._LazyEncodedModule
 
-        M_lazy = PosetModules.Workflow.pmodule(enc_lazy)
+        M_lazy = TamerOp.Workflow.pmodule(enc_lazy)
         @test M_lazy isa MD.PModule
-        @test PosetModules.Workflow.pmodule(enc_lazy) === M_lazy
+        @test TamerOp.Workflow.pmodule(enc_lazy) === M_lazy
 
         DI._ENCODING_RESULT_LAZY_MODULE[] = false
-        enc_eager = PosetModules.encode(data, spec; degree=1, stage=:encoding_result, cache=:auto)
+        enc_eager = TamerOp.encode(data, spec; degree=1, stage=:encoding_result, cache=:auto)
         @test enc_eager.M isa MD.PModule
 
-        h_lazy = PosetModules.restricted_hilbert(enc_lazy)
-        h_eager = PosetModules.restricted_hilbert(enc_eager)
+        h_lazy = TamerOp.restricted_hilbert(enc_lazy)
+        h_eager = TamerOp.restricted_hilbert(enc_eager)
         @test h_lazy == h_eager
 
         e_opts = OPT.InvariantOptions(; axes=([0.0, 0.8, 1.6],), axes_policy=:as_given, threads=false)
-        e_lazy = PosetModules.euler_surface(enc_lazy; opts=e_opts)
-        e_eager = PosetModules.euler_surface(enc_eager; opts=e_opts)
+        e_lazy = TamerOp.euler_surface(enc_lazy; opts=e_opts)
+        e_eager = TamerOp.euler_surface(enc_eager; opts=e_opts)
         @test e_lazy == e_eager
     finally
         DI._ENCODING_RESULT_LAZY_MODULE[] = old_lazy
@@ -2128,13 +2883,13 @@ end
 end
 
 @testset "Data pipeline: degree-local all-t keeps local term materialization" begin
-    data = PosetModules.PointCloud([[0.0], [0.3], [0.8], [1.4], [1.9], [2.2]])
-    spec = PosetModules.FiltrationSpec(
+    data = TamerOp.PointCloud([[0.0], [0.3], [0.8], [1.4], [1.9], [2.2]])
+    spec = TamerOp.FiltrationSpec(
         kind=:rips,
         max_dim=3,
         construction=OPT.ConstructionOptions(; output_stage=:graded_complex),
     )
-    G = PosetModules.encode(data, spec; degree=0, stage=:graded_complex, cache=:auto)
+    G = TamerOp.encode(data, spec; degree=0, stage=:graded_complex, cache=:auto)
     axes = get(spec.params, :axes, (collect(range(0.0, stop=2.2, length=18)),))
     P = DI.poset_from_axes(axes)
 
@@ -2168,14 +2923,14 @@ end
         DI._H0_UNIONFIND_MIN_TOTAL_ACTIVE_VERTICES[] = 0
         DI._H0_UNIONFIND_MIN_TOTAL_ACTIVE_EDGES[] = 0
 
-        data = PosetModules.PointCloud([[0.0], [0.4], [0.9], [1.3], [1.8]])
-        spec_gc = PosetModules.FiltrationSpec(
+        data = TamerOp.PointCloud([[0.0], [0.4], [0.9], [1.3], [1.8]])
+        spec_gc = TamerOp.FiltrationSpec(
             kind=:rips,
             max_dim=1,
             axes=([0.0, 0.5, 1.0, 1.5, 2.0],),
             construction=OPT.ConstructionOptions(; output_stage=:graded_complex),
         )
-        G = PosetModules.encode(data, spec_gc; degree=0)
+        G = TamerOp.encode(data, spec_gc; degree=0)
         axes = spec_gc.params[:axes]
         P = DI.poset_from_axes(axes)
         L_uf = DI._lazy_cochain_complex_from_graded_complex(G, P, axes; field=CM.F2())
@@ -2195,7 +2950,7 @@ end
         cells_bad = [Int[1, 2], Int[1]]
         boundaries_bad = [sparse([1], [1], [1], 2, 1)]
         grades_bad = [Float64[0.0], Float64[0.0], Float64[1.0]]
-        G_bad = PosetModules.GradedComplex(cells_bad, boundaries_bad, grades_bad)
+        G_bad = TamerOp.GradedComplex(cells_bad, boundaries_bad, grades_bad)
         axes_bad = ([0.0, 1.0],)
         P_bad = DI.poset_from_axes(axes_bad)
         L_bad = DI._lazy_cochain_complex_from_graded_complex(G_bad, P_bad, axes_bad; field=CM.F2())
@@ -2204,7 +2959,8 @@ end
         M_bad_generic = DI._cohomology_module_from_lazy_generic(L_bad_generic, 0)
         @test M_bad.dims == M_bad_generic.dims
         for (u, v) in FF.cover_edges(M_bad.Q)
-            @test Array(M_bad.edge_maps[u, v]) == Array(M_bad_generic.edge_maps[u, v])
+            @test FL.rank(CM.F2(), M_bad.edge_maps[u, v]) ==
+                  FL.rank(CM.F2(), M_bad_generic.edge_maps[u, v])
         end
     finally
         DI._H0_UNIONFIND_MIN_POS_VERTICES[] = old_min_pos
@@ -2225,37 +2981,39 @@ end
         DI._H0_UNIONFIND_MIN_TOTAL_ACTIVE_VERTICES[] = 0
         DI._H0_UNIONFIND_MIN_TOTAL_ACTIVE_EDGES[] = 0
 
-        data = PosetModules.PointCloud([[0.0], [0.4], [0.9], [1.3], [1.7]])
-        spec = PosetModules.FiltrationSpec(
+        data = TamerOp.PointCloud([[0.0], [0.4], [0.9], [1.3], [1.7]])
+        spec = TamerOp.FiltrationSpec(
             kind=:rips,
             max_dim=1,
             axes=([0.0, 0.5, 1.0, 1.5, 2.0],),
             construction=OPT.ConstructionOptions(; output_stage=:encoding_result),
         )
         DI._H0_CHAIN_SWEEP_FASTPATH[] = false
-        M_base = PosetModules.encode(data, spec; degree=0, stage=:module, cache=:auto)
+        M_base = TamerOp.encode(data, spec; degree=0, stage=:module, cache=:auto)
         DI._H0_CHAIN_SWEEP_FASTPATH[] = true
-        M_fast = PosetModules.encode(data, spec; degree=0, stage=:module, cache=:auto)
+        M_fast = TamerOp.encode(data, spec; degree=0, stage=:module, cache=:auto)
         @test M_fast.dims == M_base.dims
         for (u, v) in FF.cover_edges(M_fast.Q)
-            @test Array(M_fast.edge_maps[u, v]) == Array(M_base.edge_maps[u, v])
+            @test FL.rank(M_fast.field, M_fast.edge_maps[u, v]) ==
+                  FL.rank(M_base.field, M_base.edge_maps[u, v])
         end
 
         edges = [(1, 2), (2, 3), (3, 4), (4, 5), (1, 5)]
         weights = [0.2, 0.4, 0.7, 1.0, 1.3]
-        gdata = PosetModules.GraphData(5, edges; weights=weights)
-        gspec = PosetModules.FiltrationSpec(
+        gdata = TamerOp.GraphData(5, edges; weights=weights)
+        gspec = TamerOp.FiltrationSpec(
             kind=:graph_weight_threshold,
             max_dim=1,
             construction=OPT.ConstructionOptions(; output_stage=:encoding_result),
         )
         DI._H0_CHAIN_SWEEP_FASTPATH[] = false
-        Mg_base = PosetModules.encode(gdata, gspec; degree=0, stage=:module, cache=:auto)
+        Mg_base = TamerOp.encode(gdata, gspec; degree=0, stage=:module, cache=:auto)
         DI._H0_CHAIN_SWEEP_FASTPATH[] = true
-        Mg_fast = PosetModules.encode(gdata, gspec; degree=0, stage=:module, cache=:auto)
+        Mg_fast = TamerOp.encode(gdata, gspec; degree=0, stage=:module, cache=:auto)
         @test Mg_fast.dims == Mg_base.dims
         for (u, v) in FF.cover_edges(Mg_fast.Q)
-            @test Array(Mg_fast.edge_maps[u, v]) == Array(Mg_base.edge_maps[u, v])
+            @test FL.rank(Mg_fast.field, Mg_fast.edge_maps[u, v]) ==
+                  FL.rank(Mg_base.field, Mg_base.edge_maps[u, v])
         end
     finally
         DI._H0_CHAIN_SWEEP_FASTPATH[] = old_chain
@@ -2295,23 +3053,23 @@ end
         n = 64
         d = 24
         pts = [collect(range(0.0, stop=1.0, length=d)) .+ 0.01 * i for i in 1:n]
-        data = PosetModules.PointCloud(pts)
+        data = TamerOp.PointCloud(pts)
         cons = OPT.ConstructionOptions(; sparsify=:knn, output_stage=:simplex_tree)
-        spec_bf = PosetModules.FiltrationSpec(
+        spec_bf = TamerOp.FiltrationSpec(
             kind=:rips,
             max_dim=1,
             knn=8,
             nn_backend=:bruteforce,
             construction=cons,
         )
-        spec_nn = PosetModules.FiltrationSpec(
+        spec_nn = TamerOp.FiltrationSpec(
             kind=:rips,
             max_dim=1,
             knn=8,
             nn_backend=:nearestneighbors,
             construction=cons,
         )
-        spec_ap = PosetModules.FiltrationSpec(
+        spec_ap = TamerOp.FiltrationSpec(
             kind=:rips,
             max_dim=1,
             knn=8,
@@ -2320,9 +3078,9 @@ end
             construction=cons,
         )
 
-        st_bf = PosetModules.encode(data, spec_bf; degree=0, stage=:simplex_tree, cache=:auto)
-        st_nn = PosetModules.encode(data, spec_nn; degree=0, stage=:simplex_tree, cache=:auto)
-        st_ap = PosetModules.encode(data, spec_ap; degree=0, stage=:simplex_tree, cache=:auto)
+        st_bf = TamerOp.encode(data, spec_bf; degree=0, stage=:simplex_tree, cache=:auto)
+        st_nn = TamerOp.encode(data, spec_nn; degree=0, stage=:simplex_tree, cache=:auto)
+        st_ap = TamerOp.encode(data, spec_ap; degree=0, stage=:simplex_tree, cache=:auto)
 
         function _edge_signature(st)
             out = Tuple{Int,Int,Float64}[]
@@ -2358,23 +3116,23 @@ end
     end
     B = sparse(I, J, V, n, n - 1)
     grades = vcat([Float64[0.0] for _ in 1:n], [Float64[0.6] for _ in 1:(n - 1)])
-    data = PosetModules.GradedComplex([cells0, cells1], [B], grades)
+    data = TamerOp.GradedComplex([cells0, cells1], [B], grades)
     axes = (collect(range(0.0, stop=1.0, length=40)),)
-    spec = PosetModules.FiltrationSpec(
+    spec = TamerOp.FiltrationSpec(
         kind=:graded,
         axes=axes,
         construction=OPT.ConstructionOptions(; output_stage=:encoding_result),
     )
-    pipeline = PosetModules.PipelineOptions(field=CM.F2())
+    pipeline = TamerOp.PipelineOptions(field=CM.F2())
 
     old_fast = DI._COHOMOLOGY_DIMS_MONOTONE_RANK_FASTPATH[]
     old_inc = DI._COHOMOLOGY_DIMS_MONOTONE_INCREMENTAL_RANK[]
     try
         DI._COHOMOLOGY_DIMS_MONOTONE_RANK_FASTPATH[] = true
         DI._COHOMOLOGY_DIMS_MONOTONE_INCREMENTAL_RANK[] = true
-        d_inc = PosetModules.encode(data, spec; degree=1, stage=:cohomology_dims, pipeline=pipeline, cache=:auto)
+        d_inc = TamerOp.encode(data, spec; degree=1, stage=:cohomology_dims, pipeline=pipeline, cache=:auto)
         DI._COHOMOLOGY_DIMS_MONOTONE_INCREMENTAL_RANK[] = false
-        d_base = PosetModules.encode(data, spec; degree=1, stage=:cohomology_dims, pipeline=pipeline, cache=:auto)
+        d_base = TamerOp.encode(data, spec; degree=1, stage=:cohomology_dims, pipeline=pipeline, cache=:auto)
         @test d_inc.dims == d_base.dims
     finally
         DI._COHOMOLOGY_DIMS_MONOTONE_RANK_FASTPATH[] = old_fast
@@ -2435,14 +3193,14 @@ end
 
 @testset "Data pipeline: lazy diff threaded parity" begin
     if Threads.nthreads() > 1
-        data = PosetModules.PointCloud([[0.0], [0.25], [0.5], [0.75], [1.0], [1.25]])
-        spec_gc = PosetModules.FiltrationSpec(
+        data = TamerOp.PointCloud([[0.0], [0.25], [0.5], [0.75], [1.0], [1.25]])
+        spec_gc = TamerOp.FiltrationSpec(
             kind=:rips,
             max_dim=2,
             axes=([0.0, 0.3, 0.6, 0.9, 1.2],),
             construction=OPT.ConstructionOptions(; output_stage=:graded_complex),
         )
-        G = PosetModules.encode(data, spec_gc; degree=0)
+        G = TamerOp.encode(data, spec_gc; degree=0)
         axes = spec_gc.params[:axes]
         P = DI.poset_from_axes(axes)
         L = DI._lazy_cochain_complex_from_graded_complex(G, P, axes; field=CM.QQField())
@@ -2460,14 +3218,14 @@ end
 end
 
 @testset "Data pipeline: structural inclusion map term-builder contract" begin
-    data = PosetModules.PointCloud([[0.0], [0.4], [0.9], [1.3]])
-    spec_gc = PosetModules.FiltrationSpec(
+    data = TamerOp.PointCloud([[0.0], [0.4], [0.9], [1.3]])
+    spec_gc = TamerOp.FiltrationSpec(
         kind=:rips,
         max_dim=1,
         axes=([0.0, 0.5, 1.0, 1.5],),
         construction=OPT.ConstructionOptions(; output_stage=:graded_complex),
     )
-    G = PosetModules.encode(data, spec_gc; degree=0)
+    G = TamerOp.encode(data, spec_gc; degree=0)
     axes = spec_gc.params[:axes]
     P = DI.poset_from_axes(axes)
 
@@ -2481,16 +3239,16 @@ end
 @testset "Data pipeline: dense non-sparse point-cloud streaming distance parity" begin
     old_stream = DI._POINTCLOUD_STREAM_DIST_NONSPARSE[]
     try
-        data = PosetModules.PointCloud([[0.0], [0.25], [0.5], [0.75], [1.0], [1.25]])
-        spec = PosetModules.FiltrationSpec(
+        data = TamerOp.PointCloud([[0.0], [0.25], [0.5], [0.75], [1.0], [1.25]])
+        spec = TamerOp.FiltrationSpec(
             kind=:rips,
             max_dim=2,
             construction=OPT.ConstructionOptions(; sparsify=:none, output_stage=:graded_complex),
         )
         DI._POINTCLOUD_STREAM_DIST_NONSPARSE[] = true
-        G_stream = PosetModules.encode(data, spec; degree=0, stage=:graded_complex)
+        G_stream = TamerOp.encode(data, spec; degree=0, stage=:graded_complex)
         DI._POINTCLOUD_STREAM_DIST_NONSPARSE[] = false
-        G_packed = PosetModules.encode(data, spec; degree=0, stage=:graded_complex)
+        G_packed = TamerOp.encode(data, spec; degree=0, stage=:graded_complex)
         @test G_stream.cells_by_dim == G_packed.cells_by_dim
         @test G_stream.boundaries == G_packed.boundaries
         @test G_stream.grades == G_packed.grades
@@ -2502,8 +3260,8 @@ end
 @testset "Data pipeline: lowdim finite-radius streaming parity (rips_density)" begin
     old_stream = DI._POINTCLOUD_LOWDIM_RADIUS_STREAMING[]
     try
-        data = PosetModules.PointCloud([[0.0], [0.2], [0.55], [0.9], [1.3], [1.8]])
-        spec = PosetModules.FiltrationSpec(
+        data = TamerOp.PointCloud([[0.0], [0.2], [0.55], [0.9], [1.3], [1.8]])
+        spec = TamerOp.FiltrationSpec(
             kind=:rips_density,
             max_dim=1,
             radius=0.75,
@@ -2512,9 +3270,9 @@ end
             construction=OPT.ConstructionOptions(; sparsify=:none, output_stage=:graded_complex),
         )
         DI._POINTCLOUD_LOWDIM_RADIUS_STREAMING[] = true
-        G_stream = PosetModules.encode(data, spec; degree=0, stage=:graded_complex)
+        G_stream = TamerOp.encode(data, spec; degree=0, stage=:graded_complex)
         DI._POINTCLOUD_LOWDIM_RADIUS_STREAMING[] = false
-        G_dense = PosetModules.encode(data, spec; degree=0, stage=:graded_complex)
+        G_dense = TamerOp.encode(data, spec; degree=0, stage=:graded_complex)
         @test G_stream.cells_by_dim == G_dense.cells_by_dim
         @test G_stream.boundaries == G_dense.boundaries
         @test G_stream.grades == G_dense.grades
@@ -2526,12 +3284,12 @@ end
 @testset "Data pipeline: graph clique enumeration parity" begin
     old_enum = DI._GRAPH_CLIQUE_ENUM_MODE[]
     try
-        data = PosetModules.GraphData(
+        data = TamerOp.GraphData(
             6,
             [(1, 2), (1, 3), (2, 3), (2, 4), (3, 4), (3, 5), (4, 5), (4, 6), (5, 6)],
         )
         vg = [0.0, 0.1, 0.2, 0.4, 0.6, 0.8]
-        spec = PosetModules.FiltrationSpec(
+        spec = TamerOp.FiltrationSpec(
             kind=:clique_lower_star,
             max_dim=2,
             vertex_grades=vg,
@@ -2539,11 +3297,11 @@ end
             construction=OPT.ConstructionOptions(; output_stage=:graded_complex),
         )
         DI._GRAPH_CLIQUE_ENUM_MODE[] = :intersection
-        G_fast = PosetModules.encode(data, spec; degree=0, stage=:graded_complex)
+        G_fast = TamerOp.encode(data, spec; degree=0, stage=:graded_complex)
         DI._GRAPH_CLIQUE_ENUM_MODE[] = :combinations
-        G_base = PosetModules.encode(data, spec; degree=0, stage=:graded_complex)
+        G_base = TamerOp.encode(data, spec; degree=0, stage=:graded_complex)
         DI._GRAPH_CLIQUE_ENUM_MODE[] = :auto
-        G_auto = PosetModules.encode(data, spec; degree=0, stage=:graded_complex)
+        G_auto = TamerOp.encode(data, spec; degree=0, stage=:graded_complex)
         @test G_fast.cells_by_dim == G_base.cells_by_dim
         @test G_fast.boundaries == G_base.boundaries
         @test G_fast.grades == G_base.grades
@@ -2552,7 +3310,7 @@ end
         @test G_auto.grades == G_base.grades
 
         w = [1.0 + 0.1 * i for i in eachindex(data.edges)]
-        spec_w = PosetModules.FiltrationSpec(
+        spec_w = TamerOp.FiltrationSpec(
             kind=:graph_weight_threshold,
             lift=:clique,
             max_dim=2,
@@ -2560,11 +3318,11 @@ end
             construction=OPT.ConstructionOptions(; output_stage=:graded_complex),
         )
         DI._GRAPH_CLIQUE_ENUM_MODE[] = :intersection
-        Gw_fast = PosetModules.encode(data, spec_w; degree=0, stage=:graded_complex)
+        Gw_fast = TamerOp.encode(data, spec_w; degree=0, stage=:graded_complex)
         DI._GRAPH_CLIQUE_ENUM_MODE[] = :combinations
-        Gw_base = PosetModules.encode(data, spec_w; degree=0, stage=:graded_complex)
+        Gw_base = TamerOp.encode(data, spec_w; degree=0, stage=:graded_complex)
         DI._GRAPH_CLIQUE_ENUM_MODE[] = :auto
-        Gw_auto = PosetModules.encode(data, spec_w; degree=0, stage=:graded_complex)
+        Gw_auto = TamerOp.encode(data, spec_w; degree=0, stage=:graded_complex)
         @test Gw_fast.cells_by_dim == Gw_base.cells_by_dim
         @test Gw_fast.boundaries == Gw_base.boundaries
         @test Gw_fast.grades == Gw_base.grades
@@ -2577,34 +3335,34 @@ end
 end
 
 @testset "Data pipeline: point-cloud graded_complex stage returns graded complex" begin
-    data = PosetModules.PointCloud([[0.0], [1.0], [2.0]])
-    spec = PosetModules.FiltrationSpec(
+    data = TamerOp.PointCloud([[0.0], [1.0], [2.0]])
+    spec = TamerOp.FiltrationSpec(
         kind=:rips,
         max_dim=1,
-        construction=PosetModules.ConstructionOptions(; output_stage=:graded_complex),
+        construction=TamerOp.ConstructionOptions(; output_stage=:graded_complex),
     )
-    G = PosetModules.encode(data, spec; degree=0)
-    @test G isa PosetModules.GradedComplex
+    G = TamerOp.encode(data, spec; degree=0)
+    @test G isa TamerOp.GradedComplex
     @test !isempty(G.cells_by_dim)
 end
 
 @testset "Data pipeline: simplex-tree eps quantization parity" begin
-    data = PosetModules.PointCloud([[0.0], [0.41], [0.93]])
-    st = PosetModules.encode(
+    data = TamerOp.PointCloud([[0.0], [0.41], [0.93]])
+    st = TamerOp.encode(
         data,
-        PosetModules.FiltrationSpec(
+        TamerOp.FiltrationSpec(
             kind=:rips,
             max_dim=1,
-            construction=PosetModules.ConstructionOptions(; output_stage=:simplex_tree),
+            construction=TamerOp.ConstructionOptions(; output_stage=:simplex_tree),
         );
         degree=0,
     )
     @test st isa DI.SimplexTreeMulti
 
-    spec_eps = PosetModules.FiltrationSpec(kind=:graded, eps=0.25)
-    enc_tree = PosetModules.encode(st, spec_eps; degree=0)
+    spec_eps = TamerOp.FiltrationSpec(kind=:graded, eps=0.25)
+    enc_tree = TamerOp.encode(st, spec_eps; degree=0)
     G = DI._graded_complex_from_simplex_tree(st)
-    enc_grad = PosetModules.encode(G, spec_eps; degree=0)
+    enc_grad = TamerOp.encode(G, spec_eps; degree=0)
     M_tree = _enc_module(enc_tree)
     M_grad = _enc_module(enc_grad)
     @test M_tree.dims == M_grad.dims
@@ -2621,18 +3379,18 @@ end
         [Float64[0.0, 0.0]],
         [Float64[1.0, 0.0], Float64[0.0, 1.0], Float64[1.0, 1.0]],
     ]
-    Gm = PosetModules.MultiCriticalGradedComplex(cells, [B1], grades)
+    Gm = TamerOp.MultiCriticalGradedComplex(cells, [B1], grades)
     st = DI._simplex_tree_multi_from_complex(Gm)
     @test st isa DI.SimplexTreeMulti
 
-    spec_one = PosetModules.FiltrationSpec(
+    spec_one = TamerOp.FiltrationSpec(
         kind=:graded,
         multicritical=:one_critical,
         onecritical_selector=:lexmin,
         onecritical_enforce_boundary=true,
     )
-    enc_tree = PosetModules.encode(st, spec_one; degree=0)
-    enc_grad = PosetModules.encode(Gm, spec_one; degree=0)
+    enc_tree = TamerOp.encode(st, spec_one; degree=0)
+    enc_grad = TamerOp.encode(Gm, spec_one; degree=0)
     M_tree = _enc_module(enc_tree)
     M_grad = _enc_module(enc_grad)
     @test M_tree.dims == M_grad.dims
@@ -2641,24 +3399,66 @@ end
     end
 end
 
+@testset "Data pipeline: packed simplex-tree complex conversions" begin
+    cells = [Int[1, 2, 3], Int[1, 2, 3], Int[1]]
+    B1 = sparse(
+        [1, 2, 2, 3, 1, 3],
+        [1, 1, 2, 2, 3, 3],
+        [1, -1, 1, -1, 1, -1],
+        3, 3,
+    )
+    B2 = sparse([1, 2, 3], [1, 1, 1], [1, -1, 1], 3, 1)
+    Gg = TamerOp.GradedComplex(
+        cells,
+        [B1, B2],
+        [(0.0, 0.0), (1.0, 0.0), (0.0, 1.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0), (2.0, 2.0)],
+    )
+    Gm = TamerOp.MultiCriticalGradedComplex(
+        cells,
+        [B1, B2],
+        [
+            [(0.0, 0.0)],
+            [(1.0, 0.0)],
+            [(0.0, 1.0)],
+            [(1.0, 0.0)],
+            [(1.0, 1.0)],
+            [(0.0, 1.0)],
+            [(1.0, 1.0), (2.0, 2.0)],
+        ],
+    )
+
+    stg = DI._simplex_tree_multi_from_complex(Gg)
+    stm = DI._simplex_tree_multi_from_complex(Gm)
+    @test stg.grade_offsets == collect(1:(length(Gg.grades) + 1))
+    @test stg.grade_data == Gg.grades
+    @test stm.grade_offsets == getfield(Gm, :grade_offsets)
+    @test stm.grade_data == getfield(Gm, :grade_data)
+
+    Gg_rt = DI._graded_complex_from_simplex_tree(stg)
+    Gm_rt = DI._graded_complex_from_simplex_tree(stm)
+    @test Gg_rt.grades == Gg.grades
+    @test collect(Gm_rt.grades[7]) == collect(Gm.grades[7])
+    @test DI._axes_from_simplex_tree(stm; orientation=(1, 1)) == ([0.0, 1.0, 2.0], [0.0, 1.0, 2.0])
+end
+
 @testset "Data pipeline: graded complex" begin
     cells = [Int[1]]
     boundaries = SparseMatrixCSC{Int,Int}[]
     grades = [Float64[0.0]]
-    G = PosetModules.GradedComplex(cells, boundaries, grades)
-    spec = PosetModules.FiltrationSpec(kind=:graded, axes=([0.0, 1.0],))
-    enc = PosetModules.encode(G, spec; degree=0)
+    G = TamerOp.GradedComplex(cells, boundaries, grades)
+    spec = TamerOp.FiltrationSpec(kind=:graded, axes=([0.0, 1.0],))
+    enc = TamerOp.encode(G, spec; degree=0)
     @test _enc_dims(enc) == [1, 1]
 
-    H = PosetModules.Workflow.fringe_presentation(DI.materialize_module(enc.M))
+    H = TamerOp.Workflow.fringe_presentation(DI.materialize_module(enc.M))
     Mp = IR.pmodule_from_fringe(H)
     @test Mp.dims == _enc_dims(enc)
 end
 
 @testset "Data pipeline: point cloud rips" begin
-    data = PosetModules.PointCloud([[0.0], [1.0]])
-    spec = PosetModules.FiltrationSpec(kind=:rips, max_dim=1, axes=([0.0, 1.0],))
-    enc = PosetModules.encode(data, spec; degree=0)
+    data = TamerOp.PointCloud([[0.0], [1.0]])
+    spec = TamerOp.FiltrationSpec(kind=:rips, max_dim=1, axes=([0.0, 1.0],))
+    enc = TamerOp.encode(data, spec; degree=0)
     @test _enc_dims(enc) == [2, 1]
     bc = Inv.slice_barcode(_enc_module(enc), [1, 2])
     @test bc[(1, 2)] == 1
@@ -2666,21 +3466,21 @@ end
 end
 
 @testset "Data pipeline: point cloud rips higher-dim" begin
-    data = PosetModules.PointCloud([[0.0], [1.0], [2.0]])
-    spec = PosetModules.FiltrationSpec(kind=:rips, max_dim=2, axes=([0.0, 1.0, 2.0],))
-    enc = PosetModules.encode(data, spec; degree=0)
+    data = TamerOp.PointCloud([[0.0], [1.0], [2.0]])
+    spec = TamerOp.FiltrationSpec(kind=:rips, max_dim=2, axes=([0.0, 1.0, 2.0],))
+    enc = TamerOp.encode(data, spec; degree=0)
     @test _enc_dims(enc) == [3, 1, 1]
 end
 
 @testset "Data pipeline: point cloud dense rips d2 oracle" begin
-    data = PosetModules.PointCloud([[0.0], [1.0], [3.0], [6.0]])
-    spec = PosetModules.FiltrationSpec(
+    data = TamerOp.PointCloud([[0.0], [1.0], [3.0], [6.0]])
+    spec = TamerOp.FiltrationSpec(
         kind=:rips,
         max_dim=2,
-        construction=PosetModules.ConstructionOptions(; sparsify=:none, output_stage=:graded_complex),
+        construction=TamerOp.ConstructionOptions(; sparsify=:none, output_stage=:graded_complex),
     )
-    G = PosetModules.encode(data, spec; stage=:graded_complex)
-    @test G isa PosetModules.GradedComplex
+    G = TamerOp.encode(data, spec; stage=:graded_complex)
+    @test G isa TamerOp.GradedComplex
     @test length(G.cells_by_dim) == 3
     @test length(G.cells_by_dim[1]) == 4
     @test length(G.cells_by_dim[2]) == 6
@@ -2720,15 +3520,15 @@ end
 end
 
 @testset "Data pipeline: low-dim point-cloud oracle kernels" begin
-    data = PosetModules.PointCloud([[0.0], [2.0], [5.0]])
+    data = TamerOp.PointCloud([[0.0], [2.0], [5.0]])
 
-    rips_spec = PosetModules.FiltrationSpec(
+    rips_spec = TamerOp.FiltrationSpec(
         kind=:rips,
         max_dim=1,
-        construction=PosetModules.ConstructionOptions(; sparsify=:none, output_stage=:graded_complex),
+        construction=TamerOp.ConstructionOptions(; sparsify=:none, output_stage=:graded_complex),
     )
-    G_rips = PosetModules.encode(data, rips_spec; stage=:graded_complex)
-    @test G_rips isa PosetModules.GradedComplex
+    G_rips = TamerOp.encode(data, rips_spec; stage=:graded_complex)
+    @test G_rips isa TamerOp.GradedComplex
     @test length(G_rips.cells_by_dim[1]) == 3
     @test length(G_rips.cells_by_dim[2]) == 3
     @test G_rips.grades[1:3] == [(0.0,), (0.0,), (0.0,)]
@@ -2739,98 +3539,132 @@ end
     @test Br[1, 2] == -1 && Br[3, 2] == 1
     @test Br[2, 3] == -1 && Br[3, 3] == 1
 
-    fr_spec = PosetModules.FiltrationSpec(
+    fr_spec = TamerOp.FiltrationSpec(
         kind=:function_rips,
         max_dim=1,
         vertex_values=[1.0, 4.0, 10.0],
         simplex_agg=:sum,
-        construction=PosetModules.ConstructionOptions(; sparsify=:none, output_stage=:graded_complex),
+        construction=TamerOp.ConstructionOptions(; sparsify=:none, output_stage=:graded_complex),
     )
-    G_fr = PosetModules.encode(data, fr_spec; stage=:graded_complex)
+    G_fr = TamerOp.encode(data, fr_spec; stage=:graded_complex)
     @test G_fr.grades[1:3] == [(0.0, 1.0), (0.0, 4.0), (0.0, 10.0)]
     @test G_fr.grades[4:6] == [(2.0, 5.0), (5.0, 11.0), (3.0, 14.0)]
 
-    rd_spec = PosetModules.FiltrationSpec(
+    rd_spec = TamerOp.FiltrationSpec(
         kind=:rips_density,
         max_dim=1,
         density_k=1,
-        construction=PosetModules.ConstructionOptions(; sparsify=:none, output_stage=:graded_complex),
+        construction=TamerOp.ConstructionOptions(; sparsify=:none, output_stage=:graded_complex),
     )
-    G_rd = PosetModules.encode(data, rd_spec; stage=:graded_complex)
+    G_rd = TamerOp.encode(data, rd_spec; stage=:graded_complex)
     @test G_rd.grades[1:3] == [(0.0, 2.0), (0.0, 2.0), (0.0, 3.0)]
     @test G_rd.grades[4:6] == [(2.0, 2.0), (5.0, 3.0), (3.0, 3.0)]
 
-    rh_spec = PosetModules.FiltrationSpec(
+    rc_spec = TamerOp.FiltrationSpec(
+        kind=:rips_codensity,
+        max_dim=1,
+        dtm_mass=0.5,
+        construction=TamerOp.ConstructionOptions(; sparsify=:none, output_stage=:graded_complex),
+    )
+    G_rc = TamerOp.encode(data, rc_spec; stage=:graded_complex)
+    rc_expected_vertices = [(0.0, sqrt(2.0)), (0.0, sqrt(2.0)), (0.0, 3 / sqrt(2.0))]
+    rc_expected_edges = [(2.0, sqrt(2.0)), (5.0, 3 / sqrt(2.0)), (3.0, 3 / sqrt(2.0))]
+    @test all(
+        all(isapprox(gi, ei; atol=1e-12, rtol=0.0) for (gi, ei) in zip(g, e))
+        for (g, e) in zip(G_rc.grades[1:3], rc_expected_vertices)
+    )
+    @test all(
+        all(isapprox(gi, ei; atol=1e-12, rtol=0.0) for (gi, ei) in zip(g, e))
+        for (g, e) in zip(G_rc.grades[4:6], rc_expected_edges)
+    )
+
+    rh_spec = TamerOp.FiltrationSpec(
         kind=:rhomboid,
         max_dim=1,
         vertex_values=[1.0, 4.0, 10.0],
-        construction=PosetModules.ConstructionOptions(; sparsify=:none, output_stage=:graded_complex),
+        construction=TamerOp.ConstructionOptions(; sparsify=:none, output_stage=:graded_complex),
     )
-    G_rh = PosetModules.encode(data, rh_spec; stage=:graded_complex)
+    G_rh = TamerOp.encode(data, rh_spec; stage=:graded_complex)
     @test G_rh.grades[1:3] == [(1.0, 1.0), (4.0, 4.0), (10.0, 10.0)]
     @test G_rh.grades[4:6] == [(1.0, 4.0), (1.0, 10.0), (4.0, 10.0)]
 end
 
 @testset "Data pipeline: typed filtration dispatch" begin
-    data = PosetModules.PointCloud([[0.0], [1.0]])
-    fspec = PosetModules.FiltrationSpec(kind=:rips, max_dim=1, axes=([0.0, 1.0],))
+    data = TamerOp.PointCloud([[0.0], [1.0]])
+    fspec = TamerOp.FiltrationSpec(kind=:rips, max_dim=1, axes=([0.0, 1.0],))
     ftyped = DI.RipsFiltration(max_dim=1)
-    enc_spec = PosetModules.encode(data, fspec; degree=0)
-    enc_typed = PosetModules.encode(data, ftyped; degree=0)
+    enc_spec = TamerOp.encode(data, fspec; degree=0)
+    enc_typed = TamerOp.encode(data, ftyped; degree=0)
     @test _enc_dims(enc_typed) == _enc_dims(enc_spec)
     @test EC.axes_from_encoding(enc_typed.pi) == EC.axes_from_encoding(enc_spec.pi)
 
-    g = PosetModules.GraphData(3, [(1, 2), (2, 3)])
+    g = TamerOp.GraphData(3, [(1, 2), (2, 3)])
     gfilt = DI.GraphLowerStarFiltration(vertex_values=[0.0, 1.0, 2.0], simplex_agg=:max)
-    gspec = PosetModules.FiltrationSpec(kind=:graph_lower_star, vertex_values=[0.0, 1.0, 2.0], simplex_agg=:max)
-    enc_g = PosetModules.encode(g, gfilt; degree=0)
-    enc_gspec = PosetModules.encode(g, gspec; degree=0)
+    gspec = TamerOp.FiltrationSpec(kind=:graph_lower_star, vertex_values=[0.0, 1.0, 2.0], simplex_agg=:max)
+    enc_g = TamerOp.encode(g, gfilt; degree=0)
+    enc_gspec = TamerOp.encode(g, gspec; degree=0)
     @test _enc_dims(enc_g) == _enc_dims(enc_gspec)
 
-    ffilt = DI.to_filtration(PosetModules.FiltrationSpec(kind=:rips_density, max_dim=1, density_k=2))
-    @test ffilt isa DI.RipsDensityFiltration
+    codensity_data = TamerOp.PointCloud([[0.0], [2.0], [5.0]])
+    codensity_spec = TamerOp.FiltrationSpec(kind=:rips_codensity, max_dim=1, dtm_mass=0.5)
+    codensity_ref = TamerOp.FiltrationSpec(
+        kind=:function_rips,
+        max_dim=1,
+        vertex_values=[sqrt(2.0), sqrt(2.0), 3 / sqrt(2.0)],
+        simplex_agg=:max,
+    )
+    G_codensity = TamerOp.encode(codensity_data, codensity_spec; stage=:graded_complex)
+    G_codensity_ref = TamerOp.encode(codensity_data, codensity_ref; stage=:graded_complex)
+    @test G_codensity.grades == G_codensity_ref.grades
 
-    afilt = DI.to_filtration(PosetModules.FiltrationSpec(kind=:alpha, max_dim=2))
+    ffilt = DI.to_filtration(TamerOp.FiltrationSpec(kind=:rips_density, max_dim=1, density_k=2))
+    @test ffilt isa DI.RipsDensityFiltration
+    cdfilt = DI.to_filtration(TamerOp.FiltrationSpec(kind=:rips_codensity, max_dim=1, dtm_mass=0.25))
+    @test cdfilt isa DI.RipsCodensityFiltration
+    lsfilt = DI.to_filtration(TamerOp.FiltrationSpec(kind=:rips_lowerstar, max_dim=1, coord=1))
+    @test lsfilt isa DI.RipsLowerStarFiltration
+
+    afilt = DI.to_filtration(TamerOp.FiltrationSpec(kind=:alpha, max_dim=2))
     @test afilt isa DI.AlphaFiltration
-    cdfilt = DI.to_filtration(PosetModules.FiltrationSpec(kind=:core_delaunay, max_dim=2))
-    @test cdfilt isa DI.CoreDelaunayFiltration
-    drfilt = DI.to_filtration(PosetModules.FiltrationSpec(kind=:degree_rips, max_dim=1))
+    corefilt = DI.to_filtration(TamerOp.FiltrationSpec(kind=:core_delaunay, max_dim=2))
+    @test corefilt isa DI.CoreDelaunayFiltration
+    drfilt = DI.to_filtration(TamerOp.FiltrationSpec(kind=:degree_rips, max_dim=1))
     @test drfilt isa DI.DegreeRipsFiltration
-    cubfilt = DI.to_filtration(PosetModules.FiltrationSpec(kind=:cubical))
+    cubfilt = DI.to_filtration(TamerOp.FiltrationSpec(kind=:cubical))
     @test cubfilt isa DI.CubicalFiltration
 end
 
 @testset "Data pipeline: Delaunay/function-Delaunay filtrations" begin
-    pts = PosetModules.PointCloud([[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]])
-    dspec = PosetModules.FiltrationSpec(kind=:delaunay_lower_star, vertex_values=[0.0, 1.0, 2.0], max_dim=2)
+    pts = TamerOp.PointCloud([[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]])
+    dspec = TamerOp.FiltrationSpec(kind=:delaunay_lower_star, vertex_values=[0.0, 1.0, 2.0], max_dim=2)
     dtyped = DI.to_filtration(dspec)
     @test dtyped isa DI.DelaunayLowerStarFiltration
-    enc_d = PosetModules.encode(pts, dspec; degree=0)
+    enc_d = TamerOp.encode(pts, dspec; degree=0)
     ax_d = EC.axes_from_encoding(enc_d.pi)
     @test length(ax_d) == 1
     @test ax_d[1] == [0.0, 1.0, 2.0]
 
-    fspec = PosetModules.FiltrationSpec(kind=:function_delaunay, vertex_values=[0.0, 1.0, 2.0], simplex_agg=:max, max_dim=2)
+    fspec = TamerOp.FiltrationSpec(kind=:function_delaunay, vertex_values=[0.0, 1.0, 2.0], simplex_agg=:max, max_dim=2)
     ftyped = DI.to_filtration(fspec)
     @test ftyped isa DI.FunctionDelaunayFiltration
-    enc_f = PosetModules.encode(pts, fspec; degree=0)
+    enc_f = TamerOp.encode(pts, fspec; degree=0)
     ax_f = EC.axes_from_encoding(enc_f.pi)
     @test length(ax_f) == 2
     @test 0.0 in ax_f[1]
     @test 0.0 in ax_f[2] && 2.0 in ax_f[2]
 
-    aspec = PosetModules.FiltrationSpec(kind=:alpha, max_dim=2)
+    aspec = TamerOp.FiltrationSpec(kind=:alpha, max_dim=2)
     atyped = DI.to_filtration(aspec)
     @test atyped isa DI.AlphaFiltration
-    enc_a = PosetModules.encode(pts, aspec; degree=0)
+    enc_a = TamerOp.encode(pts, aspec; degree=0)
     ax_a = EC.axes_from_encoding(enc_a.pi)
     @test length(ax_a) == 1
     @test 0.0 in ax_a[1]
 
-    cdspec = PosetModules.FiltrationSpec(kind=:core_delaunay, max_dim=2)
+    cdspec = TamerOp.FiltrationSpec(kind=:core_delaunay, max_dim=2)
     cdtyped = DI.to_filtration(cdspec)
     @test cdtyped isa DI.CoreDelaunayFiltration
-    enc_cd = PosetModules.encode(pts, cdspec; degree=0)
+    enc_cd = TamerOp.encode(pts, cdspec; degree=0)
     ax_cd = EC.axes_from_encoding(enc_cd.pi)
     @test length(ax_cd) == 2
     @test 0.0 in ax_cd[1]
@@ -2838,23 +3672,23 @@ end
 end
 
 @testset "Data pipeline: Delaunay high-dimensional fallback policy" begin
-    pts3d = PosetModules.PointCloud([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]])
+    pts3d = TamerOp.PointCloud([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]])
 
-    spec_ls = PosetModules.FiltrationSpec(kind=:delaunay_lower_star,
+    spec_ls = TamerOp.FiltrationSpec(kind=:delaunay_lower_star,
                                           vertex_values=[0.0, 1.0, 2.0, 3.0],
                                           max_dim=2,
                                           highdim_policy=:rips)
-    enc_ls = PosetModules.encode(pts3d, spec_ls; degree=0)
+    enc_ls = TamerOp.encode(pts3d, spec_ls; degree=0)
     ax_ls = EC.axes_from_encoding(enc_ls.pi)
     @test length(ax_ls) == 1
     @test 0.0 in ax_ls[1] && 3.0 in ax_ls[1]
 
-    spec_fn = PosetModules.FiltrationSpec(kind=:function_delaunay,
+    spec_fn = TamerOp.FiltrationSpec(kind=:function_delaunay,
                                           vertex_values=[0.0, 1.0, 2.0, 3.0],
                                           max_dim=2,
                                           simplex_agg=:max,
                                           highdim_policy=:rips)
-    enc_fn = PosetModules.encode(pts3d, spec_fn; degree=0)
+    enc_fn = TamerOp.encode(pts3d, spec_fn; degree=0)
     ax_fn = EC.axes_from_encoding(enc_fn.pi)
     @test length(ax_fn) == 2
     @test 0.0 in ax_fn[1]
@@ -2864,25 +3698,25 @@ end
     @test typed isa DI.FunctionDelaunayFiltration
     @test getfield(typed, :params).highdim_policy == :rips
 
-    spec_err = PosetModules.FiltrationSpec(kind=:delaunay_lower_star,
+    spec_err = TamerOp.FiltrationSpec(kind=:delaunay_lower_star,
                                            vertex_values=[0.0, 1.0, 2.0, 3.0],
                                            max_dim=2,
                                            highdim_policy=:error)
-    @test_throws ErrorException PosetModules.encode(pts3d, spec_err; degree=0)
+    @test_throws ErrorException TamerOp.encode(pts3d, spec_err; degree=0)
 
-    spec_alpha = PosetModules.FiltrationSpec(kind=:alpha, max_dim=2, highdim_policy=:rips)
-    enc_alpha = PosetModules.encode(pts3d, spec_alpha; degree=0)
+    spec_alpha = TamerOp.FiltrationSpec(kind=:alpha, max_dim=2, highdim_policy=:rips)
+    enc_alpha = TamerOp.encode(pts3d, spec_alpha; degree=0)
     @test length(EC.axes_from_encoding(enc_alpha.pi)) == 1
 
-    spec_alpha_err = PosetModules.FiltrationSpec(kind=:alpha, max_dim=2, highdim_policy=:error)
-    @test_throws ErrorException PosetModules.encode(pts3d, spec_alpha_err; degree=0)
+    spec_alpha_err = TamerOp.FiltrationSpec(kind=:alpha, max_dim=2, highdim_policy=:error)
+    @test_throws ErrorException TamerOp.encode(pts3d, spec_alpha_err; degree=0)
 
-    spec_core_del = PosetModules.FiltrationSpec(kind=:core_delaunay, max_dim=2, highdim_policy=:rips)
-    enc_core_del = PosetModules.encode(pts3d, spec_core_del; degree=0)
+    spec_core_del = TamerOp.FiltrationSpec(kind=:core_delaunay, max_dim=2, highdim_policy=:rips)
+    enc_core_del = TamerOp.encode(pts3d, spec_core_del; degree=0)
     @test length(EC.axes_from_encoding(enc_core_del.pi)) == 2
 
-    spec_core_del_err = PosetModules.FiltrationSpec(kind=:core_delaunay, max_dim=2, highdim_policy=:error)
-    @test_throws ErrorException PosetModules.encode(pts3d, spec_core_del_err; degree=0)
+    spec_core_del_err = TamerOp.FiltrationSpec(kind=:core_delaunay, max_dim=2, highdim_policy=:error)
+    @test_throws ErrorException TamerOp.encode(pts3d, spec_core_del_err; degree=0)
 end
 
 @testset "Data pipeline: core/rhomboid filtrations" begin
@@ -2964,37 +3798,37 @@ end
         return DI._materialize_point_cloud_dim01(n, include_edge_dim, edges, grades, spec; return_simplex_tree=true)
     end
 
-    g = PosetModules.GraphData(4, [(1, 2), (2, 3), (1, 3), (3, 4)])
-    cspec = PosetModules.FiltrationSpec(kind=:core)
+    g = TamerOp.GraphData(4, [(1, 2), (2, 3), (1, 3), (3, 4)])
+    cspec = TamerOp.FiltrationSpec(kind=:core)
     ctyped = DI.to_filtration(cspec)
     @test ctyped isa DI.CoreFiltration
-    enc_c = PosetModules.encode(g, cspec; degree=0)
+    enc_c = TamerOp.encode(g, cspec; degree=0)
     ax_c = EC.axes_from_encoding(enc_c.pi)
     @test length(ax_c) == 2
     @test 1.0 in ax_c[2] && 2.0 in ax_c[2]
 
-    p = PosetModules.PointCloud([[0.0], [1.0], [2.0], [3.0]])
-    enc_cp = PosetModules.encode(
+    p = TamerOp.PointCloud([[0.0], [1.0], [2.0], [3.0]])
+    enc_cp = TamerOp.encode(
         p,
-        PosetModules.FiltrationSpec(kind=:core, knn=1, vertex_values=[0.0, 0.0, 0.0, 0.0]);
+        TamerOp.FiltrationSpec(kind=:core, knn=1, vertex_values=[0.0, 0.0, 0.0, 0.0]);
         degree=0,
     )
     @test length(EC.axes_from_encoding(enc_cp.pi)) == 2
 
-    rspec = PosetModules.FiltrationSpec(kind=:rhomboid, max_dim=1, vertex_values=[0.0, 2.0, 4.0])
+    rspec = TamerOp.FiltrationSpec(kind=:rhomboid, max_dim=1, vertex_values=[0.0, 2.0, 4.0])
     rtyped = DI.to_filtration(rspec)
     @test rtyped isa DI.RhomboidFiltration
-    g2 = PosetModules.GraphData(3, [(1, 2), (2, 3)])
-    enc_r = PosetModules.encode(g2, rspec; degree=0)
+    g2 = TamerOp.GraphData(3, [(1, 2), (2, 3)])
+    enc_r = TamerOp.encode(g2, rspec; degree=0)
     ax_r = EC.axes_from_encoding(enc_r.pi)
     @test length(ax_r) == 2
     @test 0.0 in ax_r[1] && 2.0 in ax_r[1]
     @test 0.0 in ax_r[2] && 4.0 in ax_r[2]
 
     # Low-dim rhomboid now routes through edges-only graph builders.
-    p2 = PosetModules.PointCloud([[0.0], [0.4], [0.9], [1.5], [2.0], [2.6], [3.3]])
+    p2 = TamerOp.PointCloud([[0.0], [0.4], [0.9], [1.5], [2.0], [2.6], [3.3]])
     vals2 = [0.2, 0.8, 0.1, 0.6, 0.9, 0.3, 0.7]
-    spec_rh_rad = PosetModules.FiltrationSpec(
+    spec_rh_rad = TamerOp.FiltrationSpec(
         kind=:rhomboid,
         max_dim=1,
         radius=0.95,
@@ -3002,10 +3836,10 @@ end
         construction=OPT.ConstructionOptions(; output_stage=:simplex_tree),
     )
     st_old_rad = first(_old_point_rhomboid_lowdim_emulated(p2, spec_rh_rad))
-    st_new_rad = PosetModules.encode(p2, spec_rh_rad; degree=0, stage=:simplex_tree, cache=:auto)
+    st_new_rad = TamerOp.encode(p2, spec_rh_rad; degree=0, stage=:simplex_tree, cache=:auto)
     @test _canon_simplex_tree(st_new_rad) == _canon_simplex_tree(st_old_rad)
 
-    spec_rh_knn = PosetModules.FiltrationSpec(
+    spec_rh_knn = TamerOp.FiltrationSpec(
         kind=:rhomboid,
         max_dim=1,
         knn=3,
@@ -3014,42 +3848,42 @@ end
         construction=OPT.ConstructionOptions(; sparsify=:knn, output_stage=:simplex_tree),
     )
     st_old_knn = first(_old_point_rhomboid_lowdim_emulated(p2, spec_rh_knn))
-    st_new_knn = PosetModules.encode(p2, spec_rh_knn; degree=0, stage=:simplex_tree, cache=:auto)
+    st_new_knn = TamerOp.encode(p2, spec_rh_knn; degree=0, stage=:simplex_tree, cache=:auto)
     @test _canon_simplex_tree(st_new_knn) == _canon_simplex_tree(st_old_knn)
 
     # max_dim>1 now streams simplex generation/grading instead of _combinations materialization.
-    spec_rh_d2 = PosetModules.FiltrationSpec(
+    spec_rh_d2 = TamerOp.FiltrationSpec(
         kind=:rhomboid,
         max_dim=2,
         vertex_values=vals2,
         construction=OPT.ConstructionOptions(; output_stage=:simplex_tree),
     )
     st_old_d2 = first(_old_point_rhomboid_emulated(p2, spec_rh_d2))
-    st_new_d2 = PosetModules.encode(p2, spec_rh_d2; degree=0, stage=:simplex_tree, cache=:auto)
+    st_new_d2 = TamerOp.encode(p2, spec_rh_d2; degree=0, stage=:simplex_tree, cache=:auto)
     @test _canon_simplex_tree(st_new_d2) == _canon_simplex_tree(st_old_d2)
 end
 
 @testset "Data pipeline: core packed dim01 + edge-only builder parity" begin
-    pts = PosetModules.PointCloud([[0.0], [0.3], [0.8], [1.4], [2.1], [2.9], [3.2], [4.0]])
+    pts = TamerOp.PointCloud([[0.0], [0.3], [0.8], [1.4], [2.1], [2.9], [3.2], [4.0]])
 
     # Core now routes through edge-only builders; verify edge parity vs full builders.
-    spec_knn = PosetModules.FiltrationSpec(kind=:core, knn=3, nn_backend=:bruteforce)
+    spec_knn = TamerOp.FiltrationSpec(kind=:core, knn=3, nn_backend=:bruteforce)
     e_core_knn = DI._core_edges_from_point_cloud(pts.points, spec_knn)
     e_full_knn, _, _ = DI._point_cloud_knn_graph(pts.points, 3; backend=:bruteforce, approx_candidates=0)
     @test sort(e_core_knn) == sort(e_full_knn)
 
-    spec_rad = PosetModules.FiltrationSpec(kind=:core, radius=1.25, nn_backend=:bruteforce)
+    spec_rad = TamerOp.FiltrationSpec(kind=:core, radius=1.25, nn_backend=:bruteforce)
     e_core_rad = DI._core_edges_from_point_cloud(pts.points, spec_rad)
     e_full_rad, _ = DI._point_cloud_radius_graph(pts.points, 1.25; backend=:bruteforce, approx_candidates=0)
     @test sort(e_core_rad) == sort(e_full_rad)
 
     if DI._have_pointcloud_nn_backend()
-        spec_knn_nn = PosetModules.FiltrationSpec(kind=:core, knn=3, nn_backend=:nearestneighbors)
+        spec_knn_nn = TamerOp.FiltrationSpec(kind=:core, knn=3, nn_backend=:nearestneighbors)
         e_core_knn_nn = DI._core_edges_from_point_cloud(pts.points, spec_knn_nn)
         e_full_knn_nn, _, _ = DI._point_cloud_knn_graph(pts.points, 3; backend=:nearestneighbors, approx_candidates=0)
         @test sort(e_core_knn_nn) == sort(e_full_knn_nn)
 
-        spec_rad_nn = PosetModules.FiltrationSpec(kind=:core, radius=1.25, nn_backend=:nearestneighbors)
+        spec_rad_nn = TamerOp.FiltrationSpec(kind=:core, radius=1.25, nn_backend=:nearestneighbors)
         e_core_rad_nn = DI._core_edges_from_point_cloud(pts.points, spec_rad_nn)
         e_full_rad_nn, _ = DI._point_cloud_radius_graph(pts.points, 1.25; backend=:nearestneighbors, approx_candidates=0)
         @test sort(e_core_rad_nn) == sort(e_full_rad_nn)
@@ -3057,14 +3891,14 @@ end
 
     # Point-core path now uses packed dim01 materialization.
     pvals = [0.0, 0.2, 0.1, 0.9, 0.4, 0.8, 0.6, 0.7]
-    spec_point = PosetModules.FiltrationSpec(
+    spec_point = TamerOp.FiltrationSpec(
         kind=:core,
         knn=3,
         nn_backend=:bruteforce,
         vertex_values=pvals,
         construction=OPT.ConstructionOptions(; output_stage=:graded_complex),
     )
-    Gp = PosetModules.encode(pts, spec_point; degree=0, stage=:graded_complex, cache=:auto)
+    Gp = TamerOp.encode(pts, spec_point; degree=0, stage=:graded_complex, cache=:auto)
     @test Gp isa DT.GradedComplex
     @test length(Gp.cells_by_dim) == 2
     @test length(Gp.cells_by_dim[1]) == length(pts.points)
@@ -3075,14 +3909,14 @@ end
     # Graph-core path now also uses packed dim01 materialization.
     n = 9
     edges = [(1, 2), (1, 3), (2, 3), (3, 4), (4, 5), (5, 6), (6, 7), (7, 8), (8, 9), (7, 9)]
-    g = PosetModules.GraphData(n, edges)
+    g = TamerOp.GraphData(n, edges)
     gvals = [Float64(i) / n for i in 1:n]
-    spec_graph = PosetModules.FiltrationSpec(
+    spec_graph = TamerOp.FiltrationSpec(
         kind=:core,
         vertex_values=gvals,
         construction=OPT.ConstructionOptions(; output_stage=:graded_complex),
     )
-    Gg = PosetModules.encode(g, spec_graph; degree=0, stage=:graded_complex, cache=:auto)
+    Gg = TamerOp.encode(g, spec_graph; degree=0, stage=:graded_complex, cache=:auto)
     @test Gg isa DT.GradedComplex
     @test length(Gg.cells_by_dim) == 2
     @test length(Gg.cells_by_dim[1]) == n
@@ -3141,38 +3975,38 @@ end
 end
 
 @testset "Data pipeline: degree_rips and cubical filtrations" begin
-    p = PosetModules.PointCloud([[0.0], [2.0], [5.0]])
-    dr_spec = PosetModules.FiltrationSpec(
+    p = TamerOp.PointCloud([[0.0], [2.0], [5.0]])
+    dr_spec = TamerOp.FiltrationSpec(
         kind=:degree_rips,
         max_dim=1,
-        construction=PosetModules.ConstructionOptions(; sparsify=:none, output_stage=:graded_complex),
+        construction=TamerOp.ConstructionOptions(; sparsify=:none, output_stage=:graded_complex),
     )
-    G_dr = PosetModules.encode(p, dr_spec; stage=:graded_complex)
+    G_dr = TamerOp.encode(p, dr_spec; stage=:graded_complex)
     @test G_dr.grades[1:3] == [(0.0, 2.0), (0.0, 2.0), (0.0, 2.0)]
     @test G_dr.grades[4:6] == [(2.0, 2.0), (5.0, 2.0), (3.0, 2.0)]
 
-    img = PosetModules.ImageNd([0.0 1.0; 2.0 3.0])
-    spec_cub = PosetModules.FiltrationSpec(kind=:cubical)
-    spec_ls = PosetModules.FiltrationSpec(kind=:lower_star)
-    G_cub = PosetModules.encode(img, spec_cub; stage=:graded_complex)
-    G_ls = PosetModules.encode(img, spec_ls; stage=:graded_complex)
+    img = TamerOp.ImageNd([0.0 1.0; 2.0 3.0])
+    spec_cub = TamerOp.FiltrationSpec(kind=:cubical)
+    spec_ls = TamerOp.FiltrationSpec(kind=:lower_star)
+    G_cub = TamerOp.encode(img, spec_cub; stage=:graded_complex)
+    G_ls = TamerOp.encode(img, spec_ls; stage=:graded_complex)
     @test G_cub.cells_by_dim == G_ls.cells_by_dim
     @test G_cub.boundaries == G_ls.boundaries
     @test G_cub.grades == G_ls.grades
 
     # 2D cubical fast path must be exact-parity with the generic cubical kernel.
-    img2 = PosetModules.ImageNd([0.1 0.9 1.2 0.7; 0.4 1.3 0.2 1.1; 0.8 0.6 1.5 0.3])
-    spec_cub2 = PosetModules.FiltrationSpec(kind=:cubical)
-    spec_bi2 = PosetModules.FiltrationSpec(kind=:image_distance_bifiltration, mask=img2.data .> 0.75)
+    img2 = TamerOp.ImageNd([0.1 0.9 1.2 0.7; 0.4 1.3 0.2 1.1; 0.8 0.6 1.5 0.3])
+    spec_cub2 = TamerOp.FiltrationSpec(kind=:cubical)
+    spec_bi2 = TamerOp.FiltrationSpec(kind=:image_distance_bifiltration, mask=img2.data .> 0.75)
     old_fast = DI._CUBICAL_2D_FASTPATH[]
     try
         DI._CUBICAL_2D_FASTPATH[] = false
-        G_cub_ref = PosetModules.encode(img2, spec_cub2; stage=:graded_complex)
-        G_bi_ref = PosetModules.encode(img2, spec_bi2; stage=:graded_complex)
+        G_cub_ref = TamerOp.encode(img2, spec_cub2; stage=:graded_complex)
+        G_bi_ref = TamerOp.encode(img2, spec_bi2; stage=:graded_complex)
 
         DI._CUBICAL_2D_FASTPATH[] = true
-        G_cub_fast = PosetModules.encode(img2, spec_cub2; stage=:graded_complex)
-        G_bi_fast = PosetModules.encode(img2, spec_bi2; stage=:graded_complex)
+        G_cub_fast = TamerOp.encode(img2, spec_cub2; stage=:graded_complex)
+        G_bi_fast = TamerOp.encode(img2, spec_bi2; stage=:graded_complex)
 
         @test G_cub_fast.cells_by_dim == G_cub_ref.cells_by_dim
         @test G_cub_fast.boundaries == G_cub_ref.boundaries
@@ -3248,15 +4082,15 @@ end
     DI.filtration_kind(::Type{<:ToyPointCloudFiltration}) = :toy_point_cloud
     DI.filtration_arity(::ToyPointCloudFiltration, _data=nothing) = 1
 
-    function _toy_builder(data::PosetModules.PointCloud,
+    function _toy_builder(data::TamerOp.PointCloud,
                           filtration::ToyPointCloudFiltration;
                           cache::Union{Nothing,CM.EncodingCache}=nothing)
         construction = get(filtration.params, :construction, OPT.ConstructionOptions())
         return DI._graded_complex_from_data(data, DI.RipsFiltration(max_dim=1, construction=construction); cache=cache)
     end
-    DI.build_graded_complex(data::PosetModules.PointCloud,
-                            filtration::ToyPointCloudFiltration;
-                            cache::Union{Nothing,CM.EncodingCache}=nothing) =
+    DI._build_graded_complex_tuple(data::TamerOp.PointCloud,
+                                   filtration::ToyPointCloudFiltration;
+                                   cache::Union{Nothing,CM.EncodingCache}=nothing) =
         _toy_builder(data, filtration; cache=cache)
 
     DI.register_filtration_family!(
@@ -3266,17 +4100,17 @@ end
         arity=1,
     )
 
-    data = PosetModules.PointCloud([[0.0], [1.0]])
-    enc = PosetModules.encode(data, ToyPointCloudFiltration(); degree=0)
+    data = TamerOp.PointCloud([[0.0], [1.0]])
+    enc = TamerOp.encode(data, ToyPointCloudFiltration(); degree=0)
     @test _enc_dims(enc) == [2, 1]
-    enc2 = PosetModules.encode(data, PosetModules.FiltrationSpec(kind=:toy_point_cloud); degree=0)
+    enc2 = TamerOp.encode(data, TamerOp.FiltrationSpec(kind=:toy_point_cloud); degree=0)
     @test _enc_dims(enc2) == [2, 1]
 end
 
 @testset "Data pipeline: ingestion planning protocol" begin
-    data = PosetModules.PointCloud([[0.0], [1.0], [2.0]])
+    data = TamerOp.PointCloud([[0.0], [1.0], [2.0]])
     filt = DI.RipsFiltration(max_dim=1, knn=2)
-    spec = PosetModules.FiltrationSpec(kind=:rips, max_dim=1, knn=2)
+    spec = TamerOp.FiltrationSpec(kind=:rips, max_dim=1, knn=2)
 
     construction = OPT.ConstructionOptions(;
         sparsify=:knn,
@@ -3313,9 +4147,9 @@ end
                                             cache=nothing,
                                             preflight=true)
     @test !isnothing(plan_with_preflight.preflight)
-    @test plan_with_preflight.preflight.n_cells_est == big(6)
+    @test DI.estimated_cells(plan_with_preflight.preflight) == big(6)
 
-    G_direct = PosetModules.encode(data, filt;
+    G_direct = TamerOp.encode(data, filt;
                                    degree=0,
                                    construction=construction,
                                    pipeline=pipeline,
@@ -3324,17 +4158,17 @@ end
     @test G_plan.cells_by_dim == G_direct.cells_by_dim
     @test G_plan.grades == G_direct.grades
 
-    enc_direct = PosetModules.encode(data, filt;
+    enc_direct = TamerOp.encode(data, filt;
                                      degree=0,
                                      construction=construction,
                                      pipeline=pipeline)
-    enc_plan = PosetModules.encode(plan_a; degree=0)
+    enc_plan = TamerOp.encode(plan_a; degree=0)
     @test isnothing(enc_direct.H)
     @test isnothing(enc_plan.H)
     @test _enc_dims(enc_plan) == _enc_dims(enc_direct)
     @test EC.axes_from_encoding(enc_plan.pi) == EC.axes_from_encoding(enc_direct.pi)
 
-    H_direct = PosetModules.encode(data, filt;
+    H_direct = TamerOp.encode(data, filt;
                                    degree=0,
                                    construction=construction,
                                    pipeline=pipeline,
@@ -3345,7 +4179,7 @@ end
                                   construction=construction,
                                   pipeline=pipeline,
                                   cache=:auto)
-    enc_auto = PosetModules.encode(plan_auto; degree=0)
+    enc_auto = TamerOp.encode(plan_auto; degree=0)
     @test _enc_dims(enc_auto) == _enc_dims(enc_direct)
 
     old_plan_norm = DI._INGESTION_PLAN_NORM_CACHE[]
@@ -3380,7 +4214,7 @@ end
         DI._INGESTION_PLAN_NORM_CACHE[] = old_plan_norm
     end
 
-    @test_throws ErrorException PosetModules.encode(data, filt; stage=:not_a_stage)
+    @test_throws ErrorException TamerOp.encode(data, filt; stage=:not_a_stage)
 
     tiny_budget = OPT.ConstructionOptions(;
         sparsify=:none,
@@ -3394,41 +4228,223 @@ end
     @test_throws TypeError DI.plan_ingestion(data, spec; preflight=:on)
 end
 
+@testset "Data pipeline: ingestion UX surface" begin
+    data = TamerOp.PointCloud([[0.0], [1.0], [2.0]])
+    field = CM.QQField()
+    construction = OPT.ConstructionOptions(; sparsify=:knn, output_stage=:graded_complex)
+    filt = DI.RipsFiltration(max_dim=1, knn=2, construction=construction)
+    spec = TamerOp.FiltrationSpec(kind=:rips, max_dim=1, construction=construction)
+
+    filt_desc = describe(filt)
+    @test filt_desc.kind == :rips
+    @test filt_desc.arity == 1
+    @test filt_desc.construction_mode.output_stage == :graded_complex
+    @test DI.filtration_summary(filt) == filt_desc
+    @test DI.filtration_kind(filt) == :rips
+    @test DI.filtration_parameters(filt).max_dim == 1
+    @test DI.construction_mode(filt).output_stage == :graded_complex
+    @test occursin("RipsFiltration(", sprint(show, filt))
+    @test occursin("construction_mode", sprint(show, MIME"text/plain"(), filt))
+
+    spec_desc = describe(spec)
+    @test spec_desc.kind == :filtration_spec
+    @test spec_desc.filtration_kind == :rips
+    @test DI.filtration_kind(spec) == :rips
+    @test DI.filtration_arity(spec) == 1
+    @test DI.filtration_parameters(spec).max_dim == 1
+    @test DI.construction_mode(spec).output_stage == :graded_complex
+    @test DI.filtration_spec_summary(spec) == spec_desc
+    @test DI.filtration_family_summary(:rips).filtration_kind == :rips
+    @test DI.filtration_family_summary(spec).provided_parameters == (:max_dim, :construction)
+    @test DI.registered_filtration_families() isa Vector{Symbol}
+
+    est = DI.estimate_ingestion(data, filt)
+    @test est isa DI.IngestionEstimate
+    @test describe(est).kind == :ingestion_estimate
+    @test DI.ingestion_estimate_summary(est).estimated_cells == big(6)
+    @test DI.estimated_cells(est) == big(6)
+    @test DI.cell_counts_by_dim(est) == BigInt[3, 3]
+    @test occursin("IngestionEstimate(", sprint(show, est))
+    @test occursin("estimated_cells", sprint(show, MIME"text/plain"(), est))
+
+    build = DI.build_graded_complex(data, filt)
+    @test build isa DI.GradedComplexBuildResult
+    @test describe(build).kind == :graded_complex_build_result
+    @test DI.graded_complex_build_summary(build).kind == :graded_complex_build_result
+    @test DI.graded_complex(build) isa DT.GradedComplex
+    @test length(DI.grade_axes(build)) == 1
+    @test DI.grade_orientation(build) == (1,)
+    @test occursin("GradedComplexBuildResult(", sprint(show, build))
+
+    plan = DI.plan_ingestion(data, filt; field=field, cache=nothing, preflight=true)
+    @test plan isa DI.IngestionPlan
+    @test describe(plan).kind == :ingestion_plan
+    @test DI.ingestion_plan_summary(plan).planned_stage == :graded_complex
+    @test DI.source_data(plan) === data
+    @test DI.plan_filtration(plan) == filt
+    @test DI.plan_spec(plan) isa OPT.FiltrationSpec
+    @test DI.plan_construction(plan) == construction
+    @test DI.planned_stage(plan) == :graded_complex
+    @test DI.plan_field(plan) === field
+    @test DI.has_preflight(plan)
+    @test DI.preflight_estimate(plan) isa DI.IngestionEstimate
+    @test DI.route_hint(plan) == :simplex_tree_first
+    @test DI.multicritical_mode(plan) == :union
+    @test DI.onecritical_selector(plan) == :lexmin
+    @test DI.enforce_boundary(plan)
+    @test occursin("IngestionPlan(", sprint(show, plan))
+    @test occursin("planned_stage", sprint(show, MIME"text/plain"(), plan))
+
+    report_f = DI.check_filtration(filt; throw=false)
+    report_spec = DI.check_filtration_spec(spec; throw=false)
+    report_pair = DI.check_data_filtration(data, filt; throw=false)
+    report_est = DI.check_ingestion_estimate(est; throw=false)
+    report_plan = DI.check_ingestion_plan(plan; throw=false)
+    report_build = DI.check_graded_complex_build_result(build; throw=false)
+    report_stage = DI.check_ingestion_stage(:graded_complex; throw=false)
+    report_construction = DI.check_construction_options(data, construction; throw=false)
+    report_preflight = DI.check_preflight_mode(true; throw=false)
+    @test report_f.valid
+    @test report_spec.valid
+    @test report_pair.valid
+    @test report_est.valid
+    @test report_plan.valid
+    @test report_build.valid
+    @test report_stage.valid
+    @test report_construction.valid
+    @test report_preflight.valid
+    @test occursin("IngestionValidationSummary(", sprint(show, DI.ingestion_validation_summary(report_plan)))
+
+    bad_filt = BadUXFiltration()
+    @test !DI.check_filtration(bad_filt; throw=false).valid
+    @test_throws ArgumentError DI.check_filtration(bad_filt; throw=true)
+
+    bad_spec = TamerOp.FiltrationSpec(kind=:__no_such_filtration__)
+    @test !DI.check_filtration_spec(bad_spec; throw=false).valid
+    @test_throws ArgumentError DI.check_filtration_spec(bad_spec; throw=true)
+
+    bad_pair = DI.check_data_filtration(data, DI.WingVeinBifiltration(); throw=false)
+    @test !bad_pair.valid
+    @test_throws ArgumentError DI.check_data_filtration(data, DI.WingVeinBifiltration(); throw=true)
+
+    bad_build = DI.GradedComplexBuildResult(DI.graded_complex(build), DI.grade_axes(build), (1, 1))
+    @test !DI.check_graded_complex_build_result(bad_build; throw=false).valid
+    @test_throws ArgumentError DI.check_graded_complex_build_result(bad_build; throw=true)
+
+    @test !DI.check_ingestion_stage(:raw; throw=false).valid
+    @test_throws ArgumentError DI.check_ingestion_stage(:raw; throw=true)
+
+    gdata = TamerOp.GraphData(2, [(1, 2)])
+    @test !DI.check_construction_options(gdata, construction; throw=false).valid
+    @test_throws ArgumentError DI.check_construction_options(gdata, construction; throw=true)
+
+    @test !DI.check_preflight_mode(:yes; throw=false).valid
+    @test_throws ArgumentError DI.check_preflight_mode(:yes; throw=true)
+
+    bad_plan = DI.IngestionPlan(
+        data,
+        filt,
+        DI.plan_spec(plan),
+        construction,
+        OPT.PipelineOptions(),
+        :not_a_stage,
+        field,
+        nothing,
+        nothing,
+        :simplex_tree_first,
+        :union,
+        :lexmin,
+        true,
+    )
+    @test !DI.check_ingestion_plan(bad_plan; throw=false).valid
+    @test_throws ArgumentError DI.check_ingestion_plan(bad_plan; throw=true)
+
+    @test TOA.IngestionPlan === DI.IngestionPlan
+    @test TOA.IngestionEstimate === DI.IngestionEstimate
+    @test TOA.GradedComplexBuildResult === DI.GradedComplexBuildResult
+    @test TOA.registered_filtration_families === DI.registered_filtration_families
+    @test TOA.filtration_spec_summary === DI.filtration_spec_summary
+    @test TOA.filtration_family_summary === DI.filtration_family_summary
+    @test TOA.construction_mode === DI.construction_mode
+    @test TOA.estimate_ingestion === DI.estimate_ingestion
+    @test TOA.source_data === DI.source_data
+    @test TOA.estimated_cells === DI.estimated_cells
+    @test TOA.graded_complex === DI.graded_complex
+    @test TOA.check_filtration === DI.check_filtration
+    @test TOA.check_filtration_spec === DI.check_filtration_spec
+    @test TOA.check_data_filtration === DI.check_data_filtration
+    @test TOA.check_graded_complex_build_result === DI.check_graded_complex_build_result
+    @test TOA.check_ingestion_stage === DI.check_ingestion_stage
+    @test TOA.check_construction_options === DI.check_construction_options
+    @test TOA.check_preflight_mode === DI.check_preflight_mode
+    @test TOA.ingestion_plan_summary === DI.ingestion_plan_summary
+    @test TOA.graded_complex_build_summary === DI.graded_complex_build_summary
+
+    typed_filtration_ctors = (
+        :GradedFiltration,
+        :RipsFiltration, :RipsDensityFiltration, :RipsCodensityFiltration, :RipsLowerStarFiltration, :FunctionRipsFiltration, :LandmarkRipsFiltration,
+        :GraphLowerStarFiltration, :CliqueLowerStarFiltration, :EdgeWeightedFiltration,
+        :GraphCentralityFiltration, :GraphGeodesicFiltration, :GraphFunctionGeodesicBifiltration,
+        :GraphWeightThresholdFiltration,
+        :ImageLowerStarFiltration, :ImageDistanceBifiltration, :WingVeinBifiltration,
+        :DelaunayLowerStarFiltration, :AlphaFiltration, :FunctionDelaunayFiltration,
+        :CoreDelaunayFiltration, :CoreFiltration, :DegreeRipsFiltration, :CubicalFiltration,
+        :RhomboidFiltration,
+    )
+    for sym in typed_filtration_ctors
+        @test sym in TamerOp.SIMPLE_API
+        @test isdefined(TamerOp, sym)
+        @test getfield(TamerOp, sym) === getfield(DI, sym)
+    end
+    @test TamerOp.AlphaFiltration(; max_dim=2) isa DI.AlphaFiltration
+    @test TamerOp.GraphFunctionGeodesicBifiltration(; sources=[1]) isa DI.GraphFunctionGeodesicBifiltration
+end
+
 @testset "Data pipeline: function-Rips (point cloud)" begin
-    data = PosetModules.PointCloud([[0.0], [1.0]])
-    spec_vals = PosetModules.FiltrationSpec(kind=:function_rips,
+    data = TamerOp.PointCloud([[0.0], [1.0]])
+    spec_vals = TamerOp.FiltrationSpec(kind=:function_rips,
                                             max_dim=1,
                                             vertex_values=[0.0, 2.0],
                                             simplex_agg=:max)
-    enc_vals = PosetModules.encode(data, spec_vals; degree=0)
+    enc_vals = TamerOp.encode(data, spec_vals; degree=0)
     @test FF.nvertices(enc_vals.P) == 4
     @test MD.dim_at(_enc_module(enc_vals), EC.locate(enc_vals.pi, [0.0, 0.0])) == 1
     @test MD.dim_at(_enc_module(enc_vals), EC.locate(enc_vals.pi, [0.0, 2.0])) == 2
     @test MD.dim_at(_enc_module(enc_vals), EC.locate(enc_vals.pi, [1.0, 2.0])) == 1
 
-    spec_fun = PosetModules.FiltrationSpec(kind=:function_rips,
+    spec_fun = TamerOp.FiltrationSpec(kind=:function_rips,
                                            max_dim=1,
                                            vertex_function=(p, i) -> (i == 1 ? 0.0 : 2.0),
                                            simplex_agg=:max)
-    enc_fun = PosetModules.encode(data, spec_fun; degree=0)
+    enc_fun = TamerOp.encode(data, spec_fun; degree=0)
     @test _enc_dims(enc_fun) == _enc_dims(enc_vals)
     @test EC.axes_from_encoding(enc_fun.pi) == EC.axes_from_encoding(enc_vals.pi)
 end
 
+@testset "Data pipeline: typed rips_lowerstar (point cloud)" begin
+    data = TamerOp.PointCloud([[0.0, 2.0], [1.0, 0.5], [2.0, 1.5]])
+    filt = DI.RipsLowerStarFiltration(; max_dim=1, radius=3.0, coord=1)
+    spec = TamerOp.FiltrationSpec(kind=:rips_lowerstar, max_dim=1, radius=3.0, coord=1)
+    enc_f = TamerOp.encode(data, filt; degree=0)
+    enc_s = TamerOp.encode(data, spec; degree=0)
+    @test _enc_dims(enc_f) == _enc_dims(enc_s)
+    @test EC.axes_from_encoding(enc_f.pi) == EC.axes_from_encoding(enc_s.pi)
+end
+
 @testset "Data pipeline: graph vertex-values UX parity" begin
-    g = PosetModules.GraphData(3, [(1, 2), (2, 3)])
-    spec_old = PosetModules.FiltrationSpec(kind=:graph_lower_star,
+    g = TamerOp.GraphData(3, [(1, 2), (2, 3)])
+    spec_old = TamerOp.FiltrationSpec(kind=:graph_lower_star,
                                            vertex_grades=[[0.0], [1.0], [2.0]],
                                            simplex_agg=:max)
-    spec_new = PosetModules.FiltrationSpec(kind=:graph_lower_star,
+    spec_new = TamerOp.FiltrationSpec(kind=:graph_lower_star,
                                            vertex_values=[0.0, 1.0, 2.0],
                                            simplex_agg=:max)
-    spec_fun = PosetModules.FiltrationSpec(kind=:graph_lower_star,
+    spec_fun = TamerOp.FiltrationSpec(kind=:graph_lower_star,
                                            vertex_function=(arg, i) -> i - 1,
                                            simplex_agg=:max)
-    enc_old = PosetModules.encode(g, spec_old; degree=0)
-    enc_new = PosetModules.encode(g, spec_new; degree=0)
-    enc_fun = PosetModules.encode(g, spec_fun; degree=0)
+    enc_old = TamerOp.encode(g, spec_old; degree=0)
+    enc_new = TamerOp.encode(g, spec_new; degree=0)
+    enc_fun = TamerOp.encode(g, spec_fun; degree=0)
     @test _enc_dims(enc_new) == _enc_dims(enc_old)
     @test _enc_dims(enc_fun) == _enc_dims(enc_old)
     @test EC.axes_from_encoding(enc_new.pi) == EC.axes_from_encoding(enc_old.pi)
@@ -3436,35 +4452,35 @@ end
 end
 
 @testset "Data pipeline: graph centrality/geodesic/threshold filtrations" begin
-    g = PosetModules.GraphData(3, [(1, 2), (2, 3)]; weights=[1.0, 2.0])
+    g = TamerOp.GraphData(3, [(1, 2), (2, 3)]; weights=[1.0, 2.0])
 
     f_cent = DI.GraphCentralityFiltration(centrality=:degree, lift=:lower_star)
-    enc_cent = PosetModules.encode(g, f_cent; degree=0)
+    enc_cent = TamerOp.encode(g, f_cent; degree=0)
     ax_cent = EC.axes_from_encoding(enc_cent.pi)
     @test length(ax_cent) == 1
     @test ax_cent[1] == [1.0, 2.0]
 
-    spec_cent = PosetModules.FiltrationSpec(kind=:graph_centrality, centrality=:closeness, metric=:hop, lift=:lower_star)
+    spec_cent = TamerOp.FiltrationSpec(kind=:graph_centrality, centrality=:closeness, metric=:hop, lift=:lower_star)
     typed_cent = DI.to_filtration(spec_cent)
     @test typed_cent isa DI.GraphCentralityFiltration
-    enc_close = PosetModules.encode(g, spec_cent; degree=0)
+    enc_close = TamerOp.encode(g, spec_cent; degree=0)
     close_vals = EC.axes_from_encoding(enc_close.pi)[1]
     @test any(isapprox(v, 2 / 3; atol=1e-6) for v in close_vals)
     @test any(isapprox(v, 1.0; atol=1e-8) for v in close_vals)
 
     f_geo = DI.GraphGeodesicFiltration(sources=[1], metric=:hop, lift=:lower_star)
-    enc_geo = PosetModules.encode(g, f_geo; degree=0)
+    enc_geo = TamerOp.encode(g, f_geo; degree=0)
     ax_geo = EC.axes_from_encoding(enc_geo.pi)
     @test length(ax_geo) == 1
     @test ax_geo[1] == [0.0, 1.0, 2.0]
 
-    spec_geo = PosetModules.FiltrationSpec(kind=:graph_geodesic, sources=[1], metric=:weighted, lift=:lower_star)
+    spec_geo = TamerOp.FiltrationSpec(kind=:graph_geodesic, sources=[1], metric=:weighted, lift=:lower_star)
     typed_geo = DI.to_filtration(spec_geo)
     @test typed_geo isa DI.GraphGeodesicFiltration
-    enc_geo_w = PosetModules.encode(g, spec_geo; degree=0)
+    enc_geo_w = TamerOp.encode(g, spec_geo; degree=0)
     @test EC.axes_from_encoding(enc_geo_w.pi)[1] == [0.0, 1.0, 3.0]
 
-    spec_bi = PosetModules.FiltrationSpec(
+    spec_bi = TamerOp.FiltrationSpec(
         kind=:graph_function_geodesic_bifiltration,
         sources=[1],
         metric=:hop,
@@ -3474,56 +4490,56 @@ end
     )
     typed_bi = DI.to_filtration(spec_bi)
     @test typed_bi isa DI.GraphFunctionGeodesicBifiltration
-    enc_bi = PosetModules.encode(g, spec_bi; degree=0)
+    enc_bi = TamerOp.encode(g, spec_bi; degree=0)
     ax_bi = EC.axes_from_encoding(enc_bi.pi)
     @test length(ax_bi) == 2
     @test ax_bi[1] == [0.0, 1.0, 2.0]
     @test ax_bi[2] == [10.0, 20.0, 30.0]
 
     f_thr = DI.GraphWeightThresholdFiltration(edge_weights=[0.3, 0.8], lift=:graph)
-    enc_thr = PosetModules.encode(g, f_thr; degree=0)
+    enc_thr = TamerOp.encode(g, f_thr; degree=0)
     @test EC.axes_from_encoding(enc_thr.pi)[1] == [0.0, 0.3, 0.8]
 
-    gtri = PosetModules.GraphData(3, [(1, 2), (2, 3), (1, 3)]; weights=[0.3, 0.8, 0.5])
-    spec_thr = PosetModules.FiltrationSpec(kind=:graph_weight_threshold, lift=:clique, max_dim=2)
+    gtri = TamerOp.GraphData(3, [(1, 2), (2, 3), (1, 3)]; weights=[0.3, 0.8, 0.5])
+    spec_thr = TamerOp.FiltrationSpec(kind=:graph_weight_threshold, lift=:clique, max_dim=2)
     typed_thr = DI.to_filtration(spec_thr)
     @test typed_thr isa DI.GraphWeightThresholdFiltration
-    enc_thr_clique = PosetModules.encode(gtri, spec_thr; degree=0)
+    enc_thr_clique = TamerOp.encode(gtri, spec_thr; degree=0)
     @test EC.axes_from_encoding(enc_thr_clique.pi)[1] == [0.0, 0.3, 0.5, 0.8]
-    gtri_unsorted = PosetModules.GraphData(3, [(2, 1), (3, 2), (3, 1)]; weights=[0.3, 0.8, 0.5])
-    enc_thr_clique_unsorted = PosetModules.encode(gtri_unsorted, spec_thr; degree=0)
+    gtri_unsorted = TamerOp.GraphData(3, [(2, 1), (3, 2), (3, 1)]; weights=[0.3, 0.8, 0.5])
+    enc_thr_clique_unsorted = TamerOp.encode(gtri_unsorted, spec_thr; degree=0)
     @test EC.axes_from_encoding(enc_thr_clique_unsorted.pi)[1] == [0.0, 0.3, 0.5, 0.8]
 
-    est = DI.estimate_ingestion(gtri, PosetModules.FiltrationSpec(kind=:graph_centrality, lift=:clique, max_dim=2))
-    @test est.cell_counts_by_dim == BigInt[3, 3, 1]
+    est = DI.estimate_ingestion(gtri, TamerOp.FiltrationSpec(kind=:graph_centrality, lift=:clique, max_dim=2))
+    @test DI.cell_counts_by_dim(est) == BigInt[3, 3, 1]
 end
 
 @testset "Data pipeline: graph new-family contracts" begin
-    g = PosetModules.GraphData(3, [(1, 2), (2, 3)])
-    @test_throws Exception PosetModules.encode(
+    g = TamerOp.GraphData(3, [(1, 2), (2, 3)])
+    @test_throws Exception TamerOp.encode(
         g,
-        PosetModules.FiltrationSpec(kind=:graph_geodesic, sources=[1], metric=:weighted, lift=:lower_star);
+        TamerOp.FiltrationSpec(kind=:graph_geodesic, sources=[1], metric=:weighted, lift=:lower_star);
         degree=0,
     )
-    @test_throws Exception PosetModules.encode(
+    @test_throws Exception TamerOp.encode(
         g,
-        PosetModules.FiltrationSpec(kind=:graph_weight_threshold, lift=:clique, max_dim=2);
+        TamerOp.FiltrationSpec(kind=:graph_weight_threshold, lift=:clique, max_dim=2);
         degree=0,
     )
 
     nbig = 80
     epath = [(i, j) for i in 1:(nbig - 1) for j in (i + 1):nbig]
-    gpath = PosetModules.GraphData(nbig, epath; weights=fill(1.0, length(epath)))
+    gpath = TamerOp.GraphData(nbig, epath; weights=fill(1.0, length(epath)))
 
-    spec_clique_precheck = PosetModules.FiltrationSpec(
+    spec_clique_precheck = TamerOp.FiltrationSpec(
         kind=:graph_centrality,
         centrality=:degree,
         lift=:clique,
         max_dim=3,
-        construction=PosetModules.ConstructionOptions(; budget=(15_000, nothing, nothing)),
+        construction=TamerOp.ConstructionOptions(; budget=(15_000, nothing, nothing)),
     )
     err = try
-        PosetModules.encode(gpath, spec_clique_precheck; degree=0)
+        TamerOp.encode(gpath, spec_clique_precheck; degree=0)
         nothing
     catch e
         e
@@ -3531,15 +4547,15 @@ end
     @test err isa ArgumentError
     @test occursin("clique enumeration", sprint(showerror, err))
 
-    spec_thr_clique_precheck = PosetModules.FiltrationSpec(
+    spec_thr_clique_precheck = TamerOp.FiltrationSpec(
         kind=:graph_weight_threshold,
         lift=:clique,
         max_dim=3,
         edge_weights=fill(1.0, length(epath)),
-        construction=PosetModules.ConstructionOptions(; budget=(15_000, nothing, nothing)),
+        construction=TamerOp.ConstructionOptions(; budget=(15_000, nothing, nothing)),
     )
     err = try
-        PosetModules.encode(gpath, spec_thr_clique_precheck; degree=0)
+        TamerOp.encode(gpath, spec_thr_clique_precheck; degree=0)
         nothing
     catch e
         e
@@ -3547,14 +4563,14 @@ end
     @test err isa ArgumentError
     @test occursin("clique enumeration", sprint(showerror, err))
 
-    spec_graph_rhomboid_precheck = PosetModules.FiltrationSpec(
+    spec_graph_rhomboid_precheck = TamerOp.FiltrationSpec(
         kind=:rhomboid,
         max_dim=3,
         vertex_values=fill(0.0, nbig),
-        construction=PosetModules.ConstructionOptions(; budget=(15_000, nothing, nothing)),
+        construction=TamerOp.ConstructionOptions(; budget=(15_000, nothing, nothing)),
     )
     err = try
-        PosetModules.encode(gpath, spec_graph_rhomboid_precheck; degree=0)
+        TamerOp.encode(gpath, spec_graph_rhomboid_precheck; degree=0)
         nothing
     catch e
         e
@@ -3571,9 +4587,9 @@ end
         [Float64[0.0, 0.0]],
         [Float64[1.0, 0.0], Float64[0.0, 1.0]],
     ]
-    G = PosetModules.MultiCriticalGradedComplex(cells, [B1], grades)
-    spec = PosetModules.FiltrationSpec(kind=:graded)
-    enc = PosetModules.encode(G, spec; degree=0)
+    G = TamerOp.MultiCriticalGradedComplex(cells, [B1], grades)
+    spec = TamerOp.FiltrationSpec(kind=:graded)
+    enc = TamerOp.encode(G, spec; degree=0)
     @test MD.dim_at(_enc_module(enc), EC.locate(enc.pi, [0.0, 0.0])) == 2
     @test MD.dim_at(_enc_module(enc), EC.locate(enc.pi, [1.0, 0.0])) == 1
     @test MD.dim_at(_enc_module(enc), EC.locate(enc.pi, [0.0, 1.0])) == 1
@@ -3587,10 +4603,10 @@ end
         [Float64[2.0, 2.0]],
         [Float64[1.0, 0.0], Float64[0.0, 1.0]],
     ]
-    Gm = PosetModules.MultiCriticalGradedComplex(cells, [B1], grades)
+    Gm = TamerOp.MultiCriticalGradedComplex(cells, [B1], grades)
 
     G1 = DI.one_criticalify(Gm)
-    @test G1 isa PosetModules.GradedComplex
+    @test G1 isa TamerOp.GradedComplex
     @test length(G1.grades) == 3
     @test G1.grades[3] == (2.0, 2.0)  # lifted to dominate boundary-face grades
 
@@ -3600,7 +4616,7 @@ end
     G1_max = DI.one_criticalify(Gm; selector=:lexmax, enforce_boundary=false)
     @test G1_max.grades[3] == (1.0, 0.0)
 
-    Gs = PosetModules.GradedComplex(cells, [B1], [Float64[0.0, 0.0], Float64[2.0, 2.0], Float64[2.0, 2.0]])
+    Gs = TamerOp.GradedComplex(cells, [B1], [Float64[0.0, 0.0], Float64[2.0, 2.0], Float64[2.0, 2.0]])
     @test DI.one_criticalify(Gs) === Gs
 end
 
@@ -3612,7 +4628,7 @@ end
         [Float64[0.0, 0.0]],
         [Float64[1.0, 0.0], Float64[0.0, 1.0], Float64[1.0, 1.0]],
     ]
-    G = PosetModules.MultiCriticalGradedComplex(cells, [B1], grades)
+    G = TamerOp.MultiCriticalGradedComplex(cells, [B1], grades)
     @test DI.criticality(G) == 3
     @test DI.criticality(DI.one_criticalify(G)) == 1
 
@@ -3620,15 +4636,15 @@ end
     @test DI.criticality(Gn) == 2
     @test length(Gn.grades[3]) == 2
 
-    spec_union = PosetModules.FiltrationSpec(kind=:graded, multicritical=:union)
-    spec_inter = PosetModules.FiltrationSpec(kind=:graded, multicritical=:intersection)
-    spec_one = PosetModules.FiltrationSpec(kind=:graded, multicritical=:one_critical,
+    spec_union = TamerOp.FiltrationSpec(kind=:graded, multicritical=:union)
+    spec_inter = TamerOp.FiltrationSpec(kind=:graded, multicritical=:intersection)
+    spec_one = TamerOp.FiltrationSpec(kind=:graded, multicritical=:one_critical,
                                            onecritical_selector=:lexmin,
                                            onecritical_enforce_boundary=false)
 
-    enc_union = PosetModules.encode(G, spec_union; degree=0)
-    enc_inter = PosetModules.encode(G, spec_inter; degree=0)
-    enc_one = PosetModules.encode(G, spec_one; degree=0)
+    enc_union = TamerOp.encode(G, spec_union; degree=0)
+    enc_inter = TamerOp.encode(G, spec_inter; degree=0)
+    enc_one = TamerOp.encode(G, spec_one; degree=0)
 
     q10 = EC.locate(enc_union.pi, [1.0, 0.0])
     q01 = EC.locate(enc_union.pi, [0.0, 1.0])
@@ -3652,6 +4668,75 @@ end
     @test MD.dim_at(_enc_module(enc_one), q11o) == 1
 end
 
+@testset "Data pipeline: packed complex metadata consumers" begin
+    cells = [Int[10, 11, 12], Int[20, 21, 22], Int[30]]
+    B1 = sparse(
+        [1, 2, 2, 3, 1, 3],
+        [1, 1, 2, 2, 3, 3],
+        [1, -1, 1, -1, 1, -1],
+        3, 3,
+    )
+    B2 = sparse([1, 2, 3], [1, 1, 1], [1, -1, 1], 3, 1)
+
+    Gs = TamerOp.GradedComplex(
+        cells,
+        [B1, B2],
+        [(0.0, 0.0), (1.0, 0.0), (0.0, 1.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0), (2.0, 2.0)],
+    )
+    Gm = TamerOp.MultiCriticalGradedComplex(
+        cells,
+        [B1, B2],
+        [
+            [(0.0, 0.0)],
+            [(1.0, 0.0)],
+            [(0.0, 1.0)],
+            [(1.0, 0.0)],
+            [(1.0, 1.0)],
+            [(0.0, 1.0)],
+            [(1.0, 1.0), (2.0, 2.0)],
+        ],
+    )
+    spec = TamerOp.FiltrationSpec(kind=:graded)
+
+    @test DI._estimate_cell_counts(Gs, spec; exact_pairwise_limit=16, warnings=String[], strict=false) ==
+          BigInt[3, 3, 1]
+    @test DI._estimate_cell_counts(Gm, spec; exact_pairwise_limit=16, warnings=String[], strict=false) ==
+          BigInt[3, 3, 1]
+
+    axes_s = DI._axes_from_complex_grades(Gs, (1, 1))
+    axes_m = DI._axes_from_complex_grades(Gm, (1, 1))
+    @test axes_s == ([0.0, 1.0, 2.0], [0.0, 1.0, 2.0])
+    @test axes_m == axes_s
+
+    @test DI.criticality(Gm) == 2
+    @test DI.normalize_multicritical(Gm; keep=:unique) === Gm
+
+    Gn_min = DI.normalize_multicritical(Gm; keep=:minimal)
+    Gn_max = DI.normalize_multicritical(Gm; keep=:maximal)
+    @test collect(Gn_min.grades[7]) == [(1.0, 1.0)]
+    @test collect(Gn_max.grades[7]) == [(2.0, 2.0)]
+
+    grades_s = DI._grades_by_dim(Gs)
+    grades_m = DI._grades_by_dim(Gm)
+    @test length.(grades_s) == [3, 3, 1]
+    @test length.(grades_m) == [3, 3, 1]
+    @test grades_s[2][2] == (1.0, 1.0)
+    @test grades_m[3][1] == [(1.0, 1.0), (2.0, 2.0)]
+
+    expected_simplices = [
+        [[1], [2], [3]],
+        [[1, 2], [2, 3], [1, 3]],
+        [[1, 2, 3]],
+    ]
+    @test DI._simplices_from_complex(Gs) == expected_simplices
+    @test DI._simplices_from_complex(Gm) == expected_simplices
+
+    Gm_out, axes_out, orient_out = DI._graded_complex_from_data(Gm, spec; cache=nothing)
+    @test Gm_out === Gm
+    @test axes_out == axes_m
+    @test orient_out == (1, 1)
+end
+
 @testset "Interop adapters: RIVET bifiltration + FIRep" begin
     mktemp() do path, io
         close(io)
@@ -3662,11 +4747,25 @@ end
             write(f, "0 1 ; 1 0 0 1\n")
         end
         G = SER.load_rivet_bifiltration(path)
-        @test G isa PosetModules.MultiCriticalGradedComplex
+        @test G isa TamerOp.MultiCriticalGradedComplex
         @test length(G.grades) == 3
         @test length(G.grades[3]) == 2
-        enc = PosetModules.encode(G, PosetModules.FiltrationSpec(kind=:graded); degree=0)
+        enc = TamerOp.encode(G, TamerOp.FiltrationSpec(kind=:graded); degree=0)
         @test FF.nvertices(enc.P) == 4
+    end
+
+    mktemp() do path, io
+        close(io)
+        open(path, "w") do f
+            write(f, "bifiltration\n")
+            write(f, "s\n")
+            write(f, "2\n")
+            write(f, "3\n")
+            write(f, "0 ; 0 0\n")
+            write(f, "1 ; 0 0\n")
+            write(f, "0 1 ; 1 0 0 1\n")
+        end
+        @test_throws ErrorException SER.load_rivet_bifiltration(path)
     end
 
     mktemp() do path, io
@@ -3679,7 +4778,7 @@ end
             write(f, "0.0 1.0 ; 0 1\n")
         end
         G = SER.load_rivet_firep(path)
-        @test G isa PosetModules.GradedComplex
+        @test G isa TamerOp.GradedComplex
         @test length(G.cells_by_dim) == 3
         @test size(G.boundaries[1]) == (2, 2)
         @test size(G.boundaries[2]) == (2, 1)
@@ -3688,45 +4787,45 @@ end
 
 @testset "Data pipeline: image lower-star" begin
     img = [0.0 1.0; 2.0 3.0]
-    data = PosetModules.ImageNd(img)
-    spec = PosetModules.FiltrationSpec(kind=:lower_star, axes=([0.0, 1.0, 2.0, 3.0],))
-    enc = PosetModules.encode(data, spec; degree=0)
+    data = TamerOp.ImageNd(img)
+    spec = TamerOp.FiltrationSpec(kind=:lower_star, axes=([0.0, 1.0, 2.0, 3.0],))
+    enc = TamerOp.encode(data, spec; degree=0)
     @test _enc_dims(enc) == fill(1, 4)
 end
 
 @testset "Data pipeline: 3D cubical lower-star" begin
     img = reshape(Float64.(1:8), (2, 2, 2))
-    data = PosetModules.ImageNd(img)
-    spec = PosetModules.FiltrationSpec(kind=:lower_star, axes=([1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0],))
-    enc = PosetModules.encode(data, spec; degree=0)
+    data = TamerOp.ImageNd(img)
+    spec = TamerOp.FiltrationSpec(kind=:lower_star, axes=([1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0],))
+    enc = TamerOp.encode(data, spec; degree=0)
     @test _enc_dims(enc) == fill(1, 8)
 end
 
 @testset "Data pipeline: embedded planar graph toy" begin
     verts = [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0]]
     edges = [(1, 2), (2, 3)]
-    data = PosetModules.EmbeddedPlanarGraph2D(verts, edges)
+    data = TamerOp.EmbeddedPlanarGraph2D(verts, edges)
     vgrades = [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0]]
-    spec = PosetModules.FiltrationSpec(kind=:graph_lower_star, vertex_grades=vgrades)
-    enc = PosetModules.encode(data, spec; degree=0)
+    spec = TamerOp.FiltrationSpec(kind=:graph_lower_star, vertex_grades=vgrades)
+    enc = TamerOp.encode(data, spec; degree=0)
     @test FF.nvertices(enc.P) > 0
     @test EC.locate(enc.pi, [0.0, 0.0]) > 0
-    H = enc.H === nothing ? PosetModules.Workflow.fringe_presentation(DI.materialize_module(enc.M)) : enc.H
+    H = enc.H === nothing ? TamerOp.Workflow.fringe_presentation(DI.materialize_module(enc.M)) : enc.H
     @test H isa FF.FringeModule
 end
 
 @testset "Data pipeline: wing distance bifiltration" begin
     verts = [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0]]
     edges = [(1, 2), (2, 3)]
-    data = PosetModules.EmbeddedPlanarGraph2D(verts, edges)
-    spec = PosetModules.FiltrationSpec(
+    data = TamerOp.EmbeddedPlanarGraph2D(verts, edges)
+    spec = TamerOp.FiltrationSpec(
         kind=:wing_vein_bifiltration,
         grid=(8, 8),
         bbox=(0.0, 1.0, 0.0, 1.0),
         orientation=(-1, 1),
     )
-    enc = PosetModules.encode(data, spec; degree=0)
-    H = enc.H === nothing ? PosetModules.Workflow.fringe_presentation(DI.materialize_module(enc.M)) : enc.H
+    enc = TamerOp.encode(data, spec; degree=0)
+    H = enc.H === nothing ? TamerOp.Workflow.fringe_presentation(DI.materialize_module(enc.M)) : enc.H
     @test H isa FF.FringeModule
     @test EC.locate(enc.pi, [0.0, 0.0]) > 0
     @test EC.locate(enc.pi, [-1.0, 0.0]) > 0
@@ -3752,31 +4851,31 @@ end
     cells = [Int[1]]
     boundaries = SparseMatrixCSC{Int,Int}[]
     grades = [Float64[0.0]]
-    G = PosetModules.GradedComplex(cells, boundaries, grades)
-    spec = PosetModules.FiltrationSpec(kind=:graded, axes=([0.0, 1.0],))
-    enc = PosetModules.encode(G, spec; degree=0)
-    @test Inv.euler_surface(_enc_module(enc), enc.pi; opts=OPT.InvariantOptions(axes_policy=:encoding)) isa AbstractArray
-    @test Inv.rank_invariant(_enc_module(enc), OPT.InvariantOptions()) isa Dict
+    G = TamerOp.GradedComplex(cells, boundaries, grades)
+    spec = TamerOp.FiltrationSpec(kind=:graded, axes=([0.0, 1.0],))
+    enc = TamerOp.encode(G, spec; degree=0)
+    @test SM.euler_surface(_enc_module(enc), enc.pi; opts=OPT.InvariantOptions(axes_policy=:encoding)) isa AbstractArray
+    @test Inv.rank_invariant(_enc_module(enc), OPT.InvariantOptions()) isa Inv.RankInvariantResult
 
     # Point cloud
-    data = PosetModules.PointCloud([[0.0], [1.0]])
-    spec = PosetModules.FiltrationSpec(kind=:rips, max_dim=1, axes=([0.0, 1.0],))
-    enc = PosetModules.encode(data, spec; degree=0)
-    @test Inv.euler_surface(_enc_module(enc), enc.pi; opts=OPT.InvariantOptions(axes_policy=:encoding)) isa AbstractArray
-    @test Inv.rank_invariant(_enc_module(enc), OPT.InvariantOptions()) isa Dict
+    data = TamerOp.PointCloud([[0.0], [1.0]])
+    spec = TamerOp.FiltrationSpec(kind=:rips, max_dim=1, axes=([0.0, 1.0],))
+    enc = TamerOp.encode(data, spec; degree=0)
+    @test SM.euler_surface(_enc_module(enc), enc.pi; opts=OPT.InvariantOptions(axes_policy=:encoding)) isa AbstractArray
+    @test Inv.rank_invariant(_enc_module(enc), OPT.InvariantOptions()) isa Inv.RankInvariantResult
 
     # Image (2D)
     img = [0.0 1.0; 2.0 3.0]
-    data = PosetModules.ImageNd(img)
-    spec = PosetModules.FiltrationSpec(kind=:lower_star, axes=([0.0, 1.0, 2.0, 3.0],))
-    enc = PosetModules.encode(data, spec; degree=0)
-    @test Inv.euler_surface(_enc_module(enc), enc.pi; opts=OPT.InvariantOptions(axes_policy=:encoding)) isa AbstractArray
+    data = TamerOp.ImageNd(img)
+    spec = TamerOp.FiltrationSpec(kind=:lower_star, axes=([0.0, 1.0, 2.0, 3.0],))
+    enc = TamerOp.encode(data, spec; degree=0)
+    @test SM.euler_surface(_enc_module(enc), enc.pi; opts=OPT.InvariantOptions(axes_policy=:encoding)) isa AbstractArray
 
     # Graph (2D) for slice_chain
-    data = PosetModules.GraphData(3, [(1, 2), (2, 3)])
+    data = TamerOp.GraphData(3, [(1, 2), (2, 3)])
     vgrades = [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0]]
-    spec = PosetModules.FiltrationSpec(kind=:graph_lower_star, vertex_grades=vgrades)
-    enc = PosetModules.encode(data, spec; degree=0)
+    spec = TamerOp.FiltrationSpec(kind=:graph_lower_star, vertex_grades=vgrades)
+    enc = TamerOp.encode(data, spec; degree=0)
     opts = OPT.InvariantOptions(axes_policy=:encoding, strict=false, box=:auto)
     chain, tvals = Inv.slice_chain(enc.pi, [0.0, 0.0], [1.0, 1.0], opts; nsteps=5)
     @test length(chain) > 0
@@ -3785,10 +4884,10 @@ end
     # Embedded planar graph (2D) for slice_chain
     verts = [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0]]
     edges = [(1, 2), (2, 3)]
-    data = PosetModules.EmbeddedPlanarGraph2D(verts, edges)
+    data = TamerOp.EmbeddedPlanarGraph2D(verts, edges)
     vgrades = [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0]]
-    spec = PosetModules.FiltrationSpec(kind=:graph_lower_star, vertex_grades=vgrades)
-    enc = PosetModules.encode(data, spec; degree=0)
+    spec = TamerOp.FiltrationSpec(kind=:graph_lower_star, vertex_grades=vgrades)
+    enc = TamerOp.encode(data, spec; degree=0)
     chain, tvals = Inv.slice_chain(enc.pi, [0.0, 0.0], [1.0, 1.0], opts; nsteps=5)
     @test length(chain) > 0
     @test length(chain) == length(tvals)
@@ -3807,12 +4906,14 @@ end
         schema = _TEST_TRIGRADE_SCHEMA,
     )
 
-    data = PosetModules.PointCloud([[0.0], [1.0], [2.0]])
+    data = TamerOp.PointCloud([[0.0], [1.0], [2.0]])
     tf = TestTriGradeFiltration(; shift=0.5, scale=2.0)
 
     @test :test_trigrade in DI.available_filtrations()
+    @test :test_trigrade in DI.registered_filtration_families()
     @test DI.filtration_arity(tf, data) == 3
     @test DI.filtration_kind(typeof(tf)) == :test_trigrade
+    @test DI.filtration_kind(tf) == :test_trigrade
 
     sig = DI.filtration_signature(:test_trigrade)
     @test sig.kind == :test_trigrade
@@ -3820,6 +4921,8 @@ end
     @test sig.arity == 3
     @test haskey(sig.defaults, :shift)
     @test haskey(sig.defaults, :scale)
+    @test DI.filtration_family_summary(:test_trigrade).registered
+    @test DI.filtration_family_summary(:test_trigrade).arity == 3
 
     fp = DI.filtration_parameters(:test_trigrade)
     @test fp.defaults[:shift] == 0.0
@@ -3832,28 +4935,32 @@ end
     @test spec_from_typed.kind == :test_trigrade
     @test spec_from_typed.params[:shift] == 0.5
     @test spec_from_typed.params[:scale] == 2.0
+    @test describe(spec_from_typed).filtration_kind == :test_trigrade
+    @test DI.filtration_spec_summary(spec_from_typed).arity == 3
+    @test DI.filtration_family_summary(spec_from_typed).provided_parameters == (:shift, :scale, :construction)
+    @test DI.check_filtration_spec(spec_from_typed; throw=false).valid
     tf2 = DI.to_filtration(spec_from_typed)
     @test tf2 isa TestTriGradeFiltration
     @test tf2.params.shift == 0.5
     @test tf2.params.scale == 2.0
 
     # Schema defaults apply when spec omits optional params.
-    tf_default = DI.to_filtration(PosetModules.FiltrationSpec(kind=:test_trigrade))
+    tf_default = DI.to_filtration(TamerOp.FiltrationSpec(kind=:test_trigrade))
     @test tf_default.params.shift == 0.0
     @test tf_default.params.scale == 1.0
 
     # Stage parity from typed filtration and FiltrationSpec.
-    spec_direct = PosetModules.FiltrationSpec(kind=:test_trigrade, shift=0.5, scale=2.0)
-    G_typed = PosetModules.encode(data, tf; stage=:graded_complex)
-    G_spec = PosetModules.encode(data, spec_direct; stage=:graded_complex)
+    spec_direct = TamerOp.FiltrationSpec(kind=:test_trigrade, shift=0.5, scale=2.0)
+    G_typed = TamerOp.encode(data, tf; stage=:graded_complex)
+    G_spec = TamerOp.encode(data, spec_direct; stage=:graded_complex)
     @test G_typed.grades == G_spec.grades
     @test G_typed.cells_by_dim == G_spec.cells_by_dim
 
-    enc_typed = PosetModules.encode(data, tf; stage=:encoding_result, degree=0)
-    enc_spec = PosetModules.encode(data, spec_direct; stage=:encoding_result, degree=0)
+    enc_typed = TamerOp.encode(data, tf; stage=:encoding_result, degree=0)
+    enc_spec = TamerOp.encode(data, spec_direct; stage=:encoding_result, degree=0)
     @test DI.module_dims(enc_typed.M) == DI.module_dims(enc_spec.M)
 
     # Schema contract failures.
-    @test_throws ArgumentError DI.to_filtration(PosetModules.FiltrationSpec(kind=:test_trigrade, shift="bad"))
-    @test_throws ArgumentError DI.to_filtration(PosetModules.FiltrationSpec(kind=:test_trigrade, scale=0.0))
+    @test_throws ArgumentError DI.to_filtration(TamerOp.FiltrationSpec(kind=:test_trigrade, shift="bad"))
+    @test_throws ArgumentError DI.to_filtration(TamerOp.FiltrationSpec(kind=:test_trigrade, scale=0.0))
 end

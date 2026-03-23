@@ -33,14 +33,14 @@ println("Class counts: circle=", count(==("circle"), labels), ", figure8=", coun
 
 stage("2) Define filtration and encode each sample")
 
-construction = PM.ConstructionOptions(
+construction = TO.ConstructionOptions(
     ;
     sparsify=:knn,
     collapse=:none,
     budget=(max_simplices=140_000, max_edges=90_000, memory_budget_bytes=1_000_000_000),
 )
 
-filtration = PM.RipsDensityFiltration(
+filtration = TO.RipsDensityFiltration(
     ;
     max_dim=1,
     knn=10,
@@ -48,11 +48,11 @@ filtration = PM.RipsDensityFiltration(
     nn_backend=:auto,
     construction=construction,
 )
-field = PM.CoreModules.F2()
+field = TO.CoreModules.F2()
 
-encodings = Vector{PM.EncodingResult}(undef, length(clouds))
+encodings = Vector{TO.EncodingResult}(undef, length(clouds))
 for i in eachindex(clouds)
-    encodings[i] = PM.encode(clouds[i], filtration; degree=0, field=field, cache=:auto)
+    encodings[i] = TO.encode(clouds[i], filtration; degree=0, field=field, cache=:auto)
 end
 println("Encoded ", length(encodings), " samples.")
 
@@ -68,7 +68,7 @@ offs = [
     collect(range(-0.8, stop=0.8, length=5)),
 ]
 
-sbar_spec = PM.SlicedBarcodeSpec(
+sbar_spec = TO.SlicedBarcodeSpec(
     ;
     directions=dirs,
     offsets=offs,
@@ -78,7 +78,7 @@ sbar_spec = PM.SlicedBarcodeSpec(
     threads=true,
 )
 
-land_spec = PM.LandscapeSpec(
+land_spec = TO.LandscapeSpec(
     ;
     directions=dirs,
     offsets=offs,
@@ -89,9 +89,9 @@ land_spec = PM.LandscapeSpec(
     threads=true,
 )
 
-spec = PM.CompositeSpec((sbar_spec, land_spec))
+spec = TO.CompositeSpec((sbar_spec, land_spec))
 
-opts = PM.InvariantOptions(
+opts = TO.InvariantOptions(
     ;
     axes_policy=:encoding,
     max_axis_len=64,
@@ -102,21 +102,21 @@ opts = PM.InvariantOptions(
 
 stage("4) Batch transform with SessionCache reuse")
 
-sc = PM.SessionCache()
-fs = PM.batch_transform(
+sc = TO.SessionCache()
+fs = TO.batch_transform(
     samples,
     spec;
     opts=opts,
     idfun=s -> s.id,
     labelfun=s -> s.label,
-    batch=PM.BatchOptions(threaded=true, backend=:threads, progress=false, deterministic=true),
+    batch=TO.BatchOptions(threaded=true, backend=:threads, progress=false, deterministic=true),
     cache=sc,
     on_unsupported=:error,
 )
 
 println("Feature matrix shape: ", size(fs.X))
-println("nfeatures(spec): ", PM.nfeatures(spec))
-println("First 5 feature names: ", PM.feature_names(spec)[1:5])
+println("nfeatures(spec): ", TO.nfeatures(spec))
+println("First 5 feature names: ", TO.feature_names(spec)[1:5])
 
 stage("5) Save outputs")
 
@@ -127,12 +127,12 @@ println("Native optional outputs: ", paths.native)
 
 # Save one canonical pipeline artifact for exact reruns.
 pipe_path = joinpath(outdir, "pipeline.json")
-PM.save_pipeline_json(
+TO.save_pipeline_json(
     pipe_path,
     clouds[1],
     filtration;
     degree=0,
-    pipeline_opts=PM.PipelineOptions(axes_policy=:encoding, poset_kind=:signature, field=:F2),
+    pipeline_opts=TO.PipelineOptions(axes_policy=:encoding, poset_kind=:signature, field=:F2),
 )
 println("Saved pipeline JSON (sample schema): ", pipe_path)
 

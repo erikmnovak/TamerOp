@@ -1,4 +1,0 @@
-case,family,stage,cache_mode,median_ms,p90_ms,median_alloc_kib
-lowdim_h0_probe_rips_d1,point,module,fastpath_forced,0.63022,1.327803,2737.445312
-lowdim_h0_probe_rips_d1,point,module,fastpath_disabled_dispatch,41.361756,51.297041,70364.90625
-lowdim_h0_probe_rips_d1,point,module,generic_direct,39.14472,47.994581,74515.109375

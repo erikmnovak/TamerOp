@@ -48,12 +48,14 @@ using ..Modules: PModule, PMorphism, id_morphism,
 
 import ..IndicatorResolutions
 import ..AbelianCategories
+import ..ChainComplexes
 using ..AbelianCategories: kernel_with_inclusion, image_with_inclusion, _cokernel_module
 
 
 import ..ChainComplexes:
     shift, extend_range, mapping_cone, mapping_cone_triangle,
-    induced_map_on_cohomology, _map_at
+    induced_map_on_cohomology, _map_at, describe,
+    source, target, component, differential
 using ..ChainComplexes:
     CochainComplex, DoubleComplex, CochainMap,
     total_complex, cohomology_data, spectral_sequence,
@@ -67,11 +69,15 @@ using ..DerivedFunctors:
     injective_resolution, projective_resolution,
     lift_injective_chainmap,
     compose
+import ..DerivedFunctors:
+    source_module, target_module, nonzero_degrees, degree_dimensions, total_dimension
 
 # Internal Functoriality helpers live in DerivedFunctors.Functoriality.
 using ..DerivedFunctors.Functoriality:
     _tensor_map_on_tor_chains_from_projective_coeff,
     _lift_pmodule_map_to_projective_resolution_chainmap_coeff
+
+import ..AbelianCategories: connecting_map
 
 # Extend the DerivedFunctors.GradedSpaces interface for the "hyper" derived objects
 # computed in this file (HyperExtSpace and HyperTorSpace).
@@ -83,6 +89,504 @@ import Base.Threads
 
 const IR = IndicatorResolutions
 const FF = FiniteFringe
+
+const _FRINGE_PMODULE_CACHE_LOCK = ReentrantLock()
+const _FRINGE_PMODULE_CACHES = WeakKeyDict{Any, IdDict{Any, Any}}()
+const _INJECTIVE_RESOLUTION_CACHE_LOCK = ReentrantLock()
+const _INJECTIVE_RESOLUTION_CACHES = WeakKeyDict{Any, IdDict{Any, Dict{Int, Any}}}()
+const _RHOM_COMPLEX_CACHE_LOCK = ReentrantLock()
+const _RHOM_COMPLEX_CACHES = WeakKeyDict{Any, Dict{Tuple{UInt, UInt, UInt, Int, Bool}, Any}}()
+const _HYPEREXT_SPACE_CACHE_LOCK = ReentrantLock()
+const _HYPEREXT_SPACE_CACHES = WeakKeyDict{Any, IdDict{Any, Any}}()
+const _INJECTIVE_LIFT_CACHE_LOCK = ReentrantLock()
+const _INJECTIVE_LIFT_CACHES = WeakKeyDict{Any, Dict{NTuple{3, UInt}, Any}}()
+const _REBASED_PMORPHISM_CACHE_LOCK = ReentrantLock()
+const _REBASED_PMORPHISM_CACHES = WeakKeyDict{Any, Dict{NTuple{3, UInt}, Any}}()
+const _PROJECTIVE_LIFT_CACHE_LOCK = ReentrantLock()
+const _PROJECTIVE_LIFT_CACHES = WeakKeyDict{Any, Dict{NTuple{4, UInt}, Any}}()
+const _RHOM_MAP_FIRST_PLAN_LOCK = ReentrantLock()
+const _RHOM_MAP_FIRST_PLAN_CACHES = WeakKeyDict{Any, Dict{Tuple{UInt, UInt}, Any}}()
+const _RHOM_MAP_SECOND_PLAN_LOCK = ReentrantLock()
+const _RHOM_MAP_SECOND_PLAN_CACHES = WeakKeyDict{Any, Dict{Tuple{UInt, UInt}, Any}}()
+const _DTENSOR_MAP_FIRST_PLAN_LOCK = ReentrantLock()
+const _DTENSOR_MAP_FIRST_PLAN_CACHES = WeakKeyDict{Any, Dict{Tuple{UInt, UInt}, Any}}()
+const _DTENSOR_MAP_FIRST_RESULT_LOCK = ReentrantLock()
+const _DTENSOR_MAP_FIRST_RESULT_CACHES = WeakKeyDict{Any, Dict{NTuple{3, UInt}, Any}}()
+const _DTENSOR_MAP_SECOND_PLAN_LOCK = ReentrantLock()
+const _DTENSOR_MAP_SECOND_PLAN_CACHES = WeakKeyDict{Any, Dict{Tuple{UInt, UInt}, Any}}()
+const _DTENSOR_MAP_SECOND_RESULT_LOCK = ReentrantLock()
+const _DTENSOR_MAP_SECOND_RESULT_CACHES = WeakKeyDict{Any, Dict{NTuple{3, UInt}, Any}}()
+const _DTENSOR_MAP_SECOND_CACHE_MIN_WORK = Ref(64)
+
+"""
+    source_map(H::ModuleCochainHomotopy)
+
+Return the first cochain map in a module-valued cochain homotopy.
+
+Use this accessor instead of reaching into raw homotopy fields when you want to
+inspect or validate the source side of `H : f => g`.
+"""
+function source_map end
+
+"""
+    target_map(H::ModuleCochainHomotopy)
+
+Return the second cochain map in a module-valued cochain homotopy.
+
+This is the semantic companion to [`source_map`](@ref) for cheap-first
+inspection of homotopy data.
+"""
+function target_map end
+
+"""
+    triangle_objects(T::ModuleDistinguishedTriangle)
+
+Return the three module complexes appearing in a distinguished triangle as the
+named tuple `(; source, target, cone)`.
+
+Prefer this accessor over raw field inspection when exploring a triangle at the
+REPL or in notebooks.
+"""
+function triangle_objects end
+
+"""
+    triangle_maps(T::ModuleDistinguishedTriangle)
+
+Return the structure maps of a distinguished triangle as the named tuple
+`(; morphism, inclusion, projection)`.
+
+This is the cheap inspection surface for triangle data before looking at the
+individual component maps degree-by-degree.
+"""
+function triangle_maps end
+
+"""
+    underlying_complex(X)
+
+Return the ordinary cochain complex underlying a module-derived construction.
+
+Current methods are provided for [`RHomComplex`](@ref) and
+[`DerivedTensorComplex`](@ref). Use this when you need the chain-level object
+that supports cohomology, spectral-sequence, or map-level inspection.
+"""
+function underlying_complex end
+
+struct ModuleComplexValidationSummary{R}
+    report::R
+end
+
+"""
+    module_complex_validation_summary(report) -> ModuleComplexValidationSummary
+
+Wrap a raw validation report returned by `check_module_*` in a compact
+display-oriented object.
+"""
+@inline module_complex_validation_summary(report::NamedTuple) = ModuleComplexValidationSummary(report)
+
+@inline function _module_complex_report(
+    kind::Symbol,
+    valid::Bool;
+    issues::AbstractVector{<:AbstractString}=String[],
+    kwargs...,
+)
+    return (; kind, valid, issues=Tuple(String.(issues)), kwargs...)
+end
+
+@inline function _throw_invalid_module_complex(fname::Symbol, issues::AbstractVector{<:AbstractString})
+    msg = isempty(issues) ? "invalid object" : " - " * join(issues, "\n - ")
+    Base.throw(ArgumentError(string(fname, ": validation failed\n", msg)))
+end
+
+function Base.show(io::IO, summary::ModuleComplexValidationSummary)
+    r = summary.report
+    print(io, "ModuleComplexValidationSummary(kind=", r.kind,
+          ", valid=", r.valid,
+          ", issues=", length(r.issues), ")")
+end
+
+function Base.show(io::IO, ::MIME"text/plain", summary::ModuleComplexValidationSummary)
+    r = summary.report
+    println(io, "ModuleComplexValidationSummary")
+    println(io, "  kind: ", r.kind)
+    println(io, "  valid: ", r.valid)
+    for key in propertynames(r)
+        key in (:kind, :valid, :issues) && continue
+        println(io, "  ", key, ": ", repr(getproperty(r, key)))
+    end
+    if isempty(r.issues)
+        print(io, "  issues: []")
+    else
+        println(io, "  issues:")
+        for issue in r.issues
+            println(io, "    - ", issue)
+        end
+    end
+end
+
+struct _RHomMapFirstDegreePlan{H}
+    row_off::Vector{Int}
+    col_off::Vector{Int}
+    pdeg::Vector{Int}
+    Hdom::Vector{H}
+    Hcod::Vector{H}
+end
+
+@inline function _tensor_map_second_plan_work(Tsrc, Ttgt)
+    return (length(Tsrc.C.terms) + length(Ttgt.C.terms)) * sum(length, Tsrc.resR.gens)
+end
+
+struct _RHomMapSecondDegreePlan{H}
+    row_off::Vector{Int}
+    col_off::Vector{Int}
+    ideg::Vector{Int}
+    Hsrc::Vector{H}
+    Htgt::Vector{H}
+end
+
+struct _RHomMapPlan{P}
+    tmin::Int
+    tmax::Int
+    dims_src::Vector{Int}
+    dims_tgt::Vector{Int}
+    degrees::Vector{P}
+end
+
+struct _TensorMapFirstDegreePlan{K}
+    row_off::Vector{Int}
+    col_off::Vector{Int}
+    adeg::Vector{Int}
+    terms::Vector{PModule{K}}
+    dom_gens::Vector{Vector{Int}}
+    cod_gens::Vector{Vector{Int}}
+    dom_offsets::Vector{Vector{Int}}
+    cod_offsets::Vector{Vector{Int}}
+end
+
+struct _TensorMapSecondDegreePlan{K}
+    block_pdeg::Vector{Int}
+    block_u::Vector{Int}
+    block_row0::Vector{Int}
+    block_col0::Vector{Int}
+    col_owner::Vector{Int}
+    col_local::Vector{Int}
+end
+
+struct _TensorMapPlan{P}
+    tmin::Int
+    tmax::Int
+    dims_src::Vector{Int}
+    dims_tgt::Vector{Int}
+    degrees::Vector{P}
+end
+
+@inline function _tensor_map_second_col_nnz(block::AbstractMatrix, j::Int)
+    if issparse(block)
+        return length(nzrange(block, j))
+    end
+    c = 0
+    @inbounds for i in axes(block, 1)
+        iszero(block[i, j]) || (c += 1)
+    end
+    return c
+end
+
+@inline function _fill_tensor_map_second_col!(
+    rowval::Vector{Int},
+    nzval::Vector{K},
+    pos::Int,
+    block::AbstractMatrix{K},
+    j::Int,
+    row0::Int,
+) where {K}
+    if issparse(block)
+        @inbounds for ptr in nzrange(block, j)
+            rowval[pos] = row0 + rowvals(block)[ptr]
+            nzval[pos] = nonzeros(block)[ptr]
+            pos += 1
+        end
+        return pos
+    end
+    @inbounds for i in axes(block, 1)
+        v = block[i, j]
+        iszero(v) && continue
+        rowval[pos] = row0 + i
+        nzval[pos] = v
+        pos += 1
+    end
+    return pos
+end
+
+function _assemble_tensor_map_second_degree(
+    g,
+    dplan::_TensorMapSecondDegreePlan{K},
+    dim_tgt::Int,
+    dim_src::Int,
+) where {K}
+    blocks = Vector{AbstractMatrix{K}}(undef, length(dplan.block_u))
+    isempty(blocks) && return spzeros(K, dim_tgt, dim_src)
+    @inbounds for b in eachindex(blocks)
+        blocks[b] = _map(g, dplan.block_pdeg[b]).comps[dplan.block_u[b]]
+    end
+    colptr = Vector{Int}(undef, dim_src + 1)
+    colptr[1] = 1
+    nnz_total = 0
+    @inbounds for j in 1:dim_src
+        owner = dplan.col_owner[j]
+        if owner != 0
+            nnz_total += _tensor_map_second_col_nnz(blocks[owner], dplan.col_local[j])
+        end
+        colptr[j + 1] = nnz_total + 1
+    end
+
+    rowval = Vector{Int}(undef, nnz_total)
+    nzval = Vector{K}(undef, nnz_total)
+    pos = 1
+    @inbounds for j in 1:dim_src
+        owner = dplan.col_owner[j]
+        owner == 0 && continue
+        pos = _fill_tensor_map_second_col!(
+            rowval,
+            nzval,
+            pos,
+            blocks[owner],
+            dplan.col_local[j],
+            dplan.block_row0[owner],
+        )
+    end
+    return SparseMatrixCSC{K,Int}(dim_tgt, dim_src, colptr, rowval, nzval)
+end
+
+
+@inline function _pair_plan_cached!(builder::Function,
+                                    store::WeakKeyDict{Any,Dict{Tuple{UInt, UInt},Any}},
+                                    lock::ReentrantLock,
+                                    owner,
+                                    src,
+                                    tgt)
+    Base.lock(lock) do
+        shard = get!(store, owner) do
+            Dict{Tuple{UInt, UInt}, Any}()
+        end
+        key = (UInt(objectid(src)), UInt(objectid(tgt)))
+        cached = get(shard, key, nothing)
+        cached === nothing || return cached
+        plan = builder()
+        shard[key] = plan
+        return plan
+    end
+end
+
+@inline function _pmodule_from_fringe_cached(H::FF.FringeModule{K}, ::Nothing) where {K}
+    return IR.pmodule_from_fringe(H)
+end
+
+function _pmodule_from_fringe_cached(H::FF.FringeModule{K}, cache::HomSystemCache) where {K}
+    lock(_FRINGE_PMODULE_CACHE_LOCK) do
+        shard = get!(_FRINGE_PMODULE_CACHES, cache) do
+            IdDict{Any, Any}()
+        end
+        cached = get(shard, H, nothing)
+        cached === nothing || return cached::PModule{K}
+        M = IR.pmodule_from_fringe(H)
+        shard[H] = M
+        return M
+    end
+end
+
+@inline function _injective_resolution_cached(
+    N::PModule{K},
+    maxlen::Int,
+    ::Nothing,
+) where {K}
+    return injective_resolution(N, ResolutionOptions(maxlen=maxlen))
+end
+
+function _injective_resolution_cached(
+    N::PModule{K},
+    maxlen::Int,
+    cache::HomSystemCache,
+) where {K}
+    lock(_INJECTIVE_RESOLUTION_CACHE_LOCK) do
+        shard = get!(_INJECTIVE_RESOLUTION_CACHES, cache) do
+            IdDict{Any, Dict{Int, Any}}()
+        end
+        per_module = get!(shard, N) do
+            Dict{Int, Any}()
+        end
+        cached = get(per_module, maxlen, nothing)
+        cached === nothing || return cached::InjectiveResolution{K}
+        res = injective_resolution(N, ResolutionOptions(maxlen=maxlen))
+        per_module[maxlen] = res
+        return res
+    end
+end
+
+@inline _rhom_complex_cache_key(C, N, resN, maxlen::Int, threads::Bool) =
+    (UInt(objectid(C)), UInt(objectid(N)), UInt(objectid(resN)), maxlen, threads)
+
+function _rhom_complex_cached(
+    C,
+    N::PModule{K};
+    maxlen::Int = 3,
+    resN = nothing,
+    cache::Union{Nothing, HomSystemCache} = nothing,
+    threads::Bool = (Threads.nthreads() > 1),
+) where {K}
+    resN_use = resN === nothing ? _injective_resolution_cached(N, maxlen, cache) : resN
+    cache === nothing && return RHomComplex(C, N; maxlen=maxlen, resN=resN_use, cache=cache, threads=threads)
+    key = _rhom_complex_cache_key(C, N, resN_use, maxlen, threads)
+    lock(_RHOM_COMPLEX_CACHE_LOCK) do
+        shard = get!(_RHOM_COMPLEX_CACHES, cache) do
+            Dict{Tuple{UInt, UInt, UInt, Int, Bool}, Any}()
+        end
+        cached = get(shard, key, nothing)
+        cached === nothing || return cached::RHomComplex{K}
+        R = RHomComplex(C, N; maxlen=maxlen, resN=resN_use, cache=cache, threads=threads)
+        shard[key] = R
+        return R
+    end
+end
+
+function _rhom_complex_cached(
+    C,
+    H::FF.FringeModule{K};
+    maxlen::Int = 3,
+    resN = nothing,
+    cache::Union{Nothing, HomSystemCache} = nothing,
+    threads::Bool = (Threads.nthreads() > 1),
+) where {K}
+    N = _pmodule_from_fringe_cached(H, cache)
+    return _rhom_complex_cached(C, N; maxlen=maxlen, resN=resN, cache=cache, threads=threads)
+end
+
+@inline function _hyperext_space_cached(R, ::Nothing)
+    return HyperExtSpace(R, cohomology_data(R.tot))
+end
+
+function _hyperext_space_cached(R, cache::HomSystemCache)
+    lock(_HYPEREXT_SPACE_CACHE_LOCK) do
+        shard = get!(_HYPEREXT_SPACE_CACHES, cache) do
+            IdDict{Any, Any}()
+        end
+        cached = get(shard, R, nothing)
+        cached === nothing || return cached
+        H = HyperExtSpace(R, cohomology_data(R.tot))
+        shard[R] = H
+        return H
+    end
+end
+
+@inline function _hyperext_cached(
+    C,
+    N::PModule{K};
+    maxlen::Int = 3,
+    resN = nothing,
+    cache::Union{Nothing, HomSystemCache} = nothing,
+    threads::Bool = (Threads.nthreads() > 1),
+) where {K}
+    R = _rhom_complex_cached(C, N; maxlen=maxlen, resN=resN, cache=cache, threads=threads)
+    return _hyperext_space_cached(R, cache)
+end
+
+@inline function _hyperext_cached(
+    C,
+    H::FF.FringeModule{K};
+    maxlen::Int = 3,
+    resN = nothing,
+    cache::Union{Nothing, HomSystemCache} = nothing,
+    threads::Bool = (Threads.nthreads() > 1),
+) where {K}
+    R = _rhom_complex_cached(C, H; maxlen=maxlen, resN=resN, cache=cache, threads=threads)
+    return _hyperext_space_cached(R, cache)
+end
+
+@inline _injective_lift_cache_key(g, res_dom, res_cod) =
+    (UInt(objectid(g)), UInt(objectid(res_dom)), UInt(objectid(res_cod)))
+
+@inline function _lift_injective_chainmap_cached(
+    g::PMorphism{K},
+    res_dom::InjectiveResolution{K},
+    res_cod::InjectiveResolution{K};
+    check::Bool = true,
+    cache::Union{Nothing,HomSystemCache}=nothing,
+) where {K}
+    cache === nothing && return lift_injective_chainmap(g, res_dom, res_cod; check=check)
+    key = _injective_lift_cache_key(g, res_dom, res_cod)
+    lock(_INJECTIVE_LIFT_CACHE_LOCK) do
+        shard = get!(_INJECTIVE_LIFT_CACHES, cache) do
+            Dict{NTuple{3, UInt}, Any}()
+        end
+        cached = get(shard, key, nothing)
+        cached === nothing || return cached::Vector{PMorphism{K}}
+        phis = lift_injective_chainmap(g, res_dom, res_cod; check=check)
+        shard[key] = phis
+        return phis
+    end
+end
+
+@inline _rebased_pmodule_morphism_cache_key(g, dom, cod) =
+    (UInt(objectid(g)), UInt(objectid(dom)), UInt(objectid(cod)))
+
+@inline function _rebase_pmodule_morphism_cached(
+    g::PMorphism{K},
+    dom::PModule{K},
+    cod::PModule{K},
+    ::Nothing,
+) where {K}
+    return (g.dom === dom && g.cod === cod) ? g : PMorphism{K}(dom, cod, g.comps)
+end
+
+function _rebase_pmodule_morphism_cached(
+    g::PMorphism{K},
+    dom::PModule{K},
+    cod::PModule{K},
+    cache::HomSystemCache,
+) where {K}
+    g.dom === dom && g.cod === cod && return g
+    key = _rebased_pmodule_morphism_cache_key(g, dom, cod)
+    lock(_REBASED_PMORPHISM_CACHE_LOCK) do
+        shard = get!(_REBASED_PMORPHISM_CACHES, cache) do
+            Dict{NTuple{3, UInt}, Any}()
+        end
+        cached = get(shard, key, nothing)
+        cached === nothing || return cached::PMorphism{K}
+        rebased = PMorphism{K}(dom, cod, g.comps)
+        shard[key] = rebased
+        return rebased
+    end
+end
+
+@inline _projective_lift_cache_key(f, res_dom, res_cod, upto::Int) =
+    (UInt(objectid(f)), UInt(objectid(res_dom)), UInt(objectid(res_cod)), UInt(upto))
+
+@inline function _lift_projective_chainmap_coeff_uncached(
+    f::PMorphism{K},
+    res_dom::ProjectiveResolution{K},
+    res_cod::ProjectiveResolution{K};
+    upto::Int,
+) where {K}
+    return _lift_pmodule_map_to_projective_resolution_chainmap_coeff(res_dom, res_cod, f; upto=upto)
+end
+
+function _lift_projective_chainmap_coeff_cached(
+    f::PMorphism{K},
+    res_dom::ProjectiveResolution{K},
+    res_cod::ProjectiveResolution{K};
+    upto::Int,
+    cache::HomSystemCache,
+) where {K}
+    key = _projective_lift_cache_key(f, res_dom, res_cod, upto)
+    lock(_PROJECTIVE_LIFT_CACHE_LOCK) do
+        shard = get!(_PROJECTIVE_LIFT_CACHES, cache) do
+            Dict{NTuple{4, UInt}, Any}()
+        end
+        cached = get(shard, key, nothing)
+        cached === nothing || return cached::Vector{SparseMatrixCSC{K, Int}}
+        coeffs = _lift_projective_chainmap_coeff_uncached(f, res_dom, res_cod; upto=upto)
+        shard[key] = coeffs
+        return coeffs
+    end
+end
 
 
 """
@@ -276,6 +780,37 @@ _term(C::ModuleCochainComplex{K}, t::Int) where {K} =
 _diff(C::ModuleCochainComplex{K}, t::Int) where {K} =
     (t < C.tmin || t >= C.tmax) ? zero_morphism(_term(C,t), _term(C,t+1)) : C.diffs[t - C.tmin + 1]
 
+@inline degree_range(C::ModuleCochainComplex) = C.tmin:C.tmax
+@inline component(C::ModuleCochainComplex{K}, t::Int) where {K} = _term(C, t)
+@inline differential(C::ModuleCochainComplex{K}, t::Int) where {K} = _diff(C, t)
+
+@inline function describe(C::ModuleCochainComplex)
+    return (
+        kind=:module_cochain_complex,
+        field=_field_of_complex(C),
+        nvertices=nvertices(poset(C)),
+        degree_range=degree_range(C),
+        term_dimensions=Tuple(sum(M.dims) for M in C.terms),
+        ndifferentials=length(C.diffs),
+    )
+end
+
+function Base.show(io::IO, C::ModuleCochainComplex)
+    d = describe(C)
+    print(io, "ModuleCochainComplex(degrees=", repr(d.degree_range),
+          ", term_dimensions=", repr(d.term_dimensions), ")")
+end
+
+function Base.show(io::IO, ::MIME"text/plain", C::ModuleCochainComplex)
+    d = describe(C)
+    print(io, "ModuleCochainComplex",
+          "\n  field: ", d.field,
+          "\n  nvertices: ", d.nvertices,
+          "\n  degree_range: ", repr(d.degree_range),
+          "\n  term_dimensions: ", repr(d.term_dimensions),
+          "\n  ndifferentials: ", d.ndifferentials)
+end
+
 """
     ModuleCochainComplex(
         Hs::AbstractVector{<:FF.FringeModule},
@@ -345,14 +880,6 @@ function ModuleCochainComplex(
     )
 end
 
-struct ModuleCochainMap{K}
-    C::ModuleCochainComplex{K}
-    D::ModuleCochainComplex{K}
-    tmin::Int
-    tmax::Int
-    comps::Vector{PMorphism{K}}   # degreewise maps
-end
-
 """
     ModuleCochainMap(C, D, comps; tmin, tmax, check=true)
 
@@ -381,6 +908,38 @@ _map(f::ModuleCochainMap{K}, t::Int) where {K} =
     (t < f.tmin || t > f.tmax) ?
         zero_morphism(_term(f.C, t), _term(f.D, t)) :
         f.comps[t - f.tmin + 1]
+
+@inline degree_range(f::ModuleCochainMap) = f.tmin:f.tmax
+@inline source(f::ModuleCochainMap) = f.C
+@inline target(f::ModuleCochainMap) = f.D
+@inline component(f::ModuleCochainMap{K}, t::Int) where {K} = _map(f, t)
+
+@inline function describe(f::ModuleCochainMap)
+    return (
+        kind=:module_cochain_map,
+        field=_field_of_complex(f.C),
+        degree_range=degree_range(f),
+        source_degree_range=degree_range(f.C),
+        target_degree_range=degree_range(f.D),
+        ncomponents=length(f.comps),
+    )
+end
+
+function Base.show(io::IO, f::ModuleCochainMap)
+    d = describe(f)
+    print(io, "ModuleCochainMap(degrees=", repr(d.degree_range),
+          ", ncomponents=", d.ncomponents, ")")
+end
+
+function Base.show(io::IO, ::MIME"text/plain", f::ModuleCochainMap)
+    d = describe(f)
+    print(io, "ModuleCochainMap",
+          "\n  field: ", d.field,
+          "\n  degree_range: ", repr(d.degree_range),
+          "\n  source_degree_range: ", repr(d.source_degree_range),
+          "\n  target_degree_range: ", repr(d.target_degree_range),
+          "\n  ncomponents: ", d.ncomponents)
+end
 
 function ModuleCochainMap(
     C::ModuleCochainComplex{K},
@@ -488,6 +1047,38 @@ _hcomp(H::ModuleCochainHomotopy{K}, t::Int) where {K} =
     (t < H.tmin || t > H.tmax) ?
         zero_morphism(_term(H.f.C, t), _term(H.f.D, t-1)) :
         H.comps[t - H.tmin + 1]
+
+@inline degree_range(H::ModuleCochainHomotopy) = H.tmin:H.tmax
+@inline source_map(H::ModuleCochainHomotopy) = H.f
+@inline target_map(H::ModuleCochainHomotopy) = H.g
+@inline component(H::ModuleCochainHomotopy{K}, t::Int) where {K} = _hcomp(H, t)
+
+@inline function describe(H::ModuleCochainHomotopy)
+    return (
+        kind=:module_cochain_homotopy,
+        field=_field_of_complex(H.f.C),
+        degree_range=degree_range(H),
+        source_map_range=degree_range(H.f),
+        target_map_range=degree_range(H.g),
+        ncomponents=length(H.comps),
+    )
+end
+
+function Base.show(io::IO, H::ModuleCochainHomotopy)
+    d = describe(H)
+    print(io, "ModuleCochainHomotopy(degrees=", repr(d.degree_range),
+          ", ncomponents=", d.ncomponents, ")")
+end
+
+function Base.show(io::IO, ::MIME"text/plain", H::ModuleCochainHomotopy)
+    d = describe(H)
+    print(io, "ModuleCochainHomotopy",
+          "\n  field: ", d.field,
+          "\n  degree_range: ", repr(d.degree_range),
+          "\n  source_map_range: ", repr(d.source_map_range),
+          "\n  target_map_range: ", repr(d.target_map_range),
+          "\n  ncomponents: ", d.ncomponents)
+end
 
 """
     is_cochain_homotopy(H)
@@ -612,6 +1203,17 @@ end
 # mapping cone for module cochain maps
 # ============================================================
 
+"""
+    mapping_cone(f::ModuleCochainMap) -> ModuleCochainComplex
+
+Construct the module-valued mapping cone of a cochain map `f : C -> D`.
+
+The returned complex represents the standard cone object `Cone(f)` in the
+derived category. It is the canonical module-level path when you want the cone
+itself, not just its cohomology. For cheap-first inspection, call
+[`module_complex_summary`](@ref) on the result before exploring individual
+terms or differentials.
+"""
 function mapping_cone(f::ModuleCochainMap{K}) where {K}
     C = f.C
     D = f.D
@@ -661,6 +1263,47 @@ struct ModuleDistinguishedTriangle{K}
     p::ModuleCochainMap{K}
 end
 
+@inline triangle_objects(T::ModuleDistinguishedTriangle) = (; source=T.C, target=T.D, cone=T.Cone)
+@inline triangle_maps(T::ModuleDistinguishedTriangle) = (; morphism=T.f, inclusion=T.i, projection=T.p)
+@inline connecting_map(T::ModuleDistinguishedTriangle) = T.p
+
+@inline function describe(T::ModuleDistinguishedTriangle)
+    return (
+        kind=:module_distinguished_triangle,
+        field=_field_of_complex(T.C),
+        source_degree_range=degree_range(T.C),
+        target_degree_range=degree_range(T.D),
+        cone_degree_range=degree_range(T.Cone),
+    )
+end
+
+function Base.show(io::IO, T::ModuleDistinguishedTriangle)
+    d = describe(T)
+    print(io, "ModuleDistinguishedTriangle(cone_degrees=", repr(d.cone_degree_range), ")")
+end
+
+function Base.show(io::IO, ::MIME"text/plain", T::ModuleDistinguishedTriangle)
+    d = describe(T)
+    print(io, "ModuleDistinguishedTriangle",
+          "\n  field: ", d.field,
+          "\n  source_degree_range: ", repr(d.source_degree_range),
+          "\n  target_degree_range: ", repr(d.target_degree_range),
+          "\n  cone_degree_range: ", repr(d.cone_degree_range))
+end
+
+"""
+    mapping_cone_triangle(f::ModuleCochainMap) -> ModuleDistinguishedTriangle
+
+Return the canonical distinguished triangle
+
+`C --f--> D -> Cone(f) -> C[1]`
+
+attached to a module-valued cochain map.
+
+Use this when the categorical triangle is the object of interest. For quick
+inspection, prefer [`triangle_summary`](@ref) or [`describe`](@ref) before
+descending into the component maps.
+"""
 function mapping_cone_triangle(f::ModuleCochainMap{K}) where {K}
     C, D = f.C, f.D
     Cone = mapping_cone(f)
@@ -702,10 +1345,23 @@ end
 # ============================================================
 
 """
-    cohomology_module_data(C,t)
+    cohomology_module_data(C, t)
 
-Return (Z,iZ,B,iB,j,H,q) where:
-Z = ker d^t, B = im d^{t-1}, j: B->Z inclusion, H=Z/B, q:Z->H.
+Return the module-valued cohomology data in degree `t` for a
+[`ModuleCochainComplex`](@ref).
+
+The result is the named tuple `(Z, iZ, B, iB, j, H, q)` where:
+- `Z = ker d^t`,
+- `iZ : Z -> C^t` is the kernel inclusion,
+- `B = im d^{t-1}`,
+- `iB : B -> C^t` is the image inclusion,
+- `j : B -> Z` is the induced inclusion into cycles,
+- `H = Z / B` is the cohomology module,
+- `q : Z -> H` is the quotient map.
+
+This is the heavy path when you need the full submodule/quotient structure.
+If you only need the cohomology module object, use [`cohomology_module`](@ref)
+instead.
 """
 function cohomology_module_data(C::ModuleCochainComplex{K}, t::Int) where {K}
     M  = _term(C,t)
@@ -735,6 +1391,16 @@ function cohomology_module_data(C::ModuleCochainComplex{K}, t::Int) where {K}
     return (Z=Z, iZ=iZ, B=B, iB=iB, j=j, H=H, q=q)
 end
 
+"""
+    cohomology_module(C, t) -> PModule
+
+Return the cohomology module `H^t(C)` in degree `t`.
+
+This is the cheap canonical path for module-valued cohomology when you do not
+need cycle, boundary, or quotient witness maps. Use
+[`cohomology_module_data`](@ref) only when the heavier quotient data is
+mathematically necessary.
+"""
 cohomology_module(C::ModuleCochainComplex{K}, t::Int) where {K} = cohomology_module_data(C,t).H
 
 # induced map on cohomology modules
@@ -744,34 +1410,22 @@ function induced_map_on_cohomology_modules(f::ModuleCochainMap{K}, t::Int) where
     Dd = cohomology_module_data(f.D,t)
 
     ft = _map(f,t)
-    # restrict to cycles: ZC -> D^t
-    ZC_to_Dt = PMorphism{K}(Cd.Z, _term(f.D,t), [ft.comps[u] * Cd.iZ.comps[u] for u in 1:poset(f.C).n])
-
-    # land in ZD by solving iZD * X = (ft*iZC)
     Q = poset(f.C)
-    ZC_to_ZD = Vector{Matrix{K}}(undef, nvertices(Q))
-    for u in 1:nvertices(Q)
-        if Dd.Z.dims[u] == 0
-            ZC_to_ZD[u] = zeros(K, 0, Cd.Z.dims[u])
-        else
-            ZC_to_ZD[u] = FieldLinAlg.solve_fullcolumn(field, Dd.iZ.comps[u], ZC_to_Dt.comps[u])
-        end
-    end
-    hZ = PMorphism{K}(Cd.Z, Dd.Z, ZC_to_ZD)
-
-    # Want H map: HD circ qC = qD circ hZ
     compsH = Vector{Matrix{K}}(undef, nvertices(Q))
-    for u in 1:nvertices(Q)
-        RHS = Dd.q.comps[u] * hZ.comps[u]
-        qC = Cd.q.comps[u]
-        if size(qC,1) == 0
-            compsH[u] = zeros(K, size(RHS,1), 0)
+    @inbounds for u in 1:nvertices(Q)
+        rhsZ = ft.comps[u] * Cd.iZ.comps[u]
+        if Dd.Z.dims[u] == 0
+            compsH[u] = zeros(K, Dd.H.dims[u], Cd.H.dims[u])
         else
-            # qC has full row rank; pick right inverse via (qC*qC')^{-1}
-            A = qC * transpose(qC)
-            invA = FieldLinAlg.solve_fullcolumn(field, A, _eye(K, size(A, 1)))
-            rinv = transpose(qC) * invA
-            compsH[u] = RHS * rinv
+            z_to_z = FieldLinAlg.solve_fullcolumn(field, Dd.iZ.comps[u], rhsZ)
+            rhsH = Dd.q.comps[u] * z_to_z
+            qC = Cd.q.comps[u]
+            if size(qC, 1) == 0
+                compsH[u] = zeros(K, size(rhsH, 1), 0)
+            else
+                rinv = AbelianCategories._right_inverse_full_row(field, qC)
+                compsH[u] = rhsH * rinv
+            end
         end
     end
     return PMorphism{K}(Cd.H, Dd.H, compsH)
@@ -792,6 +1446,17 @@ function is_isomorphism(f::PMorphism{K}) where {K}
     return true
 end
 
+"""
+    is_quasi_isomorphism(f::ModuleCochainMap) -> Bool
+
+Return `true` exactly when `f` induces isomorphisms on all module-valued
+cohomology groups in its supported degree range.
+
+This is the cheap-first predicate for testing whether a module cochain map is a
+quasi-isomorphism. When it returns `false` and you need more detail, inspect
+the induced maps from [`induced_map_on_cohomology_modules`](@ref) degree by
+degree.
+"""
 function is_quasi_isomorphism(f::ModuleCochainMap{K}) where {K}
     tmin = min(f.C.tmin, f.D.tmin)
     tmax = max(f.C.tmax, f.D.tmax)
@@ -815,6 +1480,52 @@ struct RHomComplex{K}
     homs::Array{HomSpace{K},2}
     DC::DoubleComplex{K}
     tot::CochainComplex{K}
+end
+
+"""
+    source_module(R::RHomComplex)
+    target_module(R::RHomComplex)
+    underlying_complex(R::RHomComplex)
+
+Semantic accessors for an [`RHomComplex`](@ref).
+
+- `source_module(R)` returns the module complex `C`
+- `target_module(R)` returns the coefficient module `N`
+- `underlying_complex(R)` returns the total cochain complex computing
+  `RHom(C, N)`
+
+Use these accessors instead of raw field inspection when exploring derived Hom
+data.
+"""
+@inline source_module(R::RHomComplex) = R.C
+@inline target_module(R::RHomComplex) = R.N
+@inline underlying_complex(R::RHomComplex) = R.tot
+
+@inline function describe(R::RHomComplex)
+    return (
+        kind=:rhom_complex,
+        field=R.N.field,
+        source_degree_range=degree_range(R.C),
+        target_total_dim=sum(R.N.dims),
+        block_shape=size(R.homs),
+        total_degree_range=R.tot.tmin:R.tot.tmax,
+    )
+end
+
+function Base.show(io::IO, R::RHomComplex)
+    d = describe(R)
+    print(io, "RHomComplex(total_degrees=", repr(d.total_degree_range),
+          ", block_shape=", repr(d.block_shape), ")")
+end
+
+function Base.show(io::IO, ::MIME"text/plain", R::RHomComplex)
+    d = describe(R)
+    print(io, "RHomComplex",
+          "\n  field: ", d.field,
+          "\n  source_degree_range: ", repr(d.source_degree_range),
+          "\n  target_total_dim: ", d.target_total_dim,
+          "\n  block_shape: ", repr(d.block_shape),
+          "\n  total_degree_range: ", repr(d.total_degree_range))
 end
 
 
@@ -927,15 +1638,29 @@ end
 function RHomComplex(
     C::ModuleCochainComplex{K},
     H::FF.FringeModule{K};
-    kwargs...
+    maxlen::Int = 3,
+    resN = nothing,
+    cache::Union{Nothing,HomSystemCache}=nothing,
+    threads::Bool = (Threads.nthreads() > 1),
 ) where {K}
-    return RHomComplex(C, IndicatorResolutions.pmodule_from_fringe(H); kwargs...)
+    return _rhom_complex_cached(C, H; maxlen=maxlen, resN=resN, cache=cache, threads=threads)
 end
 
+"""
+    RHom(C, N; maxlen=3, ...) -> CochainComplex
 
-RHom(C::ModuleCochainComplex{K}, N::PModule{K}; kwargs...) where {K} = RHomComplex(C,N; kwargs...).tot
+Return the total cochain complex computing the derived Hom object `RHom(C, N)`.
+
+This is the canonical compute path when you want the chain-level object that
+feeds cohomology, spectral sequences, or induced maps. If you want the richer
+container with the bicomplex blocks and cached Hom pieces, use
+[`RHomComplex`](@ref) instead. For cheap inspection before touching chain data,
+prefer [`rhom_summary`](@ref) on the container form.
+"""
+RHom(C::ModuleCochainComplex{K}, N::PModule{K}; kwargs...) where {K} =
+    _rhom_complex_cached(C, N; kwargs...).tot
 RHom(C::ModuleCochainComplex{K}, H::FF.FringeModule{K}; kwargs...) where {K} =
-    RHom(C, IndicatorResolutions.pmodule_from_fringe(H); kwargs...)
+    _rhom_complex_cached(C, H; kwargs...).tot
 
 
 # ------------------------------------------------------------
@@ -962,6 +1687,110 @@ function _tot_block_offsets(DC::DoubleComplex, t::Int)
         end
     end
     return d
+end
+
+function _build_rhom_map_first_plan(Rdom::RHomComplex{K}, Rcod::RHomComplex{K}) where {K}
+    tmin = min(Rdom.tot.tmin, Rcod.tot.tmin)
+    tmax = max(Rdom.tot.tmax, Rcod.tot.tmax)
+    degrees = Vector{_RHomMapFirstDegreePlan{HomSpace{K}}}(undef, tmax - tmin + 1)
+    dims_src = Vector{Int}(undef, length(degrees))
+    dims_tgt = Vector{Int}(undef, length(degrees))
+    for idx in eachindex(degrees)
+        t = tmin + idx - 1
+        dims_src[idx] = _cc_dim_at(Rdom.tot, t)
+        dims_tgt[idx] = _cc_dim_at(Rcod.tot, t)
+        off_src = _tot_block_offsets(Rdom.DC, t)
+        off_tgt = _tot_block_offsets(Rcod.DC, t)
+        row_off = Int[]
+        col_off = Int[]
+        pdeg = Int[]
+        hdom = HomSpace{K}[]
+        hcod = HomSpace{K}[]
+        for ((a, b), src_off) in off_src
+            row = get(off_tgt, (a, b), 0)
+            row == 0 && continue
+            ai_src = a - Rdom.DC.amin + 1
+            bi_src = b - Rdom.DC.bmin + 1
+            ai_tgt = a - Rcod.DC.amin + 1
+            bi_tgt = b - Rcod.DC.bmin + 1
+            dim_block_src = Rdom.DC.dims[ai_src, bi_src]
+            dim_block_tgt = Rcod.DC.dims[ai_tgt, bi_tgt]
+            (dim_block_src == 0 || dim_block_tgt == 0) && continue
+            push!(row_off, row - 1)
+            push!(col_off, src_off - 1)
+            push!(pdeg, a)
+            push!(hdom, Rdom.homs[ai_src, bi_src])
+            push!(hcod, Rcod.homs[ai_tgt, bi_tgt])
+        end
+        degrees[idx] = _RHomMapFirstDegreePlan{HomSpace{K}}(row_off, col_off, pdeg, hdom, hcod)
+    end
+    return _RHomMapPlan{_RHomMapFirstDegreePlan{HomSpace{K}}}(tmin, tmax, dims_src, dims_tgt, degrees)
+end
+
+@inline function _rhom_map_first_plan(Rdom::RHomComplex{K},
+                                      Rcod::RHomComplex{K},
+                                      ::Nothing) where {K}
+    return _build_rhom_map_first_plan(Rdom, Rcod)
+end
+
+@inline function _rhom_map_first_plan(Rdom::RHomComplex{K},
+                                      Rcod::RHomComplex{K},
+                                      cache::HomSystemCache) where {K}
+    return _pair_plan_cached!(_RHOM_MAP_FIRST_PLAN_CACHES, _RHOM_MAP_FIRST_PLAN_LOCK, cache, Rdom, Rcod) do
+        _build_rhom_map_first_plan(Rdom, Rcod)
+    end::_RHomMapPlan{_RHomMapFirstDegreePlan{HomSpace{K}}}
+end
+
+function _build_rhom_map_second_plan(Rsrc::RHomComplex{K}, Rtgt::RHomComplex{K}) where {K}
+    tmin = min(Rsrc.tot.tmin, Rtgt.tot.tmin)
+    tmax = max(Rsrc.tot.tmax, Rtgt.tot.tmax)
+    degrees = Vector{_RHomMapSecondDegreePlan{HomSpace{K}}}(undef, tmax - tmin + 1)
+    dims_src = Vector{Int}(undef, length(degrees))
+    dims_tgt = Vector{Int}(undef, length(degrees))
+    for idx in eachindex(degrees)
+        t = tmin + idx - 1
+        dims_src[idx] = _cc_dim_at(Rsrc.tot, t)
+        dims_tgt[idx] = _cc_dim_at(Rtgt.tot, t)
+        off_src = _tot_block_offsets(Rsrc.DC, t)
+        off_tgt = _tot_block_offsets(Rtgt.DC, t)
+        row_off = Int[]
+        col_off = Int[]
+        ideg = Int[]
+        hsrc = HomSpace{K}[]
+        htgt = HomSpace{K}[]
+        for ((A, B), tgt_off) in off_tgt
+            src_off = get(off_src, (A, B), 0)
+            src_off == 0 && continue
+            ia_src = A - Rsrc.DC.amin + 1
+            ib_src = B - Rsrc.DC.bmin + 1
+            ia_tgt = A - Rtgt.DC.amin + 1
+            ib_tgt = B - Rtgt.DC.bmin + 1
+            dim_block_src = Rsrc.DC.dims[ia_src, ib_src]
+            dim_block_tgt = Rtgt.DC.dims[ia_tgt, ib_tgt]
+            (dim_block_src == 0 || dim_block_tgt == 0) && continue
+            push!(row_off, tgt_off - 1)
+            push!(col_off, src_off - 1)
+            push!(ideg, B)
+            push!(hsrc, Rsrc.homs[ia_src, ib_src])
+            push!(htgt, Rtgt.homs[ia_tgt, ib_tgt])
+        end
+        degrees[idx] = _RHomMapSecondDegreePlan{HomSpace{K}}(row_off, col_off, ideg, hsrc, htgt)
+    end
+    return _RHomMapPlan{_RHomMapSecondDegreePlan{HomSpace{K}}}(tmin, tmax, dims_src, dims_tgt, degrees)
+end
+
+@inline function _rhom_map_second_plan(Rsrc::RHomComplex{K},
+                                       Rtgt::RHomComplex{K},
+                                       ::Nothing) where {K}
+    return _build_rhom_map_second_plan(Rsrc, Rtgt)
+end
+
+@inline function _rhom_map_second_plan(Rsrc::RHomComplex{K},
+                                       Rtgt::RHomComplex{K},
+                                       cache::HomSystemCache) where {K}
+    return _pair_plan_cached!(_RHOM_MAP_SECOND_PLAN_CACHES, _RHOM_MAP_SECOND_PLAN_LOCK, cache, Rsrc, Rtgt) do
+        _build_rhom_map_second_plan(Rsrc, Rtgt)
+    end::_RHomMapPlan{_RHomMapSecondDegreePlan{HomSpace{K}}}
 end
 
 """
@@ -1000,121 +1829,46 @@ function rhom_map_first(
     tot_src = Rdom.tot
     tot_tgt = Rcod.tot
 
-    tmin = min(tot_src.tmin, tot_tgt.tmin)
-    tmax = max(tot_src.tmax, tot_tgt.tmax)
-
-    maps = Vector{SparseMatrixCSC{K,Int}}(undef, tmax - tmin + 1)
+    plan = _rhom_map_first_plan(Rdom, Rcod, cache)
+    tmin = plan.tmin
+    tmax = plan.tmax
+    maps = Vector{SparseMatrixCSC{K,Int}}(undef, length(plan.degrees))
 
     if threads && Threads.nthreads() > 1 && (tmax >= tmin)
-        Threads.@threads for idx in 1:(tmax - tmin + 1)
-            t = tmin + idx - 1
-            dim_src = _cc_dim_at(tot_src, t)
-            dim_tgt = _cc_dim_at(tot_tgt, t)
+        Threads.@threads for idx in eachindex(plan.degrees)
+            dim_src = plan.dims_src[idx]
+            dim_tgt = plan.dims_tgt[idx]
 
             if dim_src == 0 || dim_tgt == 0
                 maps[idx] = spzeros(K, dim_tgt, dim_src)
                 continue
             end
-
-            off_src = _tot_block_offsets(Rdom.DC, t)
-            off_tgt = _tot_block_offsets(Rcod.DC, t)
-
-            I = Int[]
-            J = Int[]
-            V = K[]
-
-            for ((a,b), col_off) in off_src
-                if !haskey(off_tgt, (a,b))
-                    continue
-                end
-                row_off = off_tgt[(a,b)]
-
-                ai_src = a - Rdom.DC.amin + 1
-                bi_src = b - Rdom.DC.bmin + 1
-                ai_tgt = a - Rcod.DC.amin + 1
-                bi_tgt = b - Rcod.DC.bmin + 1
-
-                if ai_src < 1 || ai_src > size(Rdom.DC.dims,1) || bi_src < 1 || bi_src > size(Rdom.DC.dims,2)
-                    continue
-                end
-                if ai_tgt < 1 || ai_tgt > size(Rcod.DC.dims,1) || bi_tgt < 1 || bi_tgt > size(Rcod.DC.dims,2)
-                    continue
-                end
-
-                dim_block_src = Rdom.DC.dims[ai_src, bi_src]
-                dim_block_tgt = Rcod.DC.dims[ai_tgt, bi_tgt]
-                if dim_block_src == 0 || dim_block_tgt == 0
-                    continue
-                end
-
-                # In RHom, the first index is the cochain degree a, so use p = a.
-                p = a
-                fp = _map(f, p)
-
-                Hdom = Rdom.homs[ai_src, bi_src]
-                Hcod = Rcod.homs[ai_tgt, bi_tgt]
-                F = precompose_matrix_cached(Hdom, Hcod, fp; cache=cache)
-
-                # Avoid allocating sparse(F) just to call findnz; append triplets directly.
-                _append_scaled_triplets!(I, J, V, F, row_off - 1, col_off - 1)
+            dplan = plan.degrees[idx]
+            I = Int[]; J = Int[]; V = K[]
+            for k in eachindex(dplan.pdeg)
+                F = precompose_matrix_cached(dplan.Hdom[k], dplan.Hcod[k], _map(f, dplan.pdeg[k]); cache=cache)
+                _append_scaled_triplets!(I, J, V, F, dplan.row_off[k], dplan.col_off[k])
             end
 
             maps[idx] = sparse(I, J, V, dim_tgt, dim_src)
         end
     else
-        for t in tmin:tmax
-            dim_src = _cc_dim_at(tot_src, t)
-            dim_tgt = _cc_dim_at(tot_tgt, t)
+        for idx in eachindex(plan.degrees)
+            dim_src = plan.dims_src[idx]
+            dim_tgt = plan.dims_tgt[idx]
 
             if dim_src == 0 || dim_tgt == 0
-                maps[t - tmin + 1] = spzeros(K, dim_tgt, dim_src)
+                maps[idx] = spzeros(K, dim_tgt, dim_src)
                 continue
             end
-
-            off_src = _tot_block_offsets(Rdom.DC, t)
-            off_tgt = _tot_block_offsets(Rcod.DC, t)
-
-            I = Int[]
-            J = Int[]
-            V = K[]
-
-            for ((a,b), col_off) in off_src
-                if !haskey(off_tgt, (a,b))
-                    continue
-                end
-                row_off = off_tgt[(a,b)]
-
-                ai_src = a - Rdom.DC.amin + 1
-                bi_src = b - Rdom.DC.bmin + 1
-                ai_tgt = a - Rcod.DC.amin + 1
-                bi_tgt = b - Rcod.DC.bmin + 1
-
-                if ai_src < 1 || ai_src > size(Rdom.DC.dims,1) || bi_src < 1 || bi_src > size(Rdom.DC.dims,2)
-                    continue
-                end
-                if ai_tgt < 1 || ai_tgt > size(Rcod.DC.dims,1) || bi_tgt < 1 || bi_tgt > size(Rcod.DC.dims,2)
-                    continue
-                end
-
-                dim_block_src = Rdom.DC.dims[ai_src, bi_src]
-                dim_block_tgt = Rcod.DC.dims[ai_tgt, bi_tgt]
-                if dim_block_src == 0 || dim_block_tgt == 0
-                    continue
-                end
-
-                # In RHom, the first index is the cochain degree a, so use p = a.
-                p = a
-                fp = _map(f, p)
-
-                Hdom = Rdom.homs[ai_src, bi_src]
-                Hcod = Rcod.homs[ai_tgt, bi_tgt]
-                F = precompose_matrix_cached(Hdom, Hcod, fp; cache=cache)
-
-                # Avoid allocating sparse(F) just to call findnz; append triplets directly.
-                _append_scaled_triplets!(I, J, V, F, row_off - 1, col_off - 1)
+            dplan = plan.degrees[idx]
+            I = Int[]; J = Int[]; V = K[]
+            for k in eachindex(dplan.pdeg)
+                F = precompose_matrix_cached(dplan.Hdom[k], dplan.Hcod[k], _map(f, dplan.pdeg[k]); cache=cache)
+                _append_scaled_triplets!(I, J, V, F, dplan.row_off[k], dplan.col_off[k])
             end
 
-            maps[t - tmin + 1] = sparse(I, J, V, dim_tgt, dim_src)
+            maps[idx] = sparse(I, J, V, dim_tgt, dim_src)
         end
     end
 
@@ -1136,9 +1890,9 @@ function rhom_map_first(
     cache::Union{Nothing,HomSystemCache}=nothing,
     threads::Bool = (Threads.nthreads() > 1),
 ) where {K}
-    resN = isnothing(resN) ? injective_resolution(N, ResolutionOptions(maxlen=maxlen)) : resN
-    Rdom = RHomComplex(f.D, N; maxlen=maxlen, resN=resN, cache=cache, threads=threads)
-    Rcod = RHomComplex(f.C, N; maxlen=maxlen, resN=resN, cache=cache, threads=threads)
+    resN = isnothing(resN) ? _injective_resolution_cached(N, maxlen, cache) : resN
+    Rdom = _rhom_complex_cached(f.D, N; maxlen=maxlen, resN=resN, cache=cache, threads=threads)
+    Rcod = _rhom_complex_cached(f.C, N; maxlen=maxlen, resN=resN, cache=cache, threads=threads)
     return rhom_map_first(f, Rdom, Rcod; check=check, cache=cache, threads=threads)
 end
 
@@ -1151,7 +1905,7 @@ function rhom_map_first(
     cache::Union{Nothing,HomSystemCache}=nothing,
     threads::Bool = (Threads.nthreads() > 1),
 ) where {K}
-    return rhom_map_first(f, IndicatorResolutions.pmodule_from_fringe(H);
+    return rhom_map_first(f, _pmodule_from_fringe_cached(H, cache);
         maxlen=maxlen, resN=resN, check=check, cache=cache, threads=threads)
 end
 
@@ -1271,92 +2025,33 @@ function rhom_map_second(
     @assert length(Rsrc.resN.d_mor) == length(Rtgt.resN.d_mor)
 
     # Canonical lift between injective resolutions.
-    phis = lift_injective_chainmap(g, Rsrc.resN, Rtgt.resN; check=check)
+    phis = _lift_injective_chainmap_cached(g, Rsrc.resN, Rtgt.resN; check=check, cache=cache)
+    plan = _rhom_map_second_plan(Rsrc, Rtgt, cache)
+    maps = Vector{SparseMatrixCSC{K, Int}}(undef, length(plan.degrees))
 
-    maps = Vector{SparseMatrixCSC{K, Int}}(undef, Rsrc.tot.tmax - Rsrc.tot.tmin + 1)
-
-    if threads && Threads.nthreads() > 1 && (Rsrc.tot.tmax >= Rsrc.tot.tmin)
-        Threads.@threads for idx in 1:(Rsrc.tot.tmax - Rsrc.tot.tmin + 1)
-            t = Rsrc.tot.tmin + idx - 1
-            offsets_src = _tot_block_offsets(Rsrc.DC, t)
-            offsets_tgt = _tot_block_offsets(Rtgt.DC, t)
-
-            dim_src = Rsrc.tot.dims[idx]
-            dim_tgt = Rtgt.tot.dims[idx]
-
-            I = Int[]
-            J = Int[]
-            V = K[]
-
-            # Blocks are indexed by (A,B). For RHom, B is injective resolution degree.
-            for ((A, B), off_tgt) in offsets_tgt
-                if !haskey(offsets_src, (A, B))
-                    continue
-                end
-                off_src = offsets_src[(A, B)]
-
-                ia_src = A - Rsrc.DC.amin + 1
-                ib_src = B - Rsrc.DC.bmin + 1
-                ia_tgt = A - Rtgt.DC.amin + 1
-                ib_tgt = B - Rtgt.DC.bmin + 1
-
-                if ia_src < 1 || ia_src > size(Rsrc.DC.dims, 1) || ib_src < 1 || ib_src > size(Rsrc.DC.dims, 2)
-                    continue
-                end
-                if ia_tgt < 1 || ia_tgt > size(Rtgt.DC.dims, 1) || ib_tgt < 1 || ib_tgt > size(Rtgt.DC.dims, 2)
-                    continue
-                end
-                if Rsrc.DC.dims[ia_src, ib_src] == 0 || Rtgt.DC.dims[ia_tgt, ib_tgt] == 0
-                    continue
-                end
-
-                # Postcompose on Hom(C^p, E^B).
-                Mb = postcompose_matrix_cached(Rtgt.homs[ia_tgt, ib_tgt], Rsrc.homs[ia_src, ib_src], phis[B + 1]; cache=cache)
-                _append_scaled_triplets!(I, J, V, Mb, off_tgt - 1, off_src - 1)
+    if threads && Threads.nthreads() > 1 && (plan.tmax >= plan.tmin)
+        Threads.@threads for idx in eachindex(plan.degrees)
+            dim_src = plan.dims_src[idx]
+            dim_tgt = plan.dims_tgt[idx]
+            dplan = plan.degrees[idx]
+            I = Int[]; J = Int[]; V = K[]
+            for k in eachindex(dplan.ideg)
+                Mb = postcompose_matrix_cached(dplan.Htgt[k], dplan.Hsrc[k], phis[dplan.ideg[k] + 1]; cache=cache)
+                _append_scaled_triplets!(I, J, V, Mb, dplan.row_off[k], dplan.col_off[k])
             end
-
             maps[idx] = sparse(I, J, V, dim_tgt, dim_src)
         end
     else
-        for t in Rsrc.tot.tmin:Rsrc.tot.tmax
-            offsets_src = _tot_block_offsets(Rsrc.DC, t)
-            offsets_tgt = _tot_block_offsets(Rtgt.DC, t)
-
-            dim_src = Rsrc.tot.dims[t - Rsrc.tot.tmin + 1]
-            dim_tgt = Rtgt.tot.dims[t - Rtgt.tot.tmin + 1]
-
-            I = Int[]
-            J = Int[]
-            V = K[]
-
-            # Blocks are indexed by (A,B). For RHom, B is injective resolution degree.
-            for ((A, B), off_tgt) in offsets_tgt
-                if !haskey(offsets_src, (A, B))
-                    continue
-                end
-                off_src = offsets_src[(A, B)]
-
-                ia_src = A - Rsrc.DC.amin + 1
-                ib_src = B - Rsrc.DC.bmin + 1
-                ia_tgt = A - Rtgt.DC.amin + 1
-                ib_tgt = B - Rtgt.DC.bmin + 1
-
-                if ia_src < 1 || ia_src > size(Rsrc.DC.dims, 1) || ib_src < 1 || ib_src > size(Rsrc.DC.dims, 2)
-                    continue
-                end
-                if ia_tgt < 1 || ia_tgt > size(Rtgt.DC.dims, 1) || ib_tgt < 1 || ib_tgt > size(Rtgt.DC.dims, 2)
-                    continue
-                end
-                if Rsrc.DC.dims[ia_src, ib_src] == 0 || Rtgt.DC.dims[ia_tgt, ib_tgt] == 0
-                    continue
-                end
-
-                # Postcompose on Hom(C^p, E^B).
-                Mb = postcompose_matrix_cached(Rtgt.homs[ia_tgt, ib_tgt], Rsrc.homs[ia_src, ib_src], phis[B + 1]; cache=cache)
-                _append_scaled_triplets!(I, J, V, Mb, off_tgt - 1, off_src - 1)
+        for idx in eachindex(plan.degrees)
+            dim_src = plan.dims_src[idx]
+            dim_tgt = plan.dims_tgt[idx]
+            dplan = plan.degrees[idx]
+            I = Int[]; J = Int[]; V = K[]
+            for k in eachindex(dplan.ideg)
+                Mb = postcompose_matrix_cached(dplan.Htgt[k], dplan.Hsrc[k], phis[dplan.ideg[k] + 1]; cache=cache)
+                _append_scaled_triplets!(I, J, V, Mb, dplan.row_off[k], dplan.col_off[k])
             end
-
-            maps[t - Rsrc.tot.tmin + 1] = sparse(I, J, V, dim_tgt, dim_src)
+            maps[idx] = sparse(I, J, V, dim_tgt, dim_src)
         end
     end
 
@@ -1374,15 +2069,19 @@ function rhom_map_second(
     cache::Union{Nothing,HomSystemCache}=nothing,
     threads::Bool = (Threads.nthreads() > 1),
 ) where {K}
-    Nsrc = IndicatorResolutions.pmodule_from_fringe(Hsrc)
-    Ntgt = IndicatorResolutions.pmodule_from_fringe(Htgt)
-    if g.dom !== Nsrc || g.cod !== Ntgt
-        g = PMorphism{K}(Nsrc, Ntgt, g.comps)
+    Nsrc = _pmodule_from_fringe_cached(Hsrc, cache)
+    Ntgt = (Hsrc === Htgt) ? Nsrc : _pmodule_from_fringe_cached(Htgt, cache)
+    g = _rebase_pmodule_morphism_cached(g, Nsrc, Ntgt, cache)
+    resNsrc = isnothing(resN) ? _injective_resolution_cached(Nsrc, maxlen, cache) : resN
+    resNtgt = if Ntgt === Nsrc
+        resNsrc
+    elseif isnothing(resN)
+        _injective_resolution_cached(Ntgt, maxlen, cache)
+    else
+        resN
     end
-    resNsrc = isnothing(resN) ? injective_resolution(Nsrc, ResolutionOptions(maxlen=maxlen)) : resN
-    resNtgt = isnothing(resN) ? injective_resolution(Ntgt, ResolutionOptions(maxlen=maxlen)) : resN
-    Rsrc = RHomComplex(C, Nsrc; maxlen=maxlen, resN=resNsrc, cache=cache, threads=threads)
-    Rtgt = RHomComplex(C, Ntgt; maxlen=maxlen, resN=resNtgt, cache=cache, threads=threads)
+    Rsrc = _rhom_complex_cached(C, Nsrc; maxlen=maxlen, resN=resNsrc, cache=cache, threads=threads)
+    Rtgt = Ntgt === Nsrc ? Rsrc : _rhom_complex_cached(C, Ntgt; maxlen=maxlen, resN=resNtgt, cache=cache, threads=threads)
     return rhom_map_second(g, Rsrc, Rtgt; check=check, cache=cache, threads=threads)
 end
 
@@ -1409,16 +2108,93 @@ struct HyperExtSpace{K}
     cohom
 end
 
+"""
+    source_module(H::HyperExtSpace)
+    target_module(H::HyperExtSpace)
+
+Return the source module complex and coefficient module underlying a
+[`HyperExtSpace`](@ref).
+
+These are the preferred semantic accessors when relating a computed hyper-Ext
+space back to its mathematical inputs.
+"""
+@inline source_module(H::HyperExtSpace) = H.R.C
+@inline target_module(H::HyperExtSpace) = H.R.N
+
+"""
+    hyperExt(C, N; maxlen=3, ...) -> HyperExtSpace
+
+Compute the graded hyper-Ext object `Ext^*(C, N)` attached to a module complex
+`C` and a coefficient module `N`.
+
+The returned [`HyperExtSpace`](@ref) is already the cheap-first surface:
+inspect it with [`hyperext_summary`](@ref), [`nonzero_degrees`](@ref), or
+[`degree_dimensions`](@ref) before asking for heavier basis or representative
+data degree-by-degree.
+"""
 function hyperExt(C::ModuleCochainComplex{K}, N::PModule{K}; kwargs...) where {K}
-    R = RHomComplex(C,N; kwargs...)
-    return HyperExtSpace{K}(R, cohomology_data(R.tot))
+    return _hyperext_cached(C, N; kwargs...)
 end
 
 function hyperExt(C::ModuleCochainComplex{K}, H::FF.FringeModule{K}; kwargs...) where {K}
-    return hyperExt(C, IR.pmodule_from_fringe(H); kwargs...)
+    return _hyperext_cached(C, H; kwargs...)
 end
 
 dim(H::HyperExtSpace, t::Int) = (t < H.R.tot.tmin || t > H.R.tot.tmax) ? 0 : H.cohom[t - H.R.tot.tmin + 1].dimH
+
+"""
+    nonzero_degrees(H::HyperExtSpace)
+    degree_dimensions(H::HyperExtSpace)
+    total_dimension(H::HyperExtSpace)
+
+Cheap scalar accessors for a [`HyperExtSpace`](@ref).
+
+- `nonzero_degrees` returns the cohomological degrees supporting nonzero
+  hyper-Ext.
+- `degree_dimensions` returns the degree-to-dimension table on the same support.
+- `total_dimension` returns the sum of those dimensions.
+
+These are the preferred notebook/REPL helpers before asking for bases or
+representatives in individual degrees.
+"""
+@inline function nonzero_degrees(H::HyperExtSpace)
+    return [t for t in degree_range(H) if dim(H, t) != 0]
+end
+
+@inline function degree_dimensions(H::HyperExtSpace)
+    return Dict(t => dim(H, t) for t in degree_range(H) if dim(H, t) != 0)
+end
+
+@inline total_dimension(H::HyperExtSpace) = sum(values(degree_dimensions(H)))
+
+@inline function describe(H::HyperExtSpace)
+    return (
+        kind=:hyperext_space,
+        field=target_module(H).field,
+        source_degree_range=degree_range(source_module(H)),
+        degree_range=degree_range(H),
+        nonzero_degrees=Tuple(nonzero_degrees(H)),
+        degree_dimensions=degree_dimensions(H),
+        total_dimension=total_dimension(H),
+    )
+end
+
+function Base.show(io::IO, H::HyperExtSpace)
+    d = describe(H)
+    print(io, "HyperExtSpace(nonzero_degrees=", repr(d.nonzero_degrees),
+          ", total_dimension=", d.total_dimension, ")")
+end
+
+function Base.show(io::IO, ::MIME"text/plain", H::HyperExtSpace)
+    d = describe(H)
+    print(io, "HyperExtSpace",
+          "\n  field: ", d.field,
+          "\n  source_degree_range: ", repr(d.source_degree_range),
+          "\n  degree_range: ", repr(d.degree_range),
+          "\n  nonzero_degrees: ", repr(d.nonzero_degrees),
+          "\n  degree_dimensions: ", repr(d.degree_dimensions),
+          "\n  total_dimension: ", d.total_dimension)
+end
 
 """
     induced_map_on_cohomology(f, HCdom, HCcod, t)
@@ -1511,6 +2287,52 @@ struct DerivedTensorComplex{K}
     resR
     DC::DoubleComplex{K}
     tot::CochainComplex{K}
+end
+
+"""
+    source_module(T::DerivedTensorComplex)
+    target_module(T::DerivedTensorComplex)
+    underlying_complex(T::DerivedTensorComplex)
+
+Semantic accessors for a [`DerivedTensorComplex`](@ref).
+
+- `source_module(T)` returns the right module supplying the projective
+  resolution
+- `target_module(T)` returns the module cochain complex
+- `underlying_complex(T)` returns the total cochain complex computing the
+  derived tensor product
+"""
+@inline source_module(T::DerivedTensorComplex) = T.Rop
+@inline target_module(T::DerivedTensorComplex) = T.C
+@inline underlying_complex(T::DerivedTensorComplex) = T.tot
+
+@inline function describe(T::DerivedTensorComplex)
+    return (
+        kind=:derived_tensor_complex,
+        field=T.Rop.field,
+        source_total_dim=sum(T.Rop.dims),
+        target_degree_range=degree_range(T.C),
+        total_degree_range=T.tot.tmin:T.tot.tmax,
+        bicomplex_a_range=T.DC.amin:T.DC.amax,
+        bicomplex_b_range=T.DC.bmin:T.DC.bmax,
+    )
+end
+
+function Base.show(io::IO, T::DerivedTensorComplex)
+    d = describe(T)
+    print(io, "DerivedTensorComplex(total_degrees=", repr(d.total_degree_range),
+          ", source_total_dim=", d.source_total_dim, ")")
+end
+
+function Base.show(io::IO, ::MIME"text/plain", T::DerivedTensorComplex)
+    d = describe(T)
+    print(io, "DerivedTensorComplex",
+          "\n  field: ", d.field,
+          "\n  source_total_dim: ", d.source_total_dim,
+          "\n  target_degree_range: ", repr(d.target_degree_range),
+          "\n  total_degree_range: ", repr(d.total_degree_range),
+          "\n  bicomplex_a_range: ", repr(d.bicomplex_a_range),
+          "\n  bicomplex_b_range: ", repr(d.bicomplex_b_range))
 end
 
 function DerivedTensorComplex(
@@ -1648,8 +2470,208 @@ function DerivedTensorComplex(
     return DerivedTensorComplex{K}(Rop, C, resR, DC, tot)
 end
 
+function _build_tensor_map_first_plan(Tdom::DerivedTensorComplex{K},
+                                      Tcod::DerivedTensorComplex{K}) where {K}
+    tmin = min(Tdom.tot.tmin, Tcod.tot.tmin)
+    tmax = max(Tdom.tot.tmax, Tcod.tot.tmax)
+    degrees = Vector{_TensorMapFirstDegreePlan{K}}(undef, tmax - tmin + 1)
+    dims_src = Vector{Int}(undef, length(degrees))
+    dims_tgt = Vector{Int}(undef, length(degrees))
+    for idx in eachindex(degrees)
+        t = tmin + idx - 1
+        dims_src[idx] = _cc_dim_at(Tdom.tot, t)
+        dims_tgt[idx] = _cc_dim_at(Tcod.tot, t)
+        off_dom = _tot_block_offsets(Tdom.DC, t)
+        off_cod = _tot_block_offsets(Tcod.DC, t)
+        row_off = Int[]; col_off = Int[]; adeg = Int[]
+        terms = PModule{K}[]
+        dom_gens = Vector{Vector{Int}}()
+        cod_gens = Vector{Vector{Int}}()
+        dom_offsets = Vector{Vector{Int}}()
+        cod_offsets = Vector{Vector{Int}}()
+        for (key, src_off) in off_dom
+            haskey(off_cod, key) || continue
+            tgt_off = off_cod[key]
+            A, p = key
+            a = -A
+            (a < 0 || a > (length(Tdom.resR.Pmods) - 1) || a > (length(Tcod.resR.Pmods) - 1)) && continue
+            Mp = _term(Tdom.C, p)
+            gens_dom = Tdom.resR.gens[a + 1]
+            gens_cod = Tcod.resR.gens[a + 1]
+            push!(row_off, tgt_off - 1)
+            push!(col_off, src_off - 1)
+            push!(adeg, a)
+            push!(terms, Mp)
+            push!(dom_gens, gens_dom)
+            push!(cod_gens, gens_cod)
+            push!(dom_offsets, _offs_for_gens(Mp, gens_dom))
+            push!(cod_offsets, _offs_for_gens(Mp, gens_cod))
+        end
+        degrees[idx] = _TensorMapFirstDegreePlan{K}(row_off, col_off, adeg, terms, dom_gens, cod_gens, dom_offsets, cod_offsets)
+    end
+    return _TensorMapPlan{_TensorMapFirstDegreePlan{K}}(tmin, tmax, dims_src, dims_tgt, degrees)
+end
+
+@inline function _tensor_map_first_plan(Tdom::DerivedTensorComplex{K},
+                                        Tcod::DerivedTensorComplex{K},
+                                        ::Nothing) where {K}
+    return _build_tensor_map_first_plan(Tdom, Tcod)
+end
+
+@inline function _tensor_map_first_plan(Tdom::DerivedTensorComplex{K},
+                                        Tcod::DerivedTensorComplex{K},
+                                        cache::HomSystemCache) where {K}
+    return _pair_plan_cached!(_DTENSOR_MAP_FIRST_PLAN_CACHES, _DTENSOR_MAP_FIRST_PLAN_LOCK, cache, Tdom, Tcod) do
+        _build_tensor_map_first_plan(Tdom, Tcod)
+    end::_TensorMapPlan{_TensorMapFirstDegreePlan{K}}
+end
+
+@inline _dtensor_map_first_cache_key(f, Tdom, Tcod) =
+    (UInt(objectid(f)), UInt(objectid(Tdom)), UInt(objectid(Tcod)))
+
+@inline function _derived_tensor_map_first_cached(
+    builder::Function,
+    f,
+    Tdom::DerivedTensorComplex{K},
+    Tcod::DerivedTensorComplex{K},
+    ::Nothing,
+) where {K}
+    return builder()
+end
+
+function _derived_tensor_map_first_cached(
+    builder::Function,
+    f,
+    Tdom::DerivedTensorComplex{K},
+    Tcod::DerivedTensorComplex{K},
+    cache::HomSystemCache,
+) where {K}
+    return lock(_DTENSOR_MAP_FIRST_RESULT_LOCK) do
+        shard = get!(_DTENSOR_MAP_FIRST_RESULT_CACHES, cache) do
+            Dict{NTuple{3, UInt}, Any}()
+        end
+        key = _dtensor_map_first_cache_key(f, Tdom, Tcod)
+        cached = get(shard, key, nothing)
+        cached === nothing || return cached::CochainMap{K}
+        F = builder()
+        shard[key] = F
+        return F
+    end
+end
+
+function _build_tensor_map_second_plan(Tsrc::DerivedTensorComplex{K},
+                                       Ttgt::DerivedTensorComplex{K}) where {K}
+    tmin = min(Tsrc.tot.tmin, Ttgt.tot.tmin)
+    tmax = max(Tsrc.tot.tmax, Ttgt.tot.tmax)
+    degrees = Vector{_TensorMapSecondDegreePlan{K}}(undef, tmax - tmin + 1)
+    dims_src = Vector{Int}(undef, length(degrees))
+    dims_tgt = Vector{Int}(undef, length(degrees))
+    for idx in eachindex(degrees)
+        t = tmin + idx - 1
+        dims_src[idx] = _cc_dim_at(Tsrc.tot, t)
+        dims_tgt[idx] = _cc_dim_at(Ttgt.tot, t)
+        off_src = _tot_block_offsets(Tsrc.DC, t)
+        off_tgt = _tot_block_offsets(Ttgt.DC, t)
+        block_pdeg = Int[]
+        block_u = Int[]
+        block_row0 = Int[]
+        block_col0 = Int[]
+        col_owner = zeros(Int, dims_src[idx])
+        col_local = zeros(Int, dims_src[idx])
+        block_id = 0
+        for (key, src_off) in off_src
+            haskey(off_tgt, key) || continue
+            tgt_off = off_tgt[key]
+            A, p = key
+            a = -A
+            (a < 0 || a > (length(Tsrc.resR.Pmods) - 1)) && continue
+            Mp = _term(Tsrc.C, p)
+            Mp1 = _term(Ttgt.C, p)
+            gs = Tsrc.resR.gens[a + 1]
+            offs_src = _offs_for_gens(Mp, gs)
+            offs_tgt = _offs_for_gens(Mp1, gs)
+            @inbounds for (i, u) in enumerate(gs)
+                block_id += 1
+                src_dim = Mp.dims[u]
+                col0 = src_off - 1 + offs_src[i]
+                push!(block_pdeg, p)
+                push!(block_u, u)
+                push!(block_row0, tgt_off - 1 + offs_tgt[i])
+                push!(block_col0, col0)
+                for loc in 1:src_dim
+                    col_owner[col0 + loc] = block_id
+                    col_local[col0 + loc] = loc
+                end
+            end
+        end
+        degrees[idx] = _TensorMapSecondDegreePlan{K}(block_pdeg, block_u, block_row0, block_col0, col_owner, col_local)
+    end
+    return _TensorMapPlan{_TensorMapSecondDegreePlan{K}}(tmin, tmax, dims_src, dims_tgt, degrees)
+end
+
+@inline function _tensor_map_second_plan(Tsrc::DerivedTensorComplex{K},
+                                         Ttgt::DerivedTensorComplex{K},
+                                         ::Nothing) where {K}
+    return _build_tensor_map_second_plan(Tsrc, Ttgt)
+end
+
+@inline function _tensor_map_second_plan(Tsrc::DerivedTensorComplex{K},
+                                         Ttgt::DerivedTensorComplex{K},
+                                         cache::HomSystemCache) where {K}
+    if _tensor_map_second_plan_work(Tsrc, Ttgt) < _DTENSOR_MAP_SECOND_CACHE_MIN_WORK[]
+        return _build_tensor_map_second_plan(Tsrc, Ttgt)
+    end
+    return _pair_plan_cached!(_DTENSOR_MAP_SECOND_PLAN_CACHES, _DTENSOR_MAP_SECOND_PLAN_LOCK, cache, Tsrc, Ttgt) do
+        _build_tensor_map_second_plan(Tsrc, Ttgt)
+    end::_TensorMapPlan{_TensorMapSecondDegreePlan{K}}
+end
+
+@inline _dtensor_map_second_cache_key(g, Tsrc, Ttgt) =
+    (UInt(objectid(g)), UInt(objectid(Tsrc)), UInt(objectid(Ttgt)))
+
+@inline function _derived_tensor_map_second_cached(
+    builder::Function,
+    g,
+    Tsrc::DerivedTensorComplex{K},
+    Ttgt::DerivedTensorComplex{K},
+    ::Nothing,
+) where {K}
+    return builder()
+end
+
+function _derived_tensor_map_second_cached(
+    builder::Function,
+    g,
+    Tsrc::DerivedTensorComplex{K},
+    Ttgt::DerivedTensorComplex{K},
+    cache::HomSystemCache,
+) where {K}
+    return lock(_DTENSOR_MAP_SECOND_RESULT_LOCK) do
+        shard = get!(_DTENSOR_MAP_SECOND_RESULT_CACHES, cache) do
+            Dict{NTuple{3, UInt}, Any}()
+        end
+        key = _dtensor_map_second_cache_key(g, Tsrc, Ttgt)
+        cached = get(shard, key, nothing)
+        cached === nothing || return cached::CochainMap{K}
+        G = builder()
+        shard[key] = G
+        return G
+    end
+end
 
 
+
+"""
+    DerivedTensor(Rop, C; maxlen=3, ...) -> CochainComplex
+
+Return the total cochain complex computing the derived tensor product
+`Rop tensor^L C`.
+
+Use this when the chain-level total complex is the real target. If you also
+want the underlying bicomplex bookkeeping and projective-resolution data, use
+[`DerivedTensorComplex`](@ref). For cheap inspection before touching cochains,
+prefer [`derived_tensor_summary`](@ref) on the container form.
+"""
 DerivedTensor(Rop::PModule{K}, C::ModuleCochainComplex{K}; kwargs...) where {K} =
     DerivedTensorComplex(Rop, C; kwargs...).tot
 
@@ -1658,6 +2680,30 @@ struct HyperTorSpace{K}
     cohom
 end
 
+"""
+    source_module(H::HyperTorSpace)
+    target_module(H::HyperTorSpace)
+
+Return the right module and module complex underlying a
+[`HyperTorSpace`](@ref).
+
+These accessors provide the semantic inputs to the hyper-Tor computation
+without forcing users into raw field inspection.
+"""
+@inline source_module(H::HyperTorSpace) = H.T.Rop
+@inline target_module(H::HyperTorSpace) = H.T.C
+
+"""
+    hyperTor(Rop, C; maxlen=3, ...) -> HyperTorSpace
+
+Compute the graded hyper-Tor object `Tor_*(Rop, C)` attached to a right module
+and a module cochain complex.
+
+The returned [`HyperTorSpace`](@ref) is already the cheap-first exploration
+surface. Start with [`hypertor_summary`](@ref), [`nonzero_degrees`](@ref), and
+[`degree_dimensions`](@ref) before requesting bases or representatives in
+specific Tor degrees.
+"""
 function hyperTor(Rop::PModule{K}, C::ModuleCochainComplex{K}; kwargs...) where {K}
     T = DerivedTensorComplex(Rop,C; kwargs...)
     return HyperTorSpace{K}(T, cohomology_data(T.tot))
@@ -1714,6 +2760,350 @@ function degree_range(H::HyperTorSpace)
         return 0:-1  # empty range
     end
     return n_lo:n_hi
+end
+
+"""
+    nonzero_degrees(H::HyperTorSpace)
+    degree_dimensions(H::HyperTorSpace)
+    total_dimension(H::HyperTorSpace)
+
+Cheap scalar accessors for a [`HyperTorSpace`](@ref).
+
+- `nonzero_degrees` returns the homological degrees supporting nonzero Tor.
+- `degree_dimensions` returns the Tor-dimension table on that support.
+- `total_dimension` returns the sum of those dimensions.
+
+These helpers are the preferred first stop in notebooks and REPL sessions
+before materializing basis or representative data.
+"""
+@inline function nonzero_degrees(H::HyperTorSpace)
+    return [n for n in degree_range(H) if dim(H, n) != 0]
+end
+
+@inline function degree_dimensions(H::HyperTorSpace)
+    return Dict(n => dim(H, n) for n in degree_range(H) if dim(H, n) != 0)
+end
+
+@inline total_dimension(H::HyperTorSpace) = sum(values(degree_dimensions(H)))
+
+@inline function describe(H::HyperTorSpace)
+    return (
+        kind=:hypertor_space,
+        field=source_module(H).field,
+        source_total_dim=sum(source_module(H).dims),
+        target_degree_range=degree_range(target_module(H)),
+        degree_range=degree_range(H),
+        nonzero_degrees=Tuple(nonzero_degrees(H)),
+        degree_dimensions=degree_dimensions(H),
+        total_dimension=total_dimension(H),
+    )
+end
+
+function Base.show(io::IO, H::HyperTorSpace)
+    d = describe(H)
+    print(io, "HyperTorSpace(nonzero_degrees=", repr(d.nonzero_degrees),
+          ", total_dimension=", d.total_dimension, ")")
+end
+
+function Base.show(io::IO, ::MIME"text/plain", H::HyperTorSpace)
+    d = describe(H)
+    print(io, "HyperTorSpace",
+          "\n  field: ", d.field,
+          "\n  source_total_dim: ", d.source_total_dim,
+          "\n  target_degree_range: ", repr(d.target_degree_range),
+          "\n  degree_range: ", repr(d.degree_range),
+          "\n  nonzero_degrees: ", repr(d.nonzero_degrees),
+          "\n  degree_dimensions: ", repr(d.degree_dimensions),
+          "\n  total_dimension: ", d.total_dimension)
+end
+
+"""
+    module_complex_summary(C)
+    module_map_summary(f)
+    module_homotopy_summary(h)
+    triangle_summary(T)
+    rhom_summary(R)
+    hyperext_summary(H)
+    derived_tensor_summary(T)
+    hypertor_summary(H)
+
+Owner-local summary aliases for the main user-visible objects in
+`ModuleComplexes`.
+
+Each helper returns the same structured summary as `describe(...)`, but under a
+subsystem-specific name that is easier to discover from notebook and REPL
+workflows.
+
+Typical cheap-first workflow
+```julia
+# After building modules M and N on the same finite poset:
+C = ModuleCochainComplex([M, M], [zero_morphism(M, M)]; tmin=0)
+module_complex_summary(C)
+
+H0 = cohomology_module(C, 0)
+R = RHomComplex(C, N; maxlen=1)
+rhom_summary(R)
+
+HX = hyperExt(C, N; maxlen=1)
+hyperext_summary(HX)
+```
+"""
+@inline module_complex_summary(C::ModuleCochainComplex) = describe(C)
+@inline module_map_summary(f::ModuleCochainMap) = describe(f)
+@inline module_homotopy_summary(H::ModuleCochainHomotopy) = describe(H)
+@inline triangle_summary(T::ModuleDistinguishedTriangle) = describe(T)
+@inline rhom_summary(R::RHomComplex) = describe(R)
+@inline hyperext_summary(H::HyperExtSpace) = describe(H)
+@inline derived_tensor_summary(T::DerivedTensorComplex) = describe(T)
+@inline hypertor_summary(H::HyperTorSpace) = describe(H)
+
+@inline function _module_complex_structurally_equal(C::ModuleCochainComplex{K},
+                                                    D::ModuleCochainComplex{K}) where {K}
+    degree_range(C) == degree_range(D) || return false
+    length(C.terms) == length(D.terms) || return false
+    length(C.diffs) == length(D.diffs) || return false
+    for i in eachindex(C.terms)
+        _pmodule_equal(C.terms[i], D.terms[i]) || return false
+    end
+    for i in eachindex(C.diffs)
+        fi = C.diffs[i]
+        gi = D.diffs[i]
+        _pmodule_equal(fi.dom, gi.dom) || return false
+        _pmodule_equal(fi.cod, gi.cod) || return false
+        fi.comps == gi.comps || return false
+    end
+    return true
+end
+
+@inline function _double_complex_total_dims(DC::DoubleComplex)
+    tmin = DC.amin + DC.bmin
+    tmax = DC.amax + DC.bmax
+    dims = zeros(Int, tmax - tmin + 1)
+    @inbounds for a in DC.amin:DC.amax
+        ai = a - DC.amin + 1
+        for b in DC.bmin:DC.bmax
+            bi = b - DC.bmin + 1
+            dims[a + b - tmin + 1] += DC.dims[ai, bi]
+        end
+    end
+    return tmin, tmax, dims
+end
+
+"""
+    check_module_complex(C; throw=false) -> NamedTuple
+
+Validate a hand-built [`ModuleCochainComplex`](@ref).
+
+The report checks poset/field consistency across terms, differential
+domain/codomain compatibility, and the identity `d^(t+1) * d^t = 0`. Use
+`throw=true` when invalid complexes should raise immediately instead of
+returning a report.
+"""
+function check_module_complex(C::ModuleCochainComplex{K}; throw::Bool=false) where {K}
+    issues = String[]
+    Q = poset(C)
+    field = _field_of_complex(C)
+    for (i, M) in enumerate(C.terms)
+        M.Q === Q || push!(issues, "term $(i) lives over a different poset.")
+        M.field == field || push!(issues, "term $(i) uses a different coefficient field.")
+    end
+    for (i, d) in enumerate(C.diffs)
+        _pmodule_equal(d.dom, C.terms[i]) || push!(issues, "differential at degree $(C.tmin + i - 1) has wrong domain.")
+        _pmodule_equal(d.cod, C.terms[i + 1]) || push!(issues, "differential at degree $(C.tmin + i - 1) has wrong codomain.")
+    end
+    d_squared_zero = true
+    for i in 1:max(length(C.diffs) - 1, 0)
+        left = C.diffs[i]
+        right = C.diffs[i + 1]
+        for u in 1:nvertices(Q)
+            if right.comps[u] * left.comps[u] != zeros(K, size(right.comps[u], 1), size(left.comps[u], 2))
+                d_squared_zero = false
+                push!(issues, "d^(t+1) * d^t is nonzero at degree $(C.tmin + i - 1), vertex $u.")
+                break
+            end
+        end
+        d_squared_zero || break
+    end
+    valid = isempty(issues)
+    throw && !valid && _throw_invalid_module_complex(:check_module_complex, issues)
+    return _module_complex_report(:module_complex, valid;
+                                  degree_range=degree_range(C),
+                                  nterms=length(C.terms),
+                                  ndifferentials=length(C.diffs),
+                                  d_squared_zero=d_squared_zero,
+                                  issues=issues)
+end
+
+"""
+    check_module_complex_map(f; throw=false) -> NamedTuple
+
+Validate a hand-built [`ModuleCochainMap`](@ref).
+
+The report checks domain/codomain compatibility of the degreewise components and
+the chain-map identity `d_D * f = f * d_C`.
+"""
+function check_module_complex_map(f::ModuleCochainMap{K}; throw::Bool=false) where {K}
+    issues = String[]
+    Q = poset(f.C)
+    poset(f.D) === Q || push!(issues, "domain and codomain complexes live over different posets.")
+    for t in f.tmin:f.tmax
+        ft = _map(f, t)
+        _pmodule_equal(ft.dom, _term(f.C, t)) || push!(issues, "component f^$t has wrong domain.")
+        _pmodule_equal(ft.cod, _term(f.D, t)) || push!(issues, "component f^$t has wrong codomain.")
+    end
+    chain_map = true
+    for t in (f.tmin - 1):f.tmax
+        dD = _diff(f.D, t)
+        dC = _diff(f.C, t)
+        ft = _map(f, t)
+        ftp = _map(f, t + 1)
+        for u in 1:nvertices(Q)
+            if dD.comps[u] * ft.comps[u] != ftp.comps[u] * dC.comps[u]
+                chain_map = false
+                push!(issues, "chain-map identity fails at degree $t, vertex $u.")
+                break
+            end
+        end
+        chain_map || break
+    end
+    valid = isempty(issues)
+    throw && !valid && _throw_invalid_module_complex(:check_module_complex_map, issues)
+    return _module_complex_report(:module_cochain_map, valid;
+                                  degree_range=degree_range(f),
+                                  ncomponents=length(f.comps),
+                                  chain_map=chain_map,
+                                  issues=issues)
+end
+
+"""
+    check_module_homotopy(H; throw=false) -> NamedTuple
+
+Validate a hand-built [`ModuleCochainHomotopy`](@ref).
+
+The report checks source/target map compatibility, component endpoints, and the
+cochain-homotopy identity.
+"""
+function check_module_homotopy(H::ModuleCochainHomotopy{K}; throw::Bool=false) where {K}
+    issues = String[]
+    (H.f.C === H.g.C && H.f.D === H.g.D) || push!(issues, "source and target maps must share the same domain and codomain complexes.")
+    for t in H.tmin:H.tmax
+        ht = _hcomp(H, t)
+        _pmodule_equal(ht.dom, _term(H.f.C, t)) || push!(issues, "component h^$t has wrong domain.")
+        _pmodule_equal(ht.cod, _term(H.f.D, t - 1)) || push!(issues, "component h^$t has wrong codomain.")
+    end
+    homotopy_identity = is_cochain_homotopy(H)
+    homotopy_identity || push!(issues, "cochain-homotopy identity does not hold.")
+    valid = isempty(issues)
+    throw && !valid && _throw_invalid_module_complex(:check_module_homotopy, issues)
+    return _module_complex_report(:module_cochain_homotopy, valid;
+                                  degree_range=degree_range(H),
+                                  ncomponents=length(H.comps),
+                                  homotopy_identity=homotopy_identity,
+                                  issues=issues)
+end
+
+"""
+    check_module_triangle(T; throw=false) -> NamedTuple
+
+Validate a hand-built [`ModuleDistinguishedTriangle`](@ref).
+
+The report checks that the three structural maps have compatible sources and
+targets and that the stored cone/projection data matches the canonical mapping
+cone of the triangle morphism.
+"""
+function check_module_triangle(T::ModuleDistinguishedTriangle{K}; throw::Bool=false) where {K}
+    issues = String[]
+    objs = triangle_objects(T)
+    maps = triangle_maps(T)
+    source_target_ok = true
+    source(maps.morphism) === objs.source || (push!(issues, "triangle morphism has the wrong source complex."); source_target_ok = false)
+    target(maps.morphism) === objs.target || (push!(issues, "triangle morphism has the wrong target complex."); source_target_ok = false)
+    source(maps.inclusion) === objs.target || (push!(issues, "triangle inclusion has the wrong source complex."); source_target_ok = false)
+    target(maps.inclusion) === objs.cone || (push!(issues, "triangle inclusion has the wrong target complex."); source_target_ok = false)
+    source(maps.projection) === objs.cone || (push!(issues, "triangle projection has the wrong source complex."); source_target_ok = false)
+    expected_shift = shift(objs.source, 1)
+    projection_targets_shift = _module_complex_structurally_equal(target(maps.projection), expected_shift)
+    projection_targets_shift || push!(issues, "triangle projection must target the shift C[1].")
+    expected_cone = mapping_cone(maps.morphism)
+    cone_matches = _module_complex_structurally_equal(objs.cone, expected_cone)
+    cone_matches || push!(issues, "stored cone does not match mapping_cone(f).")
+    valid = isempty(issues)
+    throw && !valid && _throw_invalid_module_complex(:check_module_triangle, issues)
+    return _module_complex_report(:module_distinguished_triangle, valid;
+                                  source_degree_range=degree_range(objs.source),
+                                  target_degree_range=degree_range(objs.target),
+                                  cone_degree_range=degree_range(objs.cone),
+                                  source_target_ok=source_target_ok,
+                                  projection_targets_shift=projection_targets_shift,
+                                  cone_matches=cone_matches,
+                                  issues=issues)
+end
+
+"""
+    check_rhom_complex(R; throw=false) -> NamedTuple
+
+Validate a hand-built [`RHomComplex`](@ref).
+
+The report checks block-array shape compatibility with the source complex and
+injective resolution, plus total-complex degree and dimension consistency.
+"""
+function check_rhom_complex(R::RHomComplex{K}; throw::Bool=false) where {K}
+    issues = String[]
+    expected_shape = (length(R.C.terms), length(R.resN.Emods))
+    size(R.homs) == expected_shape || push!(issues, "homs has shape $(size(R.homs)), expected $expected_shape.")
+    size(R.DC.dims) == expected_shape || push!(issues, "bicomplex dims have shape $(size(R.DC.dims)), expected $expected_shape.")
+    R.DC.amin == 0 || push!(issues, "bicomplex amin must equal 0.")
+    R.DC.amax == maxdeg_of_complex(R.C) || push!(issues, "bicomplex amax must equal maxdeg_of_complex(C).")
+    R.DC.bmin == 0 || push!(issues, "bicomplex bmin must equal 0.")
+    R.DC.bmax == length(R.resN.Emods) - 1 || push!(issues, "bicomplex bmax must match the injective-resolution length.")
+    tmin, tmax, dims = _double_complex_total_dims(R.DC)
+    R.tot.tmin == tmin || push!(issues, "total complex tmin $(R.tot.tmin) does not match bicomplex total degree minimum $tmin.")
+    R.tot.tmax == tmax || push!(issues, "total complex tmax $(R.tot.tmax) does not match bicomplex total degree maximum $tmax.")
+    R.tot.dims == dims || push!(issues, "total complex dimensions do not match the bicomplex totals.")
+    block_dims_match = true
+    for ia in axes(R.homs, 1), ib in axes(R.homs, 2)
+        if dim(R.homs[ia, ib]) != R.DC.dims[ia, ib]
+            block_dims_match = false
+            push!(issues, "Hom block ($(ia), $(ib)) has dimension $(dim(R.homs[ia, ib])) but bicomplex stores $(R.DC.dims[ia, ib]).")
+            break
+        end
+    end
+    valid = isempty(issues)
+    throw && !valid && _throw_invalid_module_complex(:check_rhom_complex, issues)
+    return _module_complex_report(:rhom_complex, valid;
+                                  block_shape=size(R.homs),
+                                  total_degree_range=R.tot.tmin:R.tot.tmax,
+                                  block_dims_match=block_dims_match,
+                                  issues=issues)
+end
+
+"""
+    check_derived_tensor_complex(T; throw=false) -> NamedTuple
+
+Validate a hand-built [`DerivedTensorComplex`](@ref).
+
+The report checks bicomplex shape compatibility with the projective resolution
+and source complex, plus total-complex degree and dimension consistency.
+"""
+function check_derived_tensor_complex(T::DerivedTensorComplex{K}; throw::Bool=false) where {K}
+    issues = String[]
+    expected_a = -(length(T.resR.gens) - 1):0
+    T.DC.amin:T.DC.amax == expected_a || push!(issues, "bicomplex a-range $(T.DC.amin:T.DC.amax) does not match projective-resolution length $(expected_a).")
+    T.DC.bmin == T.C.tmin || push!(issues, "bicomplex bmin $(T.DC.bmin) must equal the source complex tmin $(T.C.tmin).")
+    T.DC.bmax <= T.C.tmax || push!(issues, "bicomplex bmax $(T.DC.bmax) exceeds the source complex tmax $(T.C.tmax).")
+    size(T.DC.dims, 1) == length(T.resR.gens) || push!(issues, "bicomplex first axis has size $(size(T.DC.dims, 1)), expected $(length(T.resR.gens)).")
+    size(T.DC.dims, 2) == (T.DC.bmax - T.DC.bmin + 1) || push!(issues, "bicomplex second axis has inconsistent size $(size(T.DC.dims, 2)).")
+    tmin, tmax, dims = _double_complex_total_dims(T.DC)
+    T.tot.tmin == tmin || push!(issues, "total complex tmin $(T.tot.tmin) does not match bicomplex total degree minimum $tmin.")
+    T.tot.tmax == tmax || push!(issues, "total complex tmax $(T.tot.tmax) does not match bicomplex total degree maximum $tmax.")
+    T.tot.dims == dims || push!(issues, "total complex dimensions do not match the bicomplex totals.")
+    valid = isempty(issues)
+    throw && !valid && _throw_invalid_module_complex(:check_derived_tensor_complex, issues)
+    return _module_complex_report(:derived_tensor_complex, valid;
+                                  bicomplex_a_range=T.DC.amin:T.DC.amax,
+                                  bicomplex_b_range=T.DC.bmin:T.DC.bmax,
+                                  total_degree_range=T.tot.tmin:T.tot.tmax,
+                                  issues=issues)
 end
 
 """
@@ -1945,6 +3335,17 @@ function basis(H::HyperExtSpace{K}, t::Int) where {K}
     return B
 end
 
+# Mirror the graded-space interface onto the shared ChainComplexes inspection
+# surface so callers using the canonical public `basis` / `representative` /
+# `coordinates` entrypoints do not need to know that HyperExt/HyperTor live in
+# ModuleComplexes.
+ChainComplexes.basis(H::HyperExtSpace{K}, t::Int) where {K} = basis(H, t)
+ChainComplexes.coordinates(H::HyperExtSpace{K}, t::Int, cocycle::AbstractVector{K}) where {K} =
+    coordinates(H, t, cocycle)
+ChainComplexes.basis(H::HyperTorSpace{K}, n::Int) where {K} = basis(H, n)
+ChainComplexes.coordinates(H::HyperTorSpace{K}, n::Int, cycle::AbstractVector{K}) where {K} =
+    coordinates(H, n, cycle)
+
 
 # ============================================================
 # Chain-level maps for derived tensor (covariant in both vars)
@@ -1979,6 +3380,7 @@ function derived_tensor_map_first(
     Tdom::DerivedTensorComplex{K},
     Tcod::DerivedTensorComplex{K};
     check::Bool = true,
+    cache=nothing,
     threads::Bool = (Threads.nthreads() > 1),
 ) where {K}
     f.dom === Tdom.Rop || error("derived_tensor_map_first: f.dom must equal Tdom.Rop")
@@ -1987,7 +3389,20 @@ function derived_tensor_map_first(
 
     # Lift module map to a chain map between projective resolutions (coeff matrices per degree).
     upto = min(length(Tdom.resR.Pmods), length(Tcod.resR.Pmods)) - 1
-    coeffs = _lift_pmodule_map_to_projective_resolution_chainmap_coeff(Tdom.resR, Tcod.resR, f; upto=upto)
+    coeffs = cache === nothing ?
+        _lift_projective_chainmap_coeff_uncached(
+            f,
+            Tdom.resR,
+            Tcod.resR;
+            upto=upto,
+        ) :
+        _lift_projective_chainmap_coeff_cached(
+            f,
+            Tdom.resR,
+            Tcod.resR;
+            upto=upto,
+            cache=cache,
+        )
 
     # Optional validation of chain map relation: d_cod[a]*F_a == F_{a-1}*d_dom[a]
     if check
@@ -1999,89 +3414,156 @@ function derived_tensor_map_first(
         end
     end
 
-    # Assemble total cochain map degree-by-degree using block structure.
-    tmin = min(Tdom.tot.tmin, Tcod.tot.tmin)
-    tmax = max(Tdom.tot.tmax, Tcod.tot.tmax)
-    maps = Vector{SparseMatrixCSC{K,Int}}(undef, tmax - tmin + 1)
+    return _derived_tensor_map_first_cached(f, Tdom, Tcod, cache) do
+        tmin = min(Tdom.tot.tmin, Tcod.tot.tmin)
+        tmax = max(Tdom.tot.tmax, Tcod.tot.tmax)
+        plan = _tensor_map_first_plan(Tdom, Tcod, cache)
+        maps = _assemble_derived_tensor_map_first_maps(coeffs, plan; cache=cache, threads=threads)
+        # The lifted coefficient relation already certifies this is a chain map.
+        return CochainMap(Tdom.tot, Tcod.tot, maps; tmin=tmin, tmax=tmax, check=false)
+    end
+end
 
-    if threads && Threads.nthreads() > 1 && (tmax >= tmin)
-        Threads.@threads for idx in 1:(tmax - tmin + 1)
-            t = tmin + idx - 1
-            off_dom = _tot_block_offsets(Tdom.DC, t)
-            off_cod = _tot_block_offsets(Tcod.DC, t)
-            dim_dom = _cc_dim_at(Tdom.tot, t)
-            dim_cod = _cc_dim_at(Tcod.tot, t)
+@inline function _derived_tensor_map_first_upto(
+    Tdom::DerivedTensorComplex,
+    t::Int,
+)
+    off_dom = _tot_block_offsets(Tdom.DC, t)
+    isempty(off_dom) && return -1
+    upto = -1
+    for (key, _) in off_dom
+        A, _ = key
+        a = -A
+        a > upto && (upto = a)
+    end
+    return upto
+end
 
+function _assemble_derived_tensor_map_first_maps(
+    coeffs::Vector{<:AbstractMatrix{K}},
+    plan::_TensorMapPlan{_TensorMapFirstDegreePlan{K}};
+    cache=nothing,
+    threads::Bool=(Threads.nthreads() > 1),
+) where {K}
+    maps = Vector{SparseMatrixCSC{K,Int}}(undef, length(plan.degrees))
+    if threads && Threads.nthreads() > 1 && !isempty(plan.degrees)
+        Threads.@threads for idx in eachindex(plan.degrees)
+            dim_dom = plan.dims_src[idx]
+            dim_cod = plan.dims_tgt[idx]
+            dplan = plan.degrees[idx]
             I = Int[]; J = Int[]; V = K[]
-
-            for (key, col_off) in off_dom
-                haskey(off_cod, key) || continue
-                row_off = off_cod[key]
-                A, p = key
-                a = -A
-                (a < 0 || a > (length(Tdom.resR.Pmods) - 1)) && continue
-                (a < 0 || a > (length(Tcod.resR.Pmods) - 1)) && continue
-
-                Mp = _term(Tdom.C, p)
-                dom_gens = Tdom.resR.gens[a+1]
-                cod_gens = Tcod.resR.gens[a+1]
-                offs_dom = _offs_for_gens(Mp, dom_gens)
-                offs_cod = _offs_for_gens(Mp, cod_gens)
-
+            for k in eachindex(dplan.adeg)
                 block = _tensor_map_on_tor_chains_from_projective_coeff(
-                    Mp, dom_gens, cod_gens, offs_dom, offs_cod, coeffs[a+1]
+                    dplan.terms[k],
+                    dplan.dom_gens[k],
+                    dplan.cod_gens[k],
+                    dplan.dom_offsets[k],
+                    dplan.cod_offsets[k],
+                    coeffs[dplan.adeg[k] + 1];
+                    cache=cache,
                 )
-
-                ii, jj, vv = findnz(block)
-                for k in eachindex(vv)
-                    push!(I, row_off - 1 + ii[k])
-                    push!(J, col_off - 1 + jj[k])
-                    push!(V, vv[k])
-                end
+                _append_scaled_triplets!(I, J, V, block, dplan.row_off[k], dplan.col_off[k])
             end
-
             maps[idx] = sparse(I, J, V, dim_cod, dim_dom)
         end
     else
-        for t in tmin:tmax
-            off_dom = _tot_block_offsets(Tdom.DC, t)
-            off_cod = _tot_block_offsets(Tcod.DC, t)
-            dim_dom = _cc_dim_at(Tdom.tot, t)
-            dim_cod = _cc_dim_at(Tcod.tot, t)
-
+        for idx in eachindex(plan.degrees)
+            dim_dom = plan.dims_src[idx]
+            dim_cod = plan.dims_tgt[idx]
+            dplan = plan.degrees[idx]
             I = Int[]; J = Int[]; V = K[]
-
-            for (key, col_off) in off_dom
-                haskey(off_cod, key) || continue
-                row_off = off_cod[key]
-                A, p = key
-                a = -A
-                (a < 0 || a > (length(Tdom.resR.Pmods) - 1)) && continue
-                (a < 0 || a > (length(Tcod.resR.Pmods) - 1)) && continue
-
-                Mp = _term(Tdom.C, p)
-                dom_gens = Tdom.resR.gens[a+1]
-                cod_gens = Tcod.resR.gens[a+1]
-                offs_dom = _offs_for_gens(Mp, dom_gens)
-                offs_cod = _offs_for_gens(Mp, cod_gens)
-
+            for k in eachindex(dplan.adeg)
                 block = _tensor_map_on_tor_chains_from_projective_coeff(
-                    Mp, dom_gens, cod_gens, offs_dom, offs_cod, coeffs[a+1]
+                    dplan.terms[k],
+                    dplan.dom_gens[k],
+                    dplan.cod_gens[k],
+                    dplan.dom_offsets[k],
+                    dplan.cod_offsets[k],
+                    coeffs[dplan.adeg[k] + 1];
+                    cache=cache,
                 )
-
-                ii, jj, vv = findnz(block)
-                for k in eachindex(vv)
-                    push!(I, row_off - 1 + ii[k])
-                    push!(J, col_off - 1 + jj[k])
-                    push!(V, vv[k])
-                end
+                _append_scaled_triplets!(I, J, V, block, dplan.row_off[k], dplan.col_off[k])
             end
+            maps[idx] = sparse(I, J, V, dim_cod, dim_dom)
+        end
+    end
+    return maps
+end
 
-            maps[t - tmin + 1] = sparse(I, J, V, dim_cod, dim_dom)
+function _derived_tensor_map_first_degree(
+    f::PMorphism{K},
+    Tdom::DerivedTensorComplex{K},
+    Tcod::DerivedTensorComplex{K},
+    t::Int;
+    check::Bool = true,
+    cache=nothing,
+    coeffs = nothing,
+) where {K}
+    f.dom === Tdom.Rop || error("_derived_tensor_map_first_degree: f.dom must equal Tdom.Rop")
+    f.cod === Tcod.Rop || error("_derived_tensor_map_first_degree: f.cod must equal Tcod.Rop")
+    Tdom.C === Tcod.C || error("_derived_tensor_map_first_degree: complexes must be identical objects for strict functoriality")
+
+    plan = _tensor_map_first_plan(Tdom, Tcod, cache)
+    if t < plan.tmin || t > plan.tmax
+        return spzeros(K, 0, 0)
+    end
+    idx = t - plan.tmin + 1
+    dim_dom = plan.dims_src[idx]
+    dim_cod = plan.dims_tgt[idx]
+    if dim_dom == 0 || dim_cod == 0
+        return spzeros(K, dim_cod, dim_dom)
+    end
+
+    dplan = plan.degrees[idx]
+    isempty(dplan.adeg) && return spzeros(K, dim_cod, dim_dom)
+
+    upto = min(
+        maximum(dplan.adeg; init=-1),
+        length(Tdom.resR.Pmods) - 1,
+        length(Tcod.resR.Pmods) - 1,
+    )
+    coeffs_use = coeffs === nothing ?
+        (cache === nothing ?
+            _lift_projective_chainmap_coeff_uncached(
+                f,
+                Tdom.resR,
+                Tcod.resR;
+                upto=upto,
+            ) :
+            _lift_projective_chainmap_coeff_cached(
+                f,
+                Tdom.resR,
+                Tcod.resR;
+                upto=upto,
+                cache=cache,
+            )) :
+        coeffs
+
+    if check
+        for a in 1:upto
+            lhs = Tcod.resR.d_mat[a] * coeffs_use[a + 1]
+            rhs = coeffs_use[a] * Tdom.resR.d_mat[a]
+            lhs == rhs || error("_derived_tensor_map_first_degree: lifted coefficients fail chain map check at degree $a")
         end
     end
 
-    return CochainMap(Tdom.tot, Tcod.tot, maps; tmin=tmin, tmax=tmax, check=check)
+    I = Int[]
+    J = Int[]
+    V = K[]
+    for k in eachindex(dplan.adeg)
+        dplan.adeg[k] > upto && continue
+        block = _tensor_map_on_tor_chains_from_projective_coeff(
+            dplan.terms[k],
+            dplan.dom_gens[k],
+            dplan.cod_gens[k],
+            dplan.dom_offsets[k],
+            dplan.cod_offsets[k],
+            coeffs_use[dplan.adeg[k] + 1];
+            cache=cache,
+        )
+        _append_scaled_triplets!(I, J, V, block, dplan.row_off[k], dplan.col_off[k])
+    end
+    return sparse(I, J, V, dim_cod, dim_dom)
 end
 
 
@@ -2108,113 +3590,31 @@ function derived_tensor_map_second(
     Tsrc::DerivedTensorComplex{K},
     Ttgt::DerivedTensorComplex{K};
     check::Bool = true,
+    cache=nothing,
     threads::Bool = (Threads.nthreads() > 1),
 ) where {K}
     g.C === Tsrc.C || error("derived_tensor_map_second: g.C must equal Tsrc.C")
     g.D === Ttgt.C || error("derived_tensor_map_second: g.D must equal Ttgt.C")
     Tsrc.Rop === Ttgt.Rop || error("derived_tensor_map_second: right modules must match")
     Tsrc.resR.gens == Ttgt.resR.gens || error("derived_tensor_map_second: resolutions must have identical gens ordering")
+    return _derived_tensor_map_second_cached(g, Tsrc, Ttgt, cache) do
+        tmin = min(Tsrc.tot.tmin, Ttgt.tot.tmin)
+        tmax = max(Tsrc.tot.tmax, Ttgt.tot.tmax)
+        maps = Vector{SparseMatrixCSC{K,Int}}(undef, tmax - tmin + 1)
+        plan = _tensor_map_second_plan(Tsrc, Ttgt, cache)
 
-    tmin = min(Tsrc.tot.tmin, Ttgt.tot.tmin)
-    tmax = max(Tsrc.tot.tmax, Ttgt.tot.tmax)
-    maps = Vector{SparseMatrixCSC{K,Int}}(undef, tmax - tmin + 1)
-
-    if threads && Threads.nthreads() > 1 && (tmax >= tmin)
-        Threads.@threads for idx in 1:(tmax - tmin + 1)
-            t = tmin + idx - 1
-            off_src = _tot_block_offsets(Tsrc.DC, t)
-            off_tgt = _tot_block_offsets(Ttgt.DC, t)
-            dim_src = _cc_dim_at(Tsrc.tot, t)
-            dim_tgt = _cc_dim_at(Ttgt.tot, t)
-
-            I = Int[]; J = Int[]; V = K[]
-
-            for (key, col_off) in off_src
-                haskey(off_tgt, key) || continue
-                row_off = off_tgt[key]
-                A, p = key
-                a = -A
-                (a < 0 || a > (length(Tsrc.resR.Pmods) - 1)) && continue
-
-                Mp = _term(Tsrc.C, p)
-                Mp1 = _term(Ttgt.C, p)
-                gp = _map(g, p)
-                gens = Tsrc.resR.gens[a+1]
-
-                offs_dom = _offs_for_gens(Mp, gens)
-                offs_cod = _offs_for_gens(Mp1, gens)
-
-                # Sparse block-diagonal assembly
-                for (i,u) in enumerate(gens)
-                    row0 = offs_cod[i]
-                    col0 = offs_dom[i]
-                    block = gp.comps[u]
-                    nr = size(block, 1)
-                    nc = size(block, 2)
-                    for r in 1:nr
-                        for c in 1:nc
-                            x = block[r,c]
-                            if x != 0
-                                push!(I, row_off - 1 + row0 + r)
-                                push!(J, col_off - 1 + col0 + c)
-                                push!(V, x)
-                            end
-                        end
-                    end
-                end
+        if threads && Threads.nthreads() > 1 && (tmax >= tmin)
+            Threads.@threads for idx in 1:(tmax - tmin + 1)
+                maps[idx] = _assemble_tensor_map_second_degree(g, plan.degrees[idx], plan.dims_tgt[idx], plan.dims_src[idx])
             end
-
-            maps[idx] = sparse(I, J, V, dim_tgt, dim_src)
-        end
-    else
-        for t in tmin:tmax
-            off_src = _tot_block_offsets(Tsrc.DC, t)
-            off_tgt = _tot_block_offsets(Ttgt.DC, t)
-            dim_src = _cc_dim_at(Tsrc.tot, t)
-            dim_tgt = _cc_dim_at(Ttgt.tot, t)
-
-            I = Int[]; J = Int[]; V = K[]
-
-            for (key, col_off) in off_src
-                haskey(off_tgt, key) || continue
-                row_off = off_tgt[key]
-                A, p = key
-                a = -A
-                (a < 0 || a > (length(Tsrc.resR.Pmods) - 1)) && continue
-
-                Mp = _term(Tsrc.C, p)
-                Mp1 = _term(Ttgt.C, p)
-                gp = _map(g, p)
-                gens = Tsrc.resR.gens[a+1]
-
-                offs_dom = _offs_for_gens(Mp, gens)
-                offs_cod = _offs_for_gens(Mp1, gens)
-
-                # Sparse block-diagonal assembly
-                for (i,u) in enumerate(gens)
-                    row0 = offs_cod[i]
-                    col0 = offs_dom[i]
-                    block = gp.comps[u]
-                    nr = size(block, 1)
-                    nc = size(block, 2)
-                    for r in 1:nr
-                        for c in 1:nc
-                            x = block[r,c]
-                            if x != 0
-                                push!(I, row_off - 1 + row0 + r)
-                                push!(J, col_off - 1 + col0 + c)
-                                push!(V, x)
-                            end
-                        end
-                    end
-                end
+        else
+            for idx in 1:(tmax - tmin + 1)
+                maps[idx] = _assemble_tensor_map_second_degree(g, plan.degrees[idx], plan.dims_tgt[idx], plan.dims_src[idx])
             end
-
-            maps[t - tmin + 1] = sparse(I, J, V, dim_tgt, dim_src)
         end
+
+        return CochainMap(Tsrc.tot, Ttgt.tot, maps; tmin=tmin, tmax=tmax, check=check)
     end
-
-    return CochainMap(Tsrc.tot, Ttgt.tot, maps; tmin=tmin, tmax=tmax, check=check)
 end
 
 
@@ -2238,10 +3638,19 @@ function hyperTor_map_first(
     Hdom::HyperTorSpace{K},
     Hcod::HyperTorSpace{K};
     n::Int,
-    check::Bool = true
+    check::Bool = true,
+    cache=nothing,
 ) where {K}
-    Tmap = derived_tensor_map_first(f, Hdom.T, Hcod.T; check=check)
-    return induced_map_on_cohomology(Tmap, Hdom.cohom, Hcod.cohom, -n)
+    t = -n
+    if t < Hdom.T.tot.tmin || t > Hdom.T.tot.tmax || t < Hcod.T.tot.tmin || t > Hcod.T.tot.tmax
+        dim_dom = (t < Hdom.T.tot.tmin || t > Hdom.T.tot.tmax) ? 0 : Hdom.cohom[t - Hdom.T.tot.tmin + 1].dimH
+        dim_cod = (t < Hcod.T.tot.tmin || t > Hcod.T.tot.tmax) ? 0 : Hcod.cohom[t - Hcod.T.tot.tmin + 1].dimH
+        return zeros(K, dim_cod, dim_dom)
+    end
+    Ft = _derived_tensor_map_first_degree(f, Hdom.T, Hcod.T, t; check=check, cache=cache)
+    Ht_dom = Hdom.cohom[t - Hdom.T.tot.tmin + 1]
+    Ht_cod = Hcod.cohom[t - Hcod.T.tot.tmin + 1]
+    return induced_map_on_cohomology(Ht_dom, Ht_cod, Ft)
 end
 
 
@@ -2269,33 +3678,3 @@ end
 
 
 end # module
-function _resolution_offsets(res)
-    return res.offsets
-end
-
-function _resolution_offsets(res::DerivedFunctors.Resolutions.InjectiveResolution)
-    return _gens_offsets(res.gens)
-end
-
-function _gens_offsets(gens)
-    offsets = Vector{Vector{Int}}(undef, length(gens))
-    for i in eachindex(gens)
-        gi = gens[i]
-        if isempty(gi)
-            offsets[i] = Int[]
-            continue
-        end
-        if eltype(gi) <: AbstractVector
-            lens = length.(gi)
-            offs = Vector{Int}(undef, length(lens) + 1)
-            offs[1] = 0
-            for j in 1:length(lens)
-                offs[j + 1] = offs[j] + lens[j]
-            end
-            offsets[i] = offs
-        else
-            offsets[i] = collect(0:length(gi))
-        end
-    end
-    return offsets
-end

@@ -1,6 +1,6 @@
 using Test
 
-# Included from test/runtests.jl; uses shared aliases (PM, PLP, PLB, FF, QQ, ...).
+# Included from test/runtests.jl; uses shared aliases (TO, PLP, PLB, FF, QQ, ...).
 
 with_fields(FIELDS_FULL) do field
     K = CM.coeff_type(field)
@@ -34,48 +34,48 @@ with_fields(FIELDS_FULL) do field
     D2 = PLP.PLDownset(PLP.PolyUnion(2, [D2_hp]))
     F2 = PLP.PLFringe([U2], [D2], reshape(K[c(1)], 1, 1))
 
-    enc_pl = PM.EncodingOptions(backend=:pl, max_regions=50_000, strict_eps=PLP.STRICT_EPS_QQ)
-    df2 = PM.DerivedFunctorOptions(maxdeg=2)
-    res3 = PM.ResolutionOptions(maxlen=3)
+    enc_pl = TO.EncodingOptions(backend=:pl, max_regions=50_000, strict_eps=PLP.STRICT_EPS_QQ)
+    df2 = TO.DerivedFunctorOptions(maxdeg=2)
+    res3 = TO.ResolutionOptions(maxlen=3)
 
     # If Polyhedra is missing, encoding is unavailable by design.
     if !PLP.HAVE_POLY
-        @test_throws ErrorException PM.encode((F1, F2); enc=enc_pl)
+        @test_throws ErrorException TO.encode((F1, F2); enc=enc_pl)
         return
     end
 
     # Common-encode both PL presentations to the same finite poset P and modules Ms on P.
-    enc = PM.encode((F1, F2); enc=enc_pl)
+    enc = TO.encode((F1, F2); enc=enc_pl)
     P = enc[1].P
     Ms = [enc[1].M, enc[2].M]
 
     # Workflow-level auto-cache: encode() should attach an EncodingCache even
     # without an explicit SessionCache, and geometry calls should reuse it.
-    enc_one = PM.encode(F1, PM.EncodingOptions(backend=:pl))
+    enc_one = TO.encode(F1, TO.EncodingOptions(backend=:pl))
     @test enc_one.pi isa EC.CompiledEncoding
     @test enc_one.pi.meta isa CM.EncodingCache
     unit_box = ([0.0, 0.0], [1.0, 1.0])
-    adj_1 = PM.RegionGeometry.region_adjacency(enc_one.pi; box=unit_box, strict=true, mode=:fast)
-    adj_2 = PM.RegionGeometry.region_adjacency(enc_one.pi; box=unit_box, strict=true, mode=:fast)
+    adj_1 = TO.RegionGeometry.region_adjacency(enc_one.pi; box=unit_box, strict=true, mode=:fast)
+    adj_2 = TO.RegionGeometry.region_adjacency(enc_one.pi; box=unit_box, strict=true, mode=:fast)
     @test adj_2 == adj_1
     r_unit = EC.locate(enc_one.pi, [0.5, 0.5]; mode=:verified)
     @test r_unit != 0
-    @test PM.RegionGeometry.region_bbox(enc_one.pi, r_unit; box=unit_box) == (Float64[0.0, 0.0], Float64[1.0, 1.0])
-    @test isapprox(PM.RegionGeometry.region_diameter(enc_one.pi, r_unit; box=unit_box, method=:bbox, metric=:L2), sqrt(2.0); atol=1e-10)
+    @test TO.RegionGeometry.region_bbox(enc_one.pi, r_unit; box=unit_box) == (Float64[0.0, 0.0], Float64[1.0, 1.0])
+    @test isapprox(TO.RegionGeometry.region_diameter(enc_one.pi, r_unit; box=unit_box, method=:bbox, metric=:L2), sqrt(2.0); atol=1e-10)
 
     # Ext computed on P should match ExtRn wrapper (which internally does the same steps).
     E_explicit = DF.Ext(Ms[1], Ms[2], df2)
     E_wrap = DF.ExtRn(F1, F2, enc_pl, df2)
-    @test [PM.dim(E_explicit, t) for t in 0:2] == [PM.dim(E_wrap, t) for t in 0:2]
+    @test [TO.dim(E_explicit, t) for t in 0:2] == [TO.dim(E_wrap, t) for t in 0:2]
 
     # Resolution wrapper should use the same encoded poset as explicit encoding.
-    enc1 = PM.encode(F1, enc_pl)
+    enc1 = TO.encode(F1, enc_pl)
     res_wrap = DF.projective_resolution_Rn(F1, enc_pl, res3; return_encoding=true)
     @test FF.poset_equal(res_wrap.P, enc1.P)
     @test DF.betti_table(res_wrap.res) == DF.betti_table(DF.projective_resolution(enc1.M, res3))
 
     # Minimal Betti data: obtain it by requesting a checked-minimal resolution.
-    res_min = PM.ResolutionOptions(maxlen=3, minimal=true, check=true)
+    res_min = TO.ResolutionOptions(maxlen=3, minimal=true, check=true)
 
     bt_wrap = DF.betti(DF.projective_resolution_Rn(F1, enc_pl, res_min))
     bt_explicit = DF.betti(DF.projective_resolution(enc1.M, res_min))
@@ -85,9 +85,178 @@ end
 
 
 
+@testset "PLPolyhedra UX surface" begin
+    hp_birth = PLP.make_hpoly(K[c(-1) c(0); c(0) c(-1)], K[c(0), c(0)])
+    hp_death = PLP.make_hpoly(K[c(1) c(0); c(0) c(1)], K[c(1), c(1)])
+    U = PLP.PLUpset(PLP.PolyUnion(2, [hp_birth]))
+    D = PLP.PLDownset(PLP.PolyUnion(2, [hp_death]))
+    F = PLP.PLFringe([U], [D], reshape(K[c(1)], 1, 1))
+
+    @test TO.describe(hp_birth).kind == :hpoly
+    @test TO.describe(U.U).kind == :poly_union
+    @test TO.describe(U).kind == :pl_upset
+    @test TO.describe(D).kind == :pl_downset
+    @test TO.describe(F).kind == :pl_fringe
+
+    @test TO.ambient_dim(hp_birth) == 2
+    @test TO.ambient_dim(U.U) == 2
+    @test TO.ambient_dim(U) == 2
+    @test TO.ambient_dim(D) == 2
+    @test TO.ambient_dim(F) == 2
+    @test PLP.polyhedra(hp_birth)[1] === hp_birth
+    @test PLP.polyhedra(U.U)[1] === hp_birth
+    @test PLP.polyhedra(U)[1] === hp_birth
+    @test PLP.polyhedra(D)[1] === hp_death
+    @test PLP.npolyhedra(hp_birth) == 1
+    @test PLP.npolyhedra(U.U) == 1
+    @test PLP.npolyhedra(U) == 1
+    @test PLP.npolyhedra(D) == 1
+    @test FF.birth_upsets(F)[1] === U
+    @test FF.death_downsets(F)[1] === D
+    @test FZ.coefficient_matrix(F) == reshape(QQ[c(1)], 1, 1)
+    @test PLP.nupsets(F) == 1
+    @test PLP.ndownsets(F) == 1
+    @test TO.field(F) isa CM.QQField
+    @test PLP.pl_fringe_summary(F).matrix_size == (1, 1)
+    @test PLP.pl_fringe_summary(F).field isa CM.QQField
+
+    @test occursin("HPoly", sprint(show, hp_birth))
+    @test occursin("PolyUnion", sprint(show, U.U))
+    @test occursin("PLUpset", sprint(show, U))
+    @test occursin("PLDownset", sprint(show, D))
+    @test occursin("PLFringe", sprint(show, MIME("text/plain"), F))
+
+    rep_h = PLP.check_hpoly(hp_birth)
+    rep_union = PLP.check_poly_union(U.U)
+    rep_up = PLP.check_pl_upset(U)
+    rep_down = PLP.check_pl_downset(D)
+    rep_fringe = PLP.check_pl_fringe(F)
+    @test rep_h.valid
+    @test rep_union.valid
+    @test rep_up.valid
+    @test rep_down.valid
+    @test rep_fringe.valid
+    @test PLP.plpolyhedra_validation_summary(rep_fringe).report.kind == :pl_fringe
+    @test occursin("PLPolyhedraValidationSummary",
+                   sprint(show, MIME("text/plain"), PLP.plpolyhedra_validation_summary(rep_fringe)))
+
+    bad_hp = PLP.HPoly(2, reshape(QQ[c(1)], 1, 1), QQ[c(1)], nothing, falses(1), PLP.STRICT_EPS_QQ)
+    bad_union = PLP.PolyUnion(2, [bad_hp])
+    bad_fringe = PLP.PLFringe(2, [U], [D], zeros(QQ, 2, 2))
+    @test !PLP.check_hpoly(bad_hp).valid
+    @test !PLP.check_poly_union(bad_union).valid
+    @test !PLP.check_pl_fringe(bad_fringe).valid
+    @test_throws ArgumentError PLP.check_hpoly(bad_hp; throw=true)
+    @test_throws ArgumentError PLP.check_poly_union(bad_union; throw=true)
+    @test_throws ArgumentError PLP.check_pl_fringe(bad_fringe; throw=true)
+
+    @test TOA.HPoly === PLP.HPoly
+    @test TOA.PolyUnion === PLP.PolyUnion
+    @test TOA.PLUpset === PLP.PLUpset
+    @test TOA.PLDownset === PLP.PLDownset
+    @test TOA.PLEncodingMap === PLP.PLEncodingMap
+    @test TOA.PolyInBoxCache === PLP.PolyInBoxCache
+    @test TOA.check_hpoly(hp_birth).valid
+    @test TOA.pl_fringe_summary(F).matrix_size == (1, 1)
+    @test TOA.nupsets(F) == 1
+    @test TOA.ndownsets(F) == 1
+
+    if !PLP.HAVE_POLY
+        @test true
+    else
+        opts = TO.EncodingOptions(backend=:pl, max_regions=128, strict_eps=PLP.STRICT_EPS_QQ)
+        P, H, pi = PLP.encode_from_PL_fringe(F, opts)
+        enc = EC.compile_encoding(P, pi)
+
+        @test TO.describe(pi).kind == :pl_encoding_map
+        @test PLP.nregions(pi) == length(pi.regions)
+        @test length(PLP.region_witnesses(pi)) == PLP.nregions(pi)
+        @test PLP.region_witness(pi, 1) == PLP.region_witnesses(pi)[1]
+        sig = PLP.region_signature(pi, 1)
+        @test sig isa NamedTuple
+        @test Set(keys(sig)) == Set((:y, :z))
+        @test PLP.has_spatial_index(pi) isa Bool
+
+        sum_pi = PLP.pl_encoding_summary(pi)
+        sum_enc = PLP.pl_encoding_summary(enc)
+        @test sum_pi.kind == :pl_encoding_map
+        @test sum_pi.nregions == PLP.nregions(pi)
+        @test sum_enc.compiled
+        @test sum_enc.poset_size == FF.nvertices(P)
+
+        inside = [0.5, 0.5]
+        outside = [2.0, 2.0]
+        qrep = PLP.check_pl_point(pi, inside)
+        @test qrep.valid
+        @test !PLP.check_pl_point(pi, [0.5]).valid
+        @test_throws ArgumentError PLP.check_pl_point(pi, [0.5]; throw=true)
+
+        X = Float64[0.25 0.75; 0.25 0.75]
+        @test PLP.check_pl_points(pi, X).valid
+        @test !PLP.check_pl_points(pi, reshape([0.25, 0.75], 1, 2)).valid
+        @test_throws ArgumentError PLP.check_pl_points(pi, reshape([0.25, 0.75], 1, 2); throw=true)
+
+        box = (Float64[0.0, 0.0], Float64[1.0, 1.0])
+        @test PLP.check_pl_box(pi, box).valid
+        @test !PLP.check_pl_box(pi, (Float64[1.0, 0.0], Float64[0.0, 1.0])).valid
+        @test_throws ArgumentError PLP.check_pl_box(pi, (Float64[1.0, 0.0], Float64[0.0, 1.0]); throw=true)
+
+        qsum_in = PLP.pl_query_summary(pi, inside)
+        qsum_out = PLP.pl_query_summary(enc, outside)
+        rid_out = PLP.locate(enc, outside)
+        @test qsum_in.region != 0
+        @test qsum_in.outside == false
+        @test qsum_out.region == rid_out
+        @test qsum_out.outside == (rid_out == 0)
+
+        @test PLP.check_pl_encoding_map(pi).valid
+        @test PLP.check_pl_encoding_map(enc).valid
+        @test !PLP.check_pl_encoding_map(:not_a_pl_encoding).valid
+        @test_throws ArgumentError PLP.check_pl_encoding_map(:not_a_pl_encoding; throw=true)
+        @test !PLP.check_pl_region(pi, 0).valid
+        @test_throws ArgumentError PLP.check_pl_region(pi, 0; throw=true)
+
+        cache = PLP.compile_geometry_cache(pi; box=box, closure=true, level=:light,
+                                           precompute_exact=false, precompute_facets=false,
+                                           precompute_centroids=false)
+        @test TO.describe(cache).kind == :poly_in_box_cache
+        @test TO.ambient_dim(cache) == 2
+        @test PLP.cache_box(cache)[1] == QQ[c(0), c(0)]
+        @test PLP.cache_box(cache)[2] == QQ[c(1), c(1)]
+        @test PLP.cache_level(cache) == :light
+        @test PLP.cached_region_count(cache) >= 0
+        @test PLP.check_poly_in_box_cache(cache).valid
+        @test PLP.poly_cache_summary(cache).cache_level == :light
+        @test occursin("PolyInBoxCache", sprint(show, MIME("text/plain"), cache))
+        @test TOA.check_pl_box(cache, box).valid
+        @test TOA.pl_encoding_summary(pi).nregions == PLP.nregions(pi)
+        @test TOA.poly_cache_summary(cache).cache_level == :light
+        rid = PLP.locate(pi, inside; mode=:verified)
+        @test rid != 0
+        reg_report = PLP.check_pl_region(pi, rid; box=box)
+        reg_report_cache = PLP.check_pl_region(cache, rid)
+        reg_summary = PLP.pl_region_summary(pi, rid; box=box, cache=cache)
+        @test reg_report.valid
+        @test reg_report.region_in_range
+        @test reg_report.finite_box_required
+        @test reg_report.signature_support_sizes !== nothing
+        @test reg_report.bbox isa Tuple
+        @test reg_report_cache.valid
+        @test reg_report_cache.finite_box_required == false
+        @test reg_summary.region == rid
+        @test reg_summary.signature_support_sizes == reg_report.signature_support_sizes
+        @test reg_summary.bbox isa Tuple
+        @test TOA.check_pl_region(cache, rid).valid
+        @test TOA.pl_region_summary(pi, rid; box=box, cache=cache).region == rid
+
+        @test TO.RegionGeometry.region_bbox(pi, rid; box=box, cache=cache) isa Tuple
+    end
+end
+
+
 @testset "PL common encoding for multiple fringes" begin
 
-    enc_pl_10k = PM.EncodingOptions(backend=:pl, max_regions=10_000)
+    enc_pl_10k = TO.EncodingOptions(backend=:pl, max_regions=10_000)
 
     # We can build HPolys even without Polyhedra, but we can only encode if Polyhedra is available.
     if !PLP.HAVE_POLY
@@ -255,8 +424,8 @@ end
         PLP._locate_many_prefix!(loc_pref, cache, Xq, size(Xq, 2); threaded=false, mode=:fast)
         @test loc_pref == loc_full
 
-        adj_cache = PM.RegionGeometry.region_adjacency(pi; cache=cache, strict=false, mode=:fast)
-        adj_box = PM.RegionGeometry.region_adjacency(pi; box=box, strict=false, mode=:fast)
+        adj_cache = TO.RegionGeometry.region_adjacency(pi; cache=cache, strict=false, mode=:fast)
+        adj_box = TO.RegionGeometry.region_adjacency(pi; box=box, strict=false, mode=:fast)
         @test adj_cache == adj_box
         @test length(adj_cache) == 1
         @test haskey(adj_cache, (1, 2))
@@ -310,7 +479,12 @@ end
         @test !isempty(cands_mid)
         @test length(cands_mid) < ngrid
         @test PLP._should_use_grouped_locate(pi_g, nothing, 5_000)
-        @test !PLP._should_use_grouped_locate(pi_g, nothing, 50_000)
+        if Threads.nthreads() >= 10
+            @test !PLP._should_use_grouped_locate(pi_g, nothing, 50_000)
+        else
+            @test PLP._should_use_grouped_locate(pi_g, nothing, 50_000)
+        end
+        @test !PLP._should_use_grouped_locate(pi_g, nothing, 120_000)
         counts_bal = [0; fill(8, 32)]
         counts_skew = [0; vcat([256], fill(0, 31))]
         @test PLP._grouped_live_bucket_ok(counts_bal, 32, sum(counts_bal))
@@ -371,6 +545,41 @@ end
             PLP._LOCATE_BUCKET_GROUPING[] = old_group_flag
         end
         @test loc_cache_group_on == loc_cache_group_off
+        @test pi_g.prefilter.spatial.buckets isa PLP._PackedBuckets
+        @test cache_g.bucket_regions isa PLP._PackedBuckets
+
+        old_exact_cache = PLP._LOCATE_COL_QQ_CACHE[]
+        loc_exact_cache_off = fill(0, size(Xg_big, 2))
+        loc_exact_cache_on = fill(0, size(Xg_big, 2))
+        try
+            PLP._LOCATE_COL_QQ_CACHE[] = false
+            PLP.locate_many!(loc_exact_cache_off, pi_g, Xg_big; threaded=true, mode=:fast)
+            PLP._LOCATE_COL_QQ_CACHE[] = true
+            PLP.locate_many!(loc_exact_cache_on, pi_g, Xg_big; threaded=true, mode=:fast)
+        finally
+            PLP._LOCATE_COL_QQ_CACHE[] = old_exact_cache
+        end
+        @test loc_exact_cache_on == loc_exact_cache_off
+
+        old_row_dot_cache = PLP._LOCATE_ROW_DOT_CACHE[]
+        loc_row_dot_off = fill(0, size(Xg_big, 2))
+        loc_row_dot_on = fill(0, size(Xg_big, 2))
+        try
+            PLP._LOCATE_COL_QQ_CACHE[] = true
+            PLP._LOCATE_ROW_DOT_CACHE[] = false
+            PLP.locate_many!(loc_row_dot_off, pi_g, Xg_big; threaded=true, mode=:fast)
+            PLP._LOCATE_ROW_DOT_CACHE[] = true
+            PLP.locate_many!(loc_row_dot_on, pi_g, Xg_big; threaded=true, mode=:fast)
+        finally
+            PLP._LOCATE_COL_QQ_CACHE[] = old_exact_cache
+            PLP._LOCATE_ROW_DOT_CACHE[] = old_row_dot_cache
+        end
+        @test loc_row_dot_on == loc_row_dot_off
+
+        # Direct Float64 cache dispatch should stay on the PLPolyhedra path.
+        loc_cache_float = fill(0, size(Xg_big, 2))
+        PLP.locate_many!(loc_cache_float, cache_g, Xg_big; threaded=false, mode=:fast)
+        @test loc_cache_float == loc_cache_group_on
 
         # High-dimensional multiprojection prefilter: ensure enabled and parity
         # with exact membership scans for 3D query batches.
@@ -476,16 +685,16 @@ end
         old_batch_flag = PLP._FACET_PROBE_BATCH[]
         try
             PLP._FACET_PROBE_BATCH[] = false
-            bd_cache_off = PM.RegionGeometry.region_boundary_measure_breakdown(pi, rid; cache=cache, strict=false, mode=:fast)
-            adj_cache_off = PM.RegionGeometry.region_adjacency(pi; cache=cache, strict=false, mode=:fast)
-            bd_box_off = PM.RegionGeometry.region_boundary_measure_breakdown(pi, rid; box=box, strict=false, mode=:fast)
-            adj_box_off = PM.RegionGeometry.region_adjacency(pi; box=box, strict=false, mode=:fast)
+            bd_cache_off = TO.RegionGeometry.region_boundary_measure_breakdown(pi, rid; cache=cache, strict=false, mode=:fast)
+            adj_cache_off = TO.RegionGeometry.region_adjacency(pi; cache=cache, strict=false, mode=:fast)
+            bd_box_off = TO.RegionGeometry.region_boundary_measure_breakdown(pi, rid; box=box, strict=false, mode=:fast)
+            adj_box_off = TO.RegionGeometry.region_adjacency(pi; box=box, strict=false, mode=:fast)
 
             PLP._FACET_PROBE_BATCH[] = true
-            bd_cache_on = PM.RegionGeometry.region_boundary_measure_breakdown(pi, rid; cache=cache, strict=false, mode=:fast)
-            adj_cache_on = PM.RegionGeometry.region_adjacency(pi; cache=cache, strict=false, mode=:fast)
-            bd_box_on = PM.RegionGeometry.region_boundary_measure_breakdown(pi, rid; box=box, strict=false, mode=:fast)
-            adj_box_on = PM.RegionGeometry.region_adjacency(pi; box=box, strict=false, mode=:fast)
+            bd_cache_on = TO.RegionGeometry.region_boundary_measure_breakdown(pi, rid; cache=cache, strict=false, mode=:fast)
+            adj_cache_on = TO.RegionGeometry.region_adjacency(pi; cache=cache, strict=false, mode=:fast)
+            bd_box_on = TO.RegionGeometry.region_boundary_measure_breakdown(pi, rid; box=box, strict=false, mode=:fast)
+            adj_box_on = TO.RegionGeometry.region_adjacency(pi; box=box, strict=false, mode=:fast)
 
             @test _canonical_bd(bd_cache_on) == _canonical_bd(bd_cache_off)
             @test _canonical_bd(bd_box_on) == _canonical_bd(bd_box_off)
@@ -535,14 +744,14 @@ end
                 @test EC.locate(pi, [p[1], p[2]]; mode=:verified) == 0
             end
 
-            w = PM.RegionGeometry.region_weights(pi; box=box, method=:exact)
+            w = TO.RegionGeometry.region_weights(pi; box=box, method=:exact)
             for i in 1:nreg
                 @test isapprox(w[rid[i]], expected[:weights][i]; atol=1e-10)
             end
             @test isapprox(sum(w), sum(expected[:weights]); atol=1e-10)
 
             for i in 1:nreg
-                bb = PM.RegionGeometry.region_bbox(pi, rid[i]; box=box)
+                bb = TO.RegionGeometry.region_bbox(pi, rid[i]; box=box)
                 @test bb !== nothing
                 lo, hi = bb
                 elo, ehi = expected[:bbox][i]
@@ -551,16 +760,16 @@ end
             end
 
             for i in 1:nreg
-                d = PM.RegionGeometry.region_diameter(pi, rid[i]; box=box, metric=:L2, method=:bbox)
+                d = TO.RegionGeometry.region_diameter(pi, rid[i]; box=box, metric=:L2, method=:bbox)
                 @test isapprox(d, expected[:diameters][i]; atol=1e-10)
             end
 
             for i in 1:nreg
-                bm = PM.RegionGeometry.region_boundary_measure(pi, rid[i]; box=box, strict=true, mode=:verified)
+                bm = TO.RegionGeometry.region_boundary_measure(pi, rid[i]; box=box, strict=true, mode=:verified)
                 @test isapprox(bm, expected[:boundary][i]; atol=1e-8)
             end
 
-            adj = PM.RegionGeometry.region_adjacency(pi; box=box, strict=true, mode=:verified)
+            adj = TO.RegionGeometry.region_adjacency(pi; box=box, strict=true, mode=:verified)
             exp_adj = Dict{Tuple{Int,Int},Float64}()
             for ((i, j), m) in expected[:adj]
                 ri = rid[i]
@@ -696,23 +905,23 @@ end
         @test t_left != t_right
         @test EC.locate(pi, [1.5, 1.5]; mode=:verified) == 0
 
-        w = PM.RegionGeometry.region_weights(pi; box=box, method=:exact)
+        w = TO.RegionGeometry.region_weights(pi; box=box, method=:exact)
         @test isapprox(w[t_left], 1.0; atol=1e-10)
         @test isapprox(w[t_right], 1.0; atol=1e-10)
         @test isapprox(sum(w), 2.0; atol=1e-10)
 
-        bb_left = PM.RegionGeometry.region_bbox(pi, t_left; box=box)
-        bb_right = PM.RegionGeometry.region_bbox(pi, t_right; box=box)
+        bb_left = TO.RegionGeometry.region_bbox(pi, t_left; box=box)
+        bb_right = TO.RegionGeometry.region_bbox(pi, t_right; box=box)
         @test bb_left == (Float64[0.0, 0.0], Float64[1.0, 1.0])
         @test bb_right == (Float64[2.0, 0.0], Float64[3.0, 1.0])
 
-        @test isapprox(PM.RegionGeometry.region_diameter(pi, t_left; box=box, metric=:L2, method=:bbox), sqrt(2.0); atol=1e-10)
-        @test isapprox(PM.RegionGeometry.region_diameter(pi, t_right; box=box, metric=:L2, method=:bbox), sqrt(2.0); atol=1e-10)
+        @test isapprox(TO.RegionGeometry.region_diameter(pi, t_left; box=box, metric=:L2, method=:bbox), sqrt(2.0); atol=1e-10)
+        @test isapprox(TO.RegionGeometry.region_diameter(pi, t_right; box=box, metric=:L2, method=:bbox), sqrt(2.0); atol=1e-10)
 
-        @test isapprox(PM.RegionGeometry.region_boundary_measure(pi, t_left; box=box, strict=false, mode=:verified), 4.0; atol=1e-8)
-        @test isapprox(PM.RegionGeometry.region_boundary_measure(pi, t_right; box=box, strict=false, mode=:verified), 4.0; atol=1e-8)
+        @test isapprox(TO.RegionGeometry.region_boundary_measure(pi, t_left; box=box, strict=false, mode=:verified), 4.0; atol=1e-8)
+        @test isapprox(TO.RegionGeometry.region_boundary_measure(pi, t_right; box=box, strict=false, mode=:verified), 4.0; atol=1e-8)
 
-        adj = PM.RegionGeometry.region_adjacency(pi; box=box, strict=false, mode=:verified)
+        adj = TO.RegionGeometry.region_adjacency(pi; box=box, strict=false, mode=:verified)
         @test isempty(adj)
     end
 end
@@ -738,11 +947,11 @@ end
         box = (Float64[0.0, 0.0, 0.0], Float64[1.0, 1.0, 1.0])
         r = EC.locate(pi, [0.5, 0.5, 0.5]; mode=:verified)
         @test r != 0
-        @test isapprox(PM.RegionGeometry.region_weights(pi; box=box, method=:exact)[r], 1.0; atol=1e-10)
-        @test PM.RegionGeometry.region_bbox(pi, r; box=box) == (Float64[0.0, 0.0, 0.0], Float64[1.0, 1.0, 1.0])
-        @test isapprox(PM.RegionGeometry.region_diameter(pi, r; box=box, metric=:L2, method=:bbox), sqrt(3.0); atol=1e-10)
-        @test isapprox(PM.RegionGeometry.region_boundary_measure(pi, r; box=box, mode=:verified), 6.0; atol=1e-8)
-        @test isempty(PM.RegionGeometry.region_adjacency(pi; box=box, strict=true, mode=:verified))
+        @test isapprox(TO.RegionGeometry.region_weights(pi; box=box, method=:exact)[r], 1.0; atol=1e-10)
+        @test TO.RegionGeometry.region_bbox(pi, r; box=box) == (Float64[0.0, 0.0, 0.0], Float64[1.0, 1.0, 1.0])
+        @test isapprox(TO.RegionGeometry.region_diameter(pi, r; box=box, metric=:L2, method=:bbox), sqrt(3.0); atol=1e-10)
+        @test isapprox(TO.RegionGeometry.region_boundary_measure(pi, r; box=box, mode=:verified), 6.0; atol=1e-8)
+        @test isempty(TO.RegionGeometry.region_adjacency(pi; box=box, strict=true, mode=:verified))
 
         # Fixture B: two adjacent unit cubes sharing one face.
         hp1 = box_hpoly(0.0, 1.0, 0.0, 1.0, 0.0, 1.0)
@@ -752,12 +961,12 @@ end
         r1 = EC.locate(pi2, [0.5, 0.5, 0.5]; mode=:verified)
         r2 = EC.locate(pi2, [1.5, 0.5, 0.5]; mode=:verified)
         @test r1 != 0 && r2 != 0 && r1 != r2
-        w2 = PM.RegionGeometry.region_weights(pi2; box=box2, method=:exact)
+        w2 = TO.RegionGeometry.region_weights(pi2; box=box2, method=:exact)
         @test isapprox(w2[r1], 1.0; atol=1e-10)
         @test isapprox(w2[r2], 1.0; atol=1e-10)
-        @test isapprox(PM.RegionGeometry.region_boundary_measure(pi2, r1; box=box2, mode=:verified), 6.0; atol=1e-8)
-        @test isapprox(PM.RegionGeometry.region_boundary_measure(pi2, r2; box=box2, mode=:verified), 6.0; atol=1e-8)
-        adj2 = PM.RegionGeometry.region_adjacency(pi2; box=box2, strict=true, mode=:verified)
+        @test isapprox(TO.RegionGeometry.region_boundary_measure(pi2, r1; box=box2, mode=:verified), 6.0; atol=1e-8)
+        @test isapprox(TO.RegionGeometry.region_boundary_measure(pi2, r2; box=box2, mode=:verified), 6.0; atol=1e-8)
+        adj2 = TO.RegionGeometry.region_adjacency(pi2; box=box2, strict=true, mode=:verified)
         key = r1 < r2 ? (r1, r2) : (r2, r1)
         @test haskey(adj2, key)
         @test isapprox(adj2[key], 1.0; atol=1e-8)
@@ -768,15 +977,127 @@ end
         box3 = (Float64[0.0, 0.0, 0.0], Float64[2.0, 1.0, 3.0])
         r3 = EC.locate(pi3, [1.0, 0.5, 1.5]; mode=:verified)
         @test r3 != 0
-        @test isapprox(PM.RegionGeometry.region_weights(pi3; box=box3, method=:exact)[r3], 6.0; atol=1e-10)
-        @test isapprox(PM.RegionGeometry.region_diameter(pi3, r3; box=box3, metric=:L2, method=:bbox), sqrt(14.0); atol=1e-10)
-        @test isapprox(PM.RegionGeometry.region_boundary_measure(pi3, r3; box=box3, mode=:verified), 22.0; atol=1e-8)
+        @test isapprox(TO.RegionGeometry.region_weights(pi3; box=box3, method=:exact)[r3], 6.0; atol=1e-10)
+        @test isapprox(TO.RegionGeometry.region_diameter(pi3, r3; box=box3, metric=:L2, method=:bbox), sqrt(14.0); atol=1e-10)
+        @test isapprox(TO.RegionGeometry.region_boundary_measure(pi3, r3; box=box3, mode=:verified), 22.0; atol=1e-8)
     end
 end
 
+@testset "PLBackend UX surface" begin
+    enc_axis = TO.EncodingOptions(backend=:pl_backend)
+    Ups = [PLB.BoxUpset([0.0])]
+    Downs = [PLB.BoxDownset([2.0])]
+    Phi = reshape(K[c(1)], 1, 1)
+
+    @test TO.describe(Ups[1]).kind == :box_upset
+    @test TO.describe(Downs[1]).kind == :box_downset
+    @test TO.ambient_dim(Ups[1]) == 1
+    @test TO.ambient_dim(Downs[1]) == 1
+    @test PLB.lower_bounds(Ups[1]) == [0.0]
+    @test PLB.upper_bounds(Downs[1]) == [2.0]
+    @test occursin("BoxUpset", sprint(show, MIME("text/plain"), Ups[1]))
+    @test occursin("BoxDownset", sprint(show, MIME("text/plain"), Downs[1]))
+
+    good_up = PLB.check_box_upset(Ups[1])
+    good_down = PLB.check_box_downset(Downs[1])
+    bad_up = PLB.check_box_upset(PLB.BoxUpset([0.0, NaN]))
+    bad_down = PLB.check_box_downset(PLB.BoxDownset([2.0, NaN]))
+    @test good_up.valid
+    @test good_down.valid
+    @test !bad_up.valid
+    @test !bad_down.valid
+    @test_throws ArgumentError PLB.check_box_upset(PLB.BoxUpset([0.0, NaN]); throw=true)
+    @test_throws ArgumentError PLB.check_box_downset(PLB.BoxDownset([2.0, NaN]); throw=true)
+
+    P, H, pi = PLB.encode_fringe_boxes(Ups, Downs, Phi, enc_axis)
+    enc = EC.compile_encoding(P, pi)
+    rid = PLB.locate(pi, [1.0])
+    box = (Float64[0.0], Float64[2.0])
+
+    @test TO.describe(pi).kind == :pl_backend_encoding_map
+    @test TO.ambient_dim(pi) == 1
+    @test FF.birth_upsets(pi)[1] === Ups[1]
+    @test FF.death_downsets(pi)[1] === Downs[1]
+    @test PLB.nregions(pi) == length(pi.reps)
+    @test PLB.generator_counts(pi) == (; upsets=1, downsets=1)
+    @test PLB.critical_coordinate_counts(pi) == (2,)
+    @test PLB.axes_uniformity(pi) == (true,)
+    @test PLB.critical_coordinates(pi) == pi.coords
+    @test PLB.region_representatives(pi) == pi.reps
+    @test PLB.region_representative(pi, rid) == pi.reps[rid]
+    sig = PLB.region_signature(pi, rid)
+    @test sig isa NamedTuple
+    @test Set(keys(sig)) == Set((:y, :z))
+    @test PLB.cell_shape(pi) == pi.cell_shape
+    @test PLB.has_direct_lookup(pi)
+
+    sum_pi = PLB.box_encoding_summary(pi)
+    sum_enc = PLB.box_encoding_summary(enc)
+    @test sum_pi.kind == :pl_backend_encoding_map
+    @test sum_pi.generator_counts == (; upsets=1, downsets=1)
+    @test sum_pi.nregions == PLB.nregions(pi)
+    @test sum_pi.cell_shape == pi.cell_shape
+    @test sum_pi.direct_lookup_enabled
+    @test sum_pi.all_axes_uniform
+    @test sum_enc.compiled
+    @test sum_enc.poset_size == FF.nvertices(P)
+    @test occursin("PLEncodingMapBoxes", sprint(show, MIME("text/plain"), pi))
+
+    good_map = PLB.check_box_encoding_map(pi)
+    bad_map = PLB.check_box_encoding_map(:not_a_box_encoding)
+    @test good_map.valid
+    @test !bad_map.valid
+    @test PLB.plbackend_validation_summary(good_map).report.kind == :box_encoding_map
+    @test occursin("PLBackendValidationSummary",
+                   sprint(show, MIME("text/plain"), PLB.plbackend_validation_summary(good_map)))
+    @test_throws ArgumentError PLB.check_box_encoding_map(:not_a_box_encoding; throw=true)
+
+    qpoint = PLB.check_box_point(pi, [1.0])
+    qmatrix = PLB.check_box_points(pi, reshape([0.0, 1.0, 2.0], 1, :))
+    qbox = PLB.check_box_query_box(pi, box)
+    qregion = PLB.check_box_region(pi, rid; box=box)
+    @test qpoint.valid
+    @test qmatrix.valid
+    @test qbox.valid
+    @test qregion.valid
+    @test qregion.finite_box_required
+    @test qregion.signature_support_sizes !== nothing
+    @test qregion.bbox isa Tuple
+    @test !PLB.check_box_point(pi, [1.0, 2.0]).valid
+    @test !PLB.check_box_points(pi, reshape([0.0, 1.0], 2, 1)).valid
+    @test !PLB.check_box_query_box(pi, (Float64[2.0], Float64[0.0])).valid
+    @test !PLB.check_box_region(pi, 0).valid
+    @test_throws ArgumentError PLB.check_box_point(pi, [1.0, 2.0]; throw=true)
+    @test_throws ArgumentError PLB.check_box_points(pi, reshape([0.0, 1.0], 2, 1); throw=true)
+    @test_throws ArgumentError PLB.check_box_query_box(pi, (Float64[2.0], Float64[0.0]); throw=true)
+    @test_throws ArgumentError PLB.check_box_region(pi, 0; throw=true)
+
+    qsum = PLB.box_query_summary(pi, [1.0])
+    rsum = PLB.box_region_summary(pi, rid; box=box)
+    @test qsum.region == rid
+    @test qsum.representative == PLB.region_representative(pi, rid)
+    @test qsum.outside == false
+    @test rsum.region == rid
+    @test rsum.signature_support_sizes == qregion.signature_support_sizes
+    @test rsum.bbox isa Tuple
+
+    @test TOA.PLEncodingMapBoxes === PLB.PLEncodingMapBoxes
+    @test TOA.lower_bounds(Ups[1]) == [0.0]
+    @test TOA.upper_bounds(Downs[1]) == [2.0]
+    @test TOA.generator_counts(pi) == (; upsets=1, downsets=1)
+    @test TOA.critical_coordinate_counts(pi) == (2,)
+    @test TOA.axes_uniformity(pi) == (true,)
+    @test TOA.check_box_encoding_map(pi).valid
+    @test TOA.check_box_point(pi, [1.0]).valid
+    @test TOA.check_box_region(pi, rid; box=box).valid
+    @test TOA.box_encoding_summary(enc).compiled
+    @test TOA.box_query_summary(pi, [1.0]).region == rid
+    @test TOA.box_region_summary(pi, rid; box=box).region == rid
+end
+
 @testset "PLBackend axis encoding (axis-aligned boxes)" begin
-    enc_axis = PM.EncodingOptions(backend=:pl_backend)
-    enc_axis_small = PM.EncodingOptions(backend=:pl_backend, max_regions=2)
+    enc_axis = TO.EncodingOptions(backend=:pl_backend)
+    enc_axis_small = TO.EncodingOptions(backend=:pl_backend, max_regions=2)
 
     # One-dimensional example:
     # Birth upset:  x >= 0
@@ -822,7 +1143,7 @@ end
         end
 
         # Warm-up compile, then ensure tuple input is allocation-free.
-        # Use the generic exported `locate` via the constant module `PM` so the
+        # Use the generic exported `locate` via the constant module `TO` so the
         # call is fully inferred (otherwise a module-valued `PLB` can force
         # dynamic dispatch and show spurious allocations).
         EC.locate(pi, (1.0,))
@@ -860,7 +1181,7 @@ end
         @test PLB.locate(pi2, [0.0, 1.0]) == r_in   # on ell boundary
 
         # Tuple input: allocation-free after warm-up.
-        # Same note as in 1D: use the exported `locate` via `PM` to avoid
+        # Same note as in 1D: use the exported `locate` via `TO` to avoid
         # dynamic module-property dispatch.
         EC.locate(pi2, (1.0, 1.0))
         @test (@allocated EC.locate(pi2, (1.0, 1.0))) == 0
@@ -893,7 +1214,7 @@ end
 @testset "PLBackend near-boundary parity (fast vs verified)" begin
     Ups = [PLB.BoxUpset([0.0, 0.0])]
     Downs = [PLB.BoxDownset([2.0, 2.0])]
-    enc = PM.encode(Ups, Downs; backend=:pl_backend, field=field, output=:result, cache=:auto)
+    enc = TO.encode(Ups, Downs; backend=:pl_backend, field=field, output=:result, cache=:auto)
 
     epss = (1e-4, 1e-7, 1e-10, 1e-12)
     probes = Vector{Tuple{Float64,Float64}}()
@@ -933,7 +1254,7 @@ end
         # PLBackend hot locate loop: fixed workload + conservative budget.
         Ups = [PLB.BoxUpset([0.0])]
         Downs = [PLB.BoxDownset([2.0])]
-        enc_axis = PM.encode(Ups, Downs; backend=:pl_backend, output=:result, cache=:auto)
+        enc_axis = TO.encode(Ups, Downs; backend=:pl_backend, output=:result, cache=:auto)
         xs = range(-2.0, 7.0; length=20_000)
         EC.locate(enc_axis.pi, (0.5,); mode=:fast) # warmup
         EC.locate(enc_axis.pi, (0.5,); mode=:verified) # warmup
@@ -1022,9 +1343,9 @@ end
         box3 = (Float64[0.0, 0.0, 0.0], Float64[1.0, 1.0, eps])
         r3 = EC.locate(pi3, [0.5, 0.5, eps / 2]; mode=:verified)
         @test r3 != 0
-        w3 = PM.RegionGeometry.region_weights(pi3; box=box3, method=:exact)
+        w3 = TO.RegionGeometry.region_weights(pi3; box=box3, method=:exact)
         @test isapprox(w3[r3], eps; atol=1e-11)
-        @test PM.RegionGeometry.region_bbox(pi3, r3; box=box3) == (Float64[0.0, 0.0, 0.0], Float64[1.0, 1.0, eps])
+        @test TO.RegionGeometry.region_bbox(pi3, r3; box=box3) == (Float64[0.0, 0.0, 0.0], Float64[1.0, 1.0, eps])
 
         for d in (1.0e-7, 1.0e-10, 1.0e-12)
             @test EC.locate(pi3, [0.5, 0.5, eps - d]; mode=:fast) == EC.locate(pi3, [0.5, 0.5, eps - d]; mode=:verified)
@@ -1049,9 +1370,9 @@ end
         box4 = (Float64[0.0, 0.0, 0.0, 0.0], Float64[1.0, 1.0, t, t])
         r4 = EC.locate(pi4, [0.5, 0.5, t / 2, t / 2]; mode=:verified)
         @test r4 != 0
-        @test PM.RegionGeometry.region_bbox(pi4, r4; box=box4) == (Float64[0.0, 0.0, 0.0, 0.0], Float64[1.0, 1.0, t, t])
+        @test TO.RegionGeometry.region_bbox(pi4, r4; box=box4) == (Float64[0.0, 0.0, 0.0, 0.0], Float64[1.0, 1.0, t, t])
         @test isapprox(
-            PM.RegionGeometry.region_diameter(pi4, r4; box=box4, metric=:L2, method=:bbox),
+            TO.RegionGeometry.region_diameter(pi4, r4; box=box4, metric=:L2, method=:bbox),
             sqrt(2.0 + 2.0 * t * t);
             atol=1e-10,
         )
@@ -1076,13 +1397,13 @@ end
     # while encoded module coefficients are coerced to the requested field.
     Ups = [PLB.BoxUpset([0.0])]
     Downs = [PLB.BoxDownset([2.0])]
-    enc = PM.encode(Ups, Downs; backend=:pl_backend, field=field, output=:result, cache=:auto)
+    enc = TO.encode(Ups, Downs; backend=:pl_backend, field=field, output=:result, cache=:auto)
 
     @test enc.M.field == field
     @test enc.H.field == field
 
     box = ([-2.0], [7.0])
-    w = PM.RegionGeometry.region_weights(enc.pi; box=box)
+    w = TO.RegionGeometry.region_weights(enc.pi; box=box)
     t_left = EC.locate(enc.pi, [-1.0])
     t_mid = EC.locate(enc.pi, [1.0])
     t_right = EC.locate(enc.pi, [3.0])
@@ -1100,11 +1421,11 @@ end
 @testset "PLBackend mode parity for non-QQ fields ($(field))" begin
     Ups = [PLB.BoxUpset([0.0, 0.0])]
     Downs = [PLB.BoxDownset([2.0, 2.0])]
-    enc = PM.encode(Ups, Downs; backend=:pl_backend, field=field, output=:result, cache=:auto)
+    enc = TO.encode(Ups, Downs; backend=:pl_backend, field=field, output=:result, cache=:auto)
     box = ([-1.0, -1.0], [3.0, 3.0])
 
-    adj_fast = PM.RegionGeometry.region_adjacency(enc.pi; box=box, strict=true, mode=:fast)
-    adj_verified = PM.RegionGeometry.region_adjacency(enc.pi; box=box, strict=true, mode=:verified)
+    adj_fast = TO.RegionGeometry.region_adjacency(enc.pi; box=box, strict=true, mode=:fast)
+    adj_verified = TO.RegionGeometry.region_adjacency(enc.pi; box=box, strict=true, mode=:verified)
     @test adj_fast == adj_verified
 
     # Boundary and interior points should classify identically in both modes.
@@ -1128,14 +1449,14 @@ end
             [PLP.PLDownset(PLP.PolyUnion(1, [hp_down]))],
             reshape(QQ[1], 1, 1),
         )
-        enc_opts = PM.EncodingOptions(backend=:pl, field=field)
-        enc = PM.encode(F, enc_opts; output=:result, cache=:auto)
+        enc_opts = TO.EncodingOptions(backend=:pl, field=field)
+        enc = TO.encode(F, enc_opts; output=:result, cache=:auto)
 
         @test enc.M.field == field
         @test enc.H.field == field
 
         box = ([-2.0], [7.0])
-        w = PM.RegionGeometry.region_weights(enc.pi; box=box, method=:exact)
+        w = TO.RegionGeometry.region_weights(enc.pi; box=box, method=:exact)
         t_left = EC.locate(enc.pi, [-1.0]; mode=:verified)
         t_mid = EC.locate(enc.pi, [1.0]; mode=:verified)
         t_right = EC.locate(enc.pi, [3.0]; mode=:verified)
@@ -1189,13 +1510,13 @@ end
         box2 = (Float64[0.0, 0.0], Float64[1.0, 1.0])
         r2 = EC.locate(pi2, [0.5, 0.5]; mode=:verified)
         @test r2 != 0
-        w2 = PM.RegionGeometry.region_weights(pi2; box=box2, method=:exact)
+        w2 = TO.RegionGeometry.region_weights(pi2; box=box2, method=:exact)
         @test isapprox(w2[r2], 1.0; atol=1e-10)
         @test isapprox(sum(w2), 1.0; atol=1e-10)
-        @test PM.RegionGeometry.region_bbox(pi2, r2; box=box2) == (Float64[0.0, 0.0], Float64[1.0, 1.0])
-        @test isapprox(PM.RegionGeometry.region_diameter(pi2, r2; box=box2, metric=:L2, method=:bbox), sqrt(2.0); atol=1e-10)
-        @test isapprox(PM.RegionGeometry.region_boundary_measure(pi2, r2; box=box2, mode=:verified), 4.0; atol=1e-8)
-        @test isempty(PM.RegionGeometry.region_adjacency(pi2; box=box2, strict=true, mode=:verified))
+        @test TO.RegionGeometry.region_bbox(pi2, r2; box=box2) == (Float64[0.0, 0.0], Float64[1.0, 1.0])
+        @test isapprox(TO.RegionGeometry.region_diameter(pi2, r2; box=box2, metric=:L2, method=:bbox), sqrt(2.0); atol=1e-10)
+        @test isapprox(TO.RegionGeometry.region_boundary_measure(pi2, r2; box=box2, mode=:verified), 4.0; atol=1e-8)
+        @test isempty(TO.RegionGeometry.region_adjacency(pi2; box=box2, strict=true, mode=:verified))
 
         # 3D unit cube exact oracle.
         A3 = QQ[1 0 0; 0 1 0; 0 0 1; -1 0 0; 0 -1 0; 0 0 -1]
@@ -1205,11 +1526,11 @@ end
         box3 = (Float64[0.0, 0.0, 0.0], Float64[1.0, 1.0, 1.0])
         r3 = EC.locate(pi3, [0.5, 0.5, 0.5]; mode=:verified)
         @test r3 != 0
-        w3 = PM.RegionGeometry.region_weights(pi3; box=box3, method=:exact)
+        w3 = TO.RegionGeometry.region_weights(pi3; box=box3, method=:exact)
         @test isapprox(w3[r3], 1.0; atol=1e-10)
-        @test isapprox(PM.RegionGeometry.region_boundary_measure(pi3, r3; box=box3, mode=:verified), 6.0; atol=1e-8)
-        @test isapprox(PM.RegionGeometry.region_diameter(pi3, r3; box=box3, metric=:L2, method=:bbox), sqrt(3.0); atol=1e-10)
-        @test isempty(PM.RegionGeometry.region_adjacency(pi3; box=box3, strict=true, mode=:verified))
+        @test isapprox(TO.RegionGeometry.region_boundary_measure(pi3, r3; box=box3, mode=:verified), 6.0; atol=1e-8)
+        @test isapprox(TO.RegionGeometry.region_diameter(pi3, r3; box=box3, metric=:L2, method=:bbox), sqrt(3.0); atol=1e-10)
+        @test isempty(TO.RegionGeometry.region_adjacency(pi3; box=box3, strict=true, mode=:verified))
     end
 end
     end
